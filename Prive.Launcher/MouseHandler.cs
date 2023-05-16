@@ -1,8 +1,9 @@
 // From ConsoleGUI.MouseExample/MouseHandler.cs
 
+#pragma warning disable CS0649
+
 using System.Runtime.InteropServices;
 using ConsoleGUI;
-using ConsoleGUI.Space;
 
 namespace Prive.Launcher {
     public static class MouseHandler {

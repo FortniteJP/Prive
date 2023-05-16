@@ -1,6 +1,8 @@
 ﻿using ConsoleGUI;
 using ConsoleGUI.Api;
 using ConsoleGUI.Controls;
+using ConsoleGUI.Data;
+using ConsoleGUI.Input;
 using ConsoleGUI.Space;
 using System.Diagnostics;
 using System.Reflection;
@@ -36,40 +38,42 @@ namespace Prive.Launcher {
         }
 
         public static void MainUI() {
-            var canvas = new Canvas();
-
-            // How to move this center
-            canvas.Add(
-                new Background() {
-                    Color = new(10, 40, 10),
-                    Content = new Border() {
-                        Content = new Box() {
-                            Content = new TextBlock() {
+            var exitButton = new Button() {
+                Content = new Margin() {
+                    Offset = new(1, 1, 1, 1),
+                    Content = new TextBlock() {
+                        Text = "Exit"
+                    }
+                },
+                MouseOverColor = new(255, 0, 0),
+                MouseDownColor = new(100, 100, 100)
+            };
+            var content = new Background() {
+                Color = Color.Black,
+                Content = new Margin() {
+                    Offset = new(5, 1, 5, 1),
+                    Content = new VerticalStackPanel() {
+                        Children = new IControl[] {
+                            new TextBlock() {
                                 Text = "Prive Launcher!"
-                            }
+                            },
+                            new HorizontalSeparator(),
+                            exitButton
                         }
                     }
-                },
-                new(12, 1, 17, 3)
-            );
-            canvas.Add(
-                new Background() {
-                    Color = new(10, 40, 10),
-                    Content = new Border() {
-                        Content = new Box() {
-                            Content = new TextBlock() {
-                                Text = "Hello"
-                            }
-                        }
-                    }
-                },
-                new(12, 4, 17, 3)
-            );
+                }
+            };
 
-            ConsoleManager.Content = canvas;
+            ConsoleManager.Content = content;
+
+            var input = new IInputListener[] {
+                new InputController(exitButton)
+            };
             
             while (Running) {
                 Thread.Sleep(RefreshIntervalMS);
+                if (IsWindows) MouseHandler.ReadMouseEvents();
+                ConsoleManager.ReadInput(input);
                 ConsoleManager.AdjustBufferSize(); // Handle resizing
             }
         }
@@ -78,6 +82,21 @@ namespace Prive.Launcher {
             await Task.Delay(1);
             await Console.In.ReadLineAsync();
             Running = false;
+        }
+    }
+
+    public class InputController : IInputListener {
+        public Button ExitButton { get; }
+        
+        public InputController(Button exitButton) {
+            ExitButton = exitButton;
+            ExitButton.Clicked += ExitButton_Clicked;
+        }
+
+        void IInputListener.OnInput(InputEvent inputEvent) {}
+
+        private void ExitButton_Clicked(object? sender, EventArgs e) {
+            Program.Running = false;
         }
     }
 }
