@@ -1,4 +1,4 @@
-using ConsoleGUI;
+﻿using ConsoleGUI;
 using ConsoleGUI.Api;
 using ConsoleGUI.Controls;
 using ConsoleGUI.Space;
@@ -39,7 +39,17 @@ namespace Prive.Launcher {
 
             // How to move this center
             canvas.Add(
-                new Background() { Color = new(10, 40, 10), Content = new Border() { Content = new Box() { Content = new TextBlock() { Text = "Prive Launcher!" } } } }, new(0, 7, 17, 5)
+                new Background() {
+                    Color = new(10, 40, 10),
+                    Content = new Border() {
+                        Content = new Box() {
+                            Content = new TextBlock() {
+                                Text = "Prive Launcher!"
+                            }
+                        }
+                    }
+                },
+                new(0, 0, 17, 5)
             );
 
             /* ConsoleManager.Content = new Box() { 
