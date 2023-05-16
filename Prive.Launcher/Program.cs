@@ -22,6 +22,7 @@ namespace Prive.Launcher {
 
             Console.Title = "Prive";
             if (IsWindows) {
+                Utils.DisableQuickEdit();
                 Utils.Delete(Utils.SC_SIZE);
                 Utils.Delete(Utils.SC_MAXIMIZE);
                 ConsoleManager.Resize(new(40, 10));
@@ -49,7 +50,7 @@ namespace Prive.Launcher {
                         }
                     }
                 },
-                new(12, 4, 17, 3)
+                new(12, 1, 17, 3)
             );
             canvas.Add(
                 new Background() {
@@ -62,14 +63,9 @@ namespace Prive.Launcher {
                         }
                     }
                 },
-                new(12, 7, 17, 3)
+                new(12, 4, 17, 3)
             );
 
-            /* ConsoleManager.Content = new Box() { 
-                HorizontalContentPlacement = Box.HorizontalPlacement.Center,
-                VerticalContentPlacement = Box.VerticalPlacement.Center,
-                Content = canvas
-            }; */
             ConsoleManager.Content = canvas;
             
             while (Running) {
