@@ -24,7 +24,7 @@ namespace Prive.Launcher {
             if (IsWindows) {
                 Utils.Delete(Utils.SC_SIZE);
                 Utils.Delete(Utils.SC_MAXIMIZE);
-                ConsoleManager.Resize(new(25, 5));
+                ConsoleManager.Resize(new(40, 10));
             }
             // Set Icon? https://stackoverflow.com/a/59897483
             ConsoleManager.Console = new SimplifiedConsole();
@@ -49,7 +49,20 @@ namespace Prive.Launcher {
                         }
                     }
                 },
-                new(0, 0, 17, 5)
+                new(12, 4, 17, 3)
+            );
+            canvas.Add(
+                new Background() {
+                    Color = new(10, 40, 10),
+                    Content = new Border() {
+                        Content = new Box() {
+                            Content = new TextBlock() {
+                                Text = "Hello"
+                            }
+                        }
+                    }
+                },
+                new(12, 7, 17, 3)
             );
 
             /* ConsoleManager.Content = new Box() { 
