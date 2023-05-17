@@ -30,7 +30,7 @@ namespace Prive.Launcher {
                 Utils.DeleteConsoleMenu(Utils.SC_SIZE);
 
                 #if DEBUG
-                // Restart on resize in debug environment
+                // Restart on maximize in debug environment
                 Application.Resized += e => {
                     if (Utils.IsMaximized()) Restart();
                 };
