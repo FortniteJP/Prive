@@ -6,20 +6,30 @@ using System.Text;
 
 namespace Prive.Launcher {
     public static class Utils {
-        public static void Delete(int nPosition) {
+        public static void DeleteConsoleMenu(int nPosition) {
             IntPtr handle = GetConsoleWindow();
             IntPtr sysMenu = GetSystemMenu(handle, false);
 
             if (handle != IntPtr.Zero) DeleteMenu(sysMenu, nPosition, MF_BYCOMMAND);
         }
 
-        public static bool DisableQuickEdit() {
+        public static bool EnableConsoleMode(uint m) {
             var consoleHandle = GetStdHandle(-10);
             var mode = 0u;
             if (!GetConsoleMode(consoleHandle, out mode)) {
                 return false;
             }
-            mode &= ~ENABLE_QUICK_EDIT;
+            mode |= m;
+            return SetConsoleMode(consoleHandle, mode);
+        }
+
+        public static bool DisableConsoleMode(uint m) {
+            var consoleHandle = GetStdHandle(-10);
+            var mode = 0u;
+            if (!GetConsoleMode(consoleHandle, out mode)) {
+                return false;
+            }
+            mode &= ~m;
             return SetConsoleMode(consoleHandle, mode);
         }
 
@@ -44,6 +54,7 @@ namespace Prive.Launcher {
         public const int SC_SIZE = 0xF000;
 
         public const uint ENABLE_QUICK_EDIT = 0x0040;
+        public const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr GetConsoleWindow();
