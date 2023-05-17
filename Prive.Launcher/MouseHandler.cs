@@ -3,6 +3,7 @@
 #pragma warning disable CS0649
 
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using ConsoleGUI;
 
 namespace Prive.Launcher {
@@ -10,6 +11,7 @@ namespace Prive.Launcher {
         private static IntPtr InputHandle = IntPtr.Zero;
         private static InputRecord[] InputBuffer = default!;
 
+        [SupportedOSPlatform("Windows")]
         public static void Initialize() {
             InputHandle = GetStdHandle(unchecked((uint)-10));
             InputBuffer = new InputRecord[100];

@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 
 namespace Prive.Launcher {
     public class Program {
+        public static readonly string ExecutablePath = Process.GetCurrentProcess().MainModule!.FileName + ".exe";
         public static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         public static readonly bool IsServer = !IsWindows; // Run server on Linux
         public static readonly int RefreshIntervalMS = IsWindows ? 10 : 100;
@@ -18,7 +19,7 @@ namespace Prive.Launcher {
         public static void Main(string[] args) {
             if (IsWindows &&  !args.Contains("/conhost")) {
                 // To avoid running in Windows Terminal, because ui is broken there
-                Process.Start("conhost.exe", $"\"{Assembly.GetEntryAssembly()?.Location.Replace(".dll", ".exe")}\" /conhost");
+                Process.Start("conhost.exe", $"\"{ExecutablePath}\" /conhost");
                 Environment.Exit(0);
             }
 
