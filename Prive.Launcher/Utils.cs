@@ -1,5 +1,3 @@
-using ConsoleGUI.Space;
-using Microsoft.Win32;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -47,6 +45,8 @@ namespace Prive.Launcher {
             CreateRemoteThread(handle, IntPtr.Zero, 0, loadLibrary, address, 0, IntPtr.Zero);
         }
 
+        public static bool IsMaximized() => IsZoomed(GetConsoleWindow());
+
         public const int MF_BYCOMMAND = 0x00000000;
         public const int SC_CLOSE = 0xF060;
         public const int SC_MINIMIZE = 0xF020;
@@ -55,6 +55,9 @@ namespace Prive.Launcher {
 
         public const uint ENABLE_QUICK_EDIT = 0x0040;
         public const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+
+        [DllImport("user32.dll")]
+        private static extern bool IsZoomed(IntPtr hWnd);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr GetConsoleWindow();

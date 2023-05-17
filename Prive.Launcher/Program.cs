@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
+#pragma warning disable CA1416 // Validate platform compatibility
+
 namespace Prive.Launcher {
     public class Program {
         public static readonly string ExecutingPath = Process.GetCurrentProcess().MainModule!.FileName;
@@ -12,7 +14,6 @@ namespace Prive.Launcher {
         public static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         public static readonly bool IsServer = !IsWindows; // Run server on Linux
         public static readonly int RefreshIntervalMS = IsWindows ? 10 : 100;
-        public static bool Running { get; set; } = true;
 
         public static void Main(string[] args) {
             if (IsWindows &&  !args.Contains("/conhost")) {
@@ -21,94 +22,47 @@ namespace Prive.Launcher {
                 Environment.Exit(0);
             }
 
-            /* Console.Title = "Prive";
+            Application.Init();
+            Console.Title = "Prive";
             if (IsWindows) {
                 Utils.DisableConsoleMode(Utils.ENABLE_QUICK_EDIT);
                 Utils.EnableConsoleMode(Utils.ENABLE_VIRTUAL_TERMINAL_PROCESSING);
                 Utils.DeleteConsoleMenu(Utils.SC_SIZE);
-                Utils.DeleteConsoleMenu(Utils.SC_MAXIMIZE);
-                ConsoleManager.Resize(new(40, 10));
-            }
-            // Set Icon? https://stackoverflow.com/a/59897483
-            ConsoleManager.Console = new SimplifiedConsole();
-            ConsoleManager.Setup();
-            if (IsWindows) MouseHandler.Initialize();
-            
-            MainUI(); */
 
+                #if DEBUG
+                // Restart on resize in debug environment
+                Application.Resized += e => {
+                    if (Utils.IsMaximized()) Restart();
+                };
+                #else
+                Utils.DeleteConsoleMenu(Utils.SC_MAXIMIZE);
+                #endif
+
+                Console.SetWindowSize(55, 15);
+                // Set Icon? https://stackoverflow.com/a/59897483
+            }
+            
             Application.Run<MainWindow>();
             Console.ReadKey(true);
         }
 
         public class MainWindow : Window {
-            public MainWindow() : base("Prive") {
-                var label = new Label() {
-                    Text = "Prive Launcher!"
-                };
-                Add(label);
+            public MainWindow() : base("Prive Launcher") {
+                ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
+                Add(
+                    new Label() {
+                        Text = "Hello!",
+                        X = 1
+                    }
+                );
             }
         }
 
-        /*public static void MainUI() {
-            var exitButton = new Button() {
-                Content = new Margin() {
-                    Offset = new(1, 1, 1, 1),
-                    Content = new TextBlock() {
-                        Text = "Exit"
-                    }
-                },
-                MouseOverColor = new(255, 0, 0),
-                MouseDownColor = new(100, 100, 100)
-            };
-            var content = new Background() {
-                Color = Color.Black,
-                Content = new Margin() {
-                    Offset = new(5, 1, 5, 1),
-                    Content = new VerticalStackPanel() {
-                        Children = new IControl[] {
-                            new TextBlock() {
-                                Text = "Prive Launcher!"
-                            },
-                            new HorizontalSeparator(),
-                            exitButton
-                        }
-                    }
-                }
-            };
-
-            ConsoleManager.Content = content;
-
-            var input = new IInputListener[] {
-                new InputController(exitButton)
-            };
-            
-            while (Running) {
-                Thread.Sleep(RefreshIntervalMS);
-                if (IsWindows) MouseHandler.ReadMouseEvents();
-                ConsoleManager.ReadInput(input);
-                ConsoleManager.AdjustBufferSize(); // Handle resizing
-            }
+        public static void Restart() {
+            Application.RequestStop();
+            var path = string.Join('\\', ExecutablePath.Replace('/', '\\').Split('\\')[..^4]);
+            Process.Start("conhost.exe", $"dotnet run \"{path}\" -- /conhost");
+            Environment.Exit(0);
         }
-
-        public static async void ObserveInAsync() {
-            await Task.Delay(1);
-            await Console.In.ReadLineAsync();
-            Running = false;
-        }
-    }
-
-    public class InputController : IInputListener {
-        public Button ExitButton { get; }
-        
-        public InputController(Button exitButton) {
-            ExitButton = exitButton;
-            ExitButton.Clicked += ExitButton_Clicked;
-        }
-
-        void IInputListener.OnInput(InputEvent inputEvent) {}
-
-        private void ExitButton_Clicked(object? sender, EventArgs e) {
-            Program.Running = false;
-        }*/
     }
 }
