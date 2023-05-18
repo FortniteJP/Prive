@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 using Microsoft.Win32;
+
+#pragma warning disable CA1416 // Validate platform compatibility
 
 namespace Prive.Launcher {
     public static class Utils {
@@ -48,7 +51,24 @@ namespace Prive.Launcher {
 
         public static bool IsMaximized() => IsZoomed(GetConsoleWindow());
 
-        public static bool SetForegroundWindow(Process process) => SetForegroundWindow(process.MainWindowHandle);
+        public static bool SetForegroundWindow(Process process) {
+            var handle = process.MainWindowHandle;
+            // if (SetTopMostWindow(handle, true)) SetTopMostWindow(handle, false);
+            SetTopMostWindow(handle, true);
+            if (handle == IntPtr.Zero) return false;
+            if (IsIconic(handle)) ShowWindowAsync(handle, 9); // SW_RESTORE
+
+            var foregroundId = GetWindowThreadProcessId(GetForegroundWindow(), out var processId);
+            var targetId = GetWindowThreadProcessId(handle, out processId);
+
+            AttachThreadInput((uint)targetId, (uint)foregroundId, true);
+            var ret = SetForegroundWindow(handle);
+            AttachThreadInput((uint)targetId, (uint)foregroundId, false);
+            SetTopMostWindow(handle, false);
+            return ret;
+        }
+
+        public static bool SetTopMostWindow(IntPtr handle, bool isTopMost) => SetWindowPos(handle, isTopMost ? -1 : -2, 0, 0, 0, 0, (uint)(isTopMost ? 0x0001 | 0x0002 : 0x0001 | 0x0002 | 0x0040));
 
         public static bool PatchForegroundLockTimeout() {
             var key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", true);
@@ -58,7 +78,7 @@ namespace Prive.Launcher {
             return true;
         }
 
-        public static int MessageBox(string text, string caption, int type = 0) => MessageBox(IntPtr.Zero, text, caption, type);
+        public static int MessageBox(string text, string caption = "Prive", int type = 0) => MessageBox(IntPtr.Zero, text, caption, type);
 
         public const int MF_BYCOMMAND = 0x00000000;
         public const int SC_CLOSE = 0xF060;
@@ -122,6 +142,24 @@ namespace Prive.Launcher {
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
         [DllImport("user32.dll")]
         private static extern int MessageBox(IntPtr hWnd, string text, string caption, int options);

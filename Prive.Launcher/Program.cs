@@ -49,8 +49,12 @@ namespace Prive.Launcher {
                 // Set Icon? https://stackoverflow.com/a/59897483
             }
             
-            if (args.Contains("/w:settings")) Application.Run<SettingsWindow>();
-            else Application.Run<MainWindow>();
+            var cls = typeof(MainWindow);
+            if (args.Contains("/w:settings")) cls = typeof(SettingsWindow);
+            Application.Run((Toplevel)Activator.CreateInstance(cls)!, (e) => {
+                Utils.MessageBox(e.ToString(), "Prive", 0x00000000 | 0x00000010);
+                return true;
+            });
             
             Console.ReadKey(true);
         }
@@ -64,7 +68,7 @@ namespace Prive.Launcher {
 
         public static void Exit(int code = 0) {
             Application.RequestStop();
-            if (SettingsProcess != null && !SettingsProcess.HasExited) SettingsProcess.Kill();
+            if (SettingsProcess is not null && !SettingsProcess.HasExited) SettingsProcess.Kill();
             Environment.Exit(code);
         }
 

@@ -10,6 +10,8 @@ namespace Prive.Launcher {
         
         public static Configuration GetConfiguration(string fileName) {
             var path = Path.Combine(ConfigurationsLocation, fileName);
+            if (!Directory.Exists(ConfigurationsLocation)) Directory.CreateDirectory(ConfigurationsLocation);
+            if (!File.Exists(path)) SaveConfiguration(new());
             return JsonSerializer.Deserialize<Configuration>(File.ReadAllText(path)) ?? throw new NullReferenceException();
         }
 
