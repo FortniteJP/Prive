@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32;
 
 namespace Prive.Launcher {
     public static class Utils {
@@ -46,6 +47,18 @@ namespace Prive.Launcher {
         }
 
         public static bool IsMaximized() => IsZoomed(GetConsoleWindow());
+
+        public static bool SetForegroundWindow(Process process) => SetForegroundWindow(process.MainWindowHandle);
+
+        public static bool PatchForegroundLockTimeout() {
+            var key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", true);
+            if (key == null) return false;
+            key.SetValue("ForegroundLockTimeout", 0);
+            key.Close();
+            return true;
+        }
+
+        public static int MessageBox(string text, string caption, int type = 0) => MessageBox(IntPtr.Zero, text, caption, type);
 
         public const int MF_BYCOMMAND = 0x00000000;
         public const int SC_CLOSE = 0xF060;
@@ -106,5 +119,11 @@ namespace Prive.Launcher {
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern int MessageBox(IntPtr hWnd, string text, string caption, int options);
     }
 }

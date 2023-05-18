@@ -1,4 +1,6 @@
-﻿using Terminal.Gui;
+﻿global using static Prive.Launcher.Program;
+global using Prive.Launcher;
+global using Terminal.Gui;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -13,10 +15,11 @@ namespace Prive.Launcher {
 
         public static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         public static readonly bool IsServer = !IsWindows; // Run server on Linux
-        public static readonly int RefreshIntervalMS = IsWindows ? 10 : 100;
+
+        public static Process? SettingsProcess = null;
 
         public static void Main(string[] args) {
-            if (IsWindows &&  !args.Contains("/conhost")) {
+            if (IsWindows && !args.Contains("/conhost")) {
                 // To avoid running in Windows Terminal, because ui is broken there
                 Process.Start("conhost.exe", $"\"{ExecutablePath}\" /conhost");
                 Environment.Exit(0);
@@ -25,6 +28,7 @@ namespace Prive.Launcher {
             Application.Init();
             Console.Title = "Prive";
             if (IsWindows) {
+                Utils.PatchForegroundLockTimeout();
                 Utils.DisableConsoleMode(Utils.ENABLE_QUICK_EDIT);
                 Utils.EnableConsoleMode(Utils.ENABLE_VIRTUAL_TERMINAL_PROCESSING);
                 Utils.DeleteConsoleMenu(Utils.SC_SIZE);
@@ -32,7 +36,10 @@ namespace Prive.Launcher {
                 #if DEBUG
                 // Restart on maximize in debug environment
                 Application.Resized += e => {
-                    if (Utils.IsMaximized()) Restart();
+                    if (Utils.IsMaximized()) {
+                        if (Application.Current.GetType() == typeof(MainWindow)) Restart();
+                        else Exit();
+                    }
                 };
                 #else
                 Utils.DeleteConsoleMenu(Utils.SC_MAXIMIZE);
@@ -42,27 +49,27 @@ namespace Prive.Launcher {
                 // Set Icon? https://stackoverflow.com/a/59897483
             }
             
-            Application.Run<MainWindow>();
+            if (args.Contains("/w:settings")) Application.Run<SettingsWindow>();
+            else Application.Run<MainWindow>();
+            
             Console.ReadKey(true);
-        }
-
-        public class MainWindow : Window {
-            public MainWindow() : base("Prive Launcher") {
-                ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
-                Add(
-                    new Label() {
-                        Text = "Hello!",
-                        X = 1
-                    }
-                );
-            }
         }
 
         public static void Restart() {
             Application.RequestStop();
             var path = string.Join('\\', ExecutablePath.Replace('/', '\\').Split('\\')[..^4]);
             Process.Start("conhost.exe", $"dotnet run \"{path}\" -- /conhost");
-            Environment.Exit(0);
+            Exit();
         }
+
+        public static void Exit(int code = 0) {
+            Application.RequestStop();
+            if (SettingsProcess != null && !SettingsProcess.HasExited) SettingsProcess.Kill();
+            Environment.Exit(code);
+        }
+
+        public static Process CreateNewWindow<T>() where T : Window => CreateNewWindow(typeof(T).Name.ToLower().Replace("window", ""));
+        
+        public static Process CreateNewWindow(string windowType) => Process.Start(new ProcessStartInfo("conhost.exe", $"\"{ExecutablePath}\" /conhost /w:{windowType}") { UseShellExecute = true })!;
     }
 }
