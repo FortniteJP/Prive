@@ -15,6 +15,8 @@ namespace Prive.Launcher {
             if (handle != IntPtr.Zero) DeleteMenu(sysMenu, nPosition, MF_BYCOMMAND);
         }
 
+        public static bool DrawMenu() => DrawMenuBar(GetConsoleWindow());
+
         public static bool EnableConsoleMode(uint m) {
             var consoleHandle = GetStdHandle(-10);
             var mode = 0u;
@@ -105,7 +107,10 @@ namespace Prive.Launcher {
         private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
         [DllImport("user32.dll")]
-        private static extern int DeleteMenu(IntPtr hMenu, int nPosition, int wFlags);
+        private static extern bool DeleteMenu(IntPtr hMenu, int nPosition, int wFlags);
+
+        [DllImport("user32.dll")]
+        private static extern bool DrawMenuBar(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetSystemMenu(IntPtr hWnd, bool bRevert);

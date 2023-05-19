@@ -51,12 +51,14 @@ namespace Prive.Launcher {
             
             var cls = typeof(MainWindow);
             if (args.Contains("/w:settings")) cls = typeof(SettingsWindow);
+            var errorHistory = new Dictionary<Type, int>();
             Application.Run((Toplevel)Activator.CreateInstance(cls)!, (e) => {
                 Utils.MessageBox(e.ToString(), "Prive", 0x00000000 | 0x00000010);
+                if (!errorHistory.ContainsKey(e.GetType())) errorHistory[e.GetType()] = 0;
+                errorHistory[e.GetType()]++;
+                if (errorHistory[e.GetType()] > 2) return false;
                 return true;
             });
-            
-            Console.ReadKey(true);
         }
 
         public static void Restart() {
