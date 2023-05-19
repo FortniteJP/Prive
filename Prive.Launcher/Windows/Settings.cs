@@ -1,13 +1,17 @@
+using Microsoft.Win32;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 public class SettingsWindow : Window {
+    private string gamePathLabelText(Configuration config) => $"Current Game Path:\n{string.Join('\n', Regex.Matches(Path.GetDirectoryName(config.GamePath) ?? "", @$".{{1,{Console.WindowWidth - 2}}}").Cast<Match>().Select(m => m.Value).ToArray())}";
+
     public SettingsWindow() : base("Prive") {
         Console.Title = "Prive Settings";
         ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
         var config = Configurations.GetConfiguration();
 
-        var gamePathLabel = new TextView() {
-            Text = $"Current Path:\n{string.Join('\n', Regex.Matches(config.GamePath, @$".{{1,{Console.WindowWidth - 2}}}").Cast<Match>().Select(m => m.Value).ToArray())}",
+        var gamePathLabel = new Label() {
+            Text = gamePathLabelText(config),
             X = 1
         };
         Add(gamePathLabel);
@@ -18,24 +22,26 @@ public class SettingsWindow : Window {
             Y = gamePathLabel.Y + gamePathLabel.Text.Split("\n").Length + 1,
         };
         selectGamePathButton.Clicked += () => {
-            var od = new OpenDialog("Select Game Path", "Select the shipping.exe") {
-                CanChooseDirectories = false,
-                CanChooseFiles = true,
-                AllowedFileTypes = new string[] { "exe" },
-                AllowsMultipleSelection = false,
-                DirectoryPath = "/",
-                CanCreateDirectories = false
+            var openFile = new Utils.OpenFileName() {
+                lStructSize = Marshal.SizeOf(typeof(Utils.OpenFileName)),
+                lpstrFilter = "Shipping Executable(*.exe)\0*.exe\0",
+                lpstrFile = Utils.ShippingExecutableName,
+                nMaxFile = 260,
+                lpstrTitle = "Select Game Path",
+                Flags = 0x00080000 | 0x00001000 // OFN_EXPLORER | OFN_FILEMUSTEXIST
             };
-            Console.SetWindowSize(60, 15);
-            Application.Run(od);
-            Console.SetWindowSize(10, 10);
-            if (File.Exists((string)od.FilePath)) {
-                config.GamePath = (string)od.FilePath;
+            if (Utils.GetOpenFileName(ref openFile)) {
+                if (!openFile.lpstrFile.EndsWith(Utils.ShippingExecutableName)) {
+                    Utils.MessageBox("Selected file is not a shipping executable!", type: 0x00000000 | 0x00000010);
+                    return;
+                }
+                // This window closes wtf
+                config.GamePath = openFile.lpstrFile;
                 Configurations.SaveConfiguration(config);
-            }
+                gamePathLabel.Text = gamePathLabelText(config);
+                selectGamePathButton.Y = gamePathLabel.Y + gamePathLabel.Text.Split("\n").Length + 1;
+            } else Utils.MessageBox("Canceled");
         };
         Add(selectGamePathButton);
     }
 }
-
-public class GamePathLabel : Label {}

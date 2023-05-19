@@ -8,6 +8,8 @@ using Microsoft.Win32;
 
 namespace Prive.Launcher {
     public static class Utils {
+        public const string ShippingExecutableName = "FortniteClient-Win64-Shipping.exe";
+
         public static void DeleteConsoleMenu(int nPosition) {
             IntPtr handle = GetConsoleWindow();
             IntPtr sysMenu = GetSystemMenu(handle, false);
@@ -81,6 +83,14 @@ namespace Prive.Launcher {
         }
 
         public static int MessageBox(string text, string caption = "Prive", int type = 0) => MessageBox(IntPtr.Zero, text, caption, type);
+
+        public static void SuspendThreads(Process proc) {
+            foreach (ProcessThread thread in proc.Threads) {
+                var pOpenThread = OpenThread(0x0002, false, thread.Id);
+                if (pOpenThread == IntPtr.Zero) continue;
+                SuspendThread(pOpenThread);
+            }
+        }
 
         public const int MF_BYCOMMAND = 0x00000000;
         public const int SC_CLOSE = 0xF060;
@@ -168,5 +178,35 @@ namespace Prive.Launcher {
 
         [DllImport("user32.dll")]
         private static extern int MessageBox(IntPtr hWnd, string text, string caption, int options);
+
+        [DllImport("Comdlg32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern bool GetOpenFileName([In, Out] ref OpenFileName ofn);
+        
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        public struct OpenFileName {
+            public int lStructSize;
+            public IntPtr hwndOwner;
+            public IntPtr hInstance;
+            public string lpstrFilter;
+            public string lpstrCustomFilter;
+            public int nMaxCustFilter;
+            public int nFilterIndex;
+            public string lpstrFile;
+            public int nMaxFile;
+            public string lpstrFileTitle;
+            public int nMaxFileTitle;
+            public string lpstrInitialDir;
+            public string lpstrTitle;
+            public int Flags;
+            public short nFileOffset;
+            public short nFileExtension;
+            public string lpstrDefExt;
+            public IntPtr lCustData;
+            public IntPtr lpfnHook;
+            public string lpTemplateName;
+            public IntPtr pvReserved;
+            public int dwReserved;
+            public int flagsEx;
+        }
     }
 }

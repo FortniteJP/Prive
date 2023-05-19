@@ -37,7 +37,15 @@ public class MainWindow : Window {
             if (IsServer) return;
 
             var config = Configurations.GetConfiguration();
-            Utils.MessageBox(System.Text.Json.JsonSerializer.Serialize(config));
+            Instance = new(config.GamePath);
+            Instance.Launch();
+            launchButton.Text = "Running...";
+            launchButton.Enabled = false;
+            Task.Run(() => {
+                Instance.WaitForExit();
+                launchButton.Text = "Launch";
+                launchButton.Enabled = true;
+            });
         };
         Add(launchButton);
     }

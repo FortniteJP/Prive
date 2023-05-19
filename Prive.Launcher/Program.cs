@@ -16,6 +16,8 @@ namespace Prive.Launcher {
         public static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         public static readonly bool IsServer = !IsWindows; // Run server on Linux
 
+        public static ClientInstance? Instance; // TODO: Support multiple instances
+
         public static Process? SettingsProcess = null;
 
         public static void Main(string[] args) {
@@ -52,13 +54,20 @@ namespace Prive.Launcher {
             var cls = typeof(MainWindow);
             if (args.Contains("/w:settings")) cls = typeof(SettingsWindow);
             var errorHistory = new Dictionary<Type, int>();
-            Application.Run((Toplevel)Activator.CreateInstance(cls)!, (e) => {
-                Utils.MessageBox(e.ToString(), "Prive", 0x00000000 | 0x00000010);
-                if (!errorHistory.ContainsKey(e.GetType())) errorHistory[e.GetType()] = 0;
-                errorHistory[e.GetType()]++;
-                if (errorHistory[e.GetType()] > 2) return false;
-                return true;
-            });
+            try {
+                Application.Run((Toplevel)Activator.CreateInstance(cls)!, (e) => {
+                    if (e is System.ComponentModel.Win32Exception win32e && win32e.NativeErrorCode == 233) Exit();
+                    Utils.MessageBox(e.ToString(), "Prive - Exception", 0x00000000 | 0x00000010);
+                    var type = e.GetType();
+                    if (!errorHistory.ContainsKey(type)) errorHistory[type] = 0;
+                    errorHistory[type]++;
+                    if (errorHistory[type] > 2) return false;
+                    return true;
+                });
+            } catch (Exception e) {
+                Utils.MessageBox(e.ToString(), "Prive - Unhandled Exception!", 0x00000000 | 0x00000010);
+                Exit();
+            }
         }
 
         public static void Restart() {
