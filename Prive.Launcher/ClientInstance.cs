@@ -24,7 +24,8 @@ namespace Prive.Launcher {
             Utils.SuspendThreads(EACProcess);
 
             ShippingProcess = Process.Start(new ProcessStartInfo(ShippingPath, Arguments) {
-                UseShellExecute = false
+                UseShellExecute = false,
+                CreateNoWindow = true
             })!;
         }
 
