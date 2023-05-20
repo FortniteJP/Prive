@@ -53,11 +53,24 @@ struct Url {
         }
 
         static std::string CreateUrl(std::string_view protocol, std::string_view host, std::string_view port, std::string_view path, std::string_view queryString) {
-            std::stringstream ss;
-            ss << protocol << "://" << host;
-            if (!port.empty()) ss << ":" << port;
-            if (!path.empty()) ss << path;
-            if (!queryString.empty()) ss << "?" << queryString;
-            return ss.str();
+            std::ostringstream str;
+            if (!protocol.empty()) {
+                str.write(protocol.data(), protocol.size());
+                str.write("://", 3);
+            }
+            str.write(host.data(), host.size());
+            if (!port.empty()) {
+                str.write(":", 1);
+                str.write(port.data(), port.size());
+            }
+            if (!path.empty()) {
+                if (path[0] != '/') str.write("/", 1);
+                str.write(path.data(), path.size());
+            }
+            if (!queryString.empty()) {
+                if (queryString[0] != '?') str.write("?", 1);
+                str.write(queryString.data(), queryString.size());
+            }
+            return str.str();
         }
 };
