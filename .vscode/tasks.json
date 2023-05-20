@@ -2,6 +2,46 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Debug Prive.Native.Client",
+            "type": "shell",
+            "command": "msbuild",
+            "args": [
+                "Prive.Native.Client",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64",
+                "/t:Build"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "Release Prive.Native.Client",
+            "type": "shell",
+            "command": "msbuild",
+            "args": [
+                "Prive.Native.Client",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/t:Build"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$msCompile"
+        },
+        {
             "label": "build",
             "command": "dotnet",
             "type": "process",
