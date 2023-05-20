@@ -6,6 +6,7 @@ void Main() {
         AllocConsole();
         FILE* pFile;
         freopen_s(&pFile, "CONOUT$", "w", stdout);
+        printf("Prive.Native.Client injected\n");
     }
 
     auto easyFind = FindPattern(
@@ -23,8 +24,8 @@ void Main() {
     EnableHook(OCurlEasySetOpt, CurlEasySetOptDetour);
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    switch (ul_reason_for_call) {
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
+    switch (dwReason) {
         case DLL_PROCESS_ATTACH:
             Main();
             break;
