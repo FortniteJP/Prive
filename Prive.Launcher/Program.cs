@@ -30,7 +30,7 @@ namespace Prive.Launcher {
             Application.Init();
             Console.Title = "Prive";
             if (IsWindows) {
-                Utils.PatchForegroundLockTimeout();
+                // Utils.PatchForegroundLockTimeout();
                 Utils.DisableConsoleMode(Utils.ENABLE_QUICK_EDIT);
                 Utils.EnableConsoleMode(Utils.ENABLE_VIRTUAL_TERMINAL_PROCESSING);
                 Utils.DeleteConsoleMenu(Utils.SC_SIZE);
