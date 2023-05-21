@@ -57,6 +57,7 @@ public class Program {
                     "com.epicgames.fortnite", "prod", new[] { context.Request.Path.Value ?? "" }
                 ));
             } else await next.Invoke();
+            Console.WriteLine($"{context.Response.StatusCode} {context.Request.Path.Value}");
         });
 
         app.MapFallback(async context => {
