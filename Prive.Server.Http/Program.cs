@@ -40,8 +40,11 @@ public class Program {
             if (requiresAuth) {
                 if (context.Request.Headers.TryGetValue("Authorization", out var value)) {
                     var token = value.ToString().Split(" ")[1];
-                    var authToken = AuthTokens.FirstOrDefault(x => x.Token == token);
-                    if (authToken is not null) {
+                    var authToken = AuthTokens.FirstOrDefault(x => x.TokenString == token);
+                    var clientToken = ClientTokens.FirstOrDefault(x => x.TokenString == token);
+                    if (authToken is not null || clientToken is not null) {
+                        context.Items.Add("AuthToken", authToken);
+                        context.Items.Add("ClientToken", clientToken);
                         await next.Invoke();
                         return;
                     }
