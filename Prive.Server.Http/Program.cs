@@ -34,6 +34,7 @@ public class Program {
             if (context.GetEndpoint()?.Metadata is var metadata && metadata is null) await next.Invoke();
             if (metadata?.Count <= 3) {
                 await next.Invoke(); // Not Found
+                Console.WriteLine($"{context.Response.StatusCode} {context.Request.Path.Value}");
                 return;
             }
             var requiresAuth = metadata?.GetMetadata<NoAuthAttribute>() is null;
