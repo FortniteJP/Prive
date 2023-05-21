@@ -46,6 +46,10 @@ public static class DB {
         return await Users.Find(Builders<User>.Filter.Eq(type, input)).FirstOrDefaultAsync();
     }
 
+    public static async Task<List<User>> GetUsers(string[] input) {
+        return await Users.Find(Builders<User>.Filter.In("AccountId", input)).ToListAsync();
+    }
+
     public static async Task<Friend> GetFriend(string accountId) => await Friends.Find(Builders<Friend>.Filter.Eq("AccountId", accountId)).FirstOrDefaultAsync();
 
     public static async Task<AthenaProfile> GetAthenaProfile(string accountId) => await AthenaProfiles.Find(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId)).FirstOrDefaultAsync();

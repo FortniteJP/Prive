@@ -46,6 +46,7 @@ public class Program {
                         context.Items.Add("AuthToken", authToken);
                         context.Items.Add("ClientToken", clientToken);
                         await next.Invoke();
+                        Console.WriteLine($"{context.Response.StatusCode} {context.Request.Path.Value}");
                         return;
                     }
                 }
