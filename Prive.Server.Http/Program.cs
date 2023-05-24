@@ -1,7 +1,3 @@
-
-using System.Reflection;
-using Microsoft.AspNetCore.Http.Features;
-
 namespace Prive.Server.Http;
 
 public class Program {
