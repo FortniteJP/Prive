@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using System.Text.Json;
 
-namespace Prive.Server.Http;
+namespace Prive.Server.Http.Controllers;
 
 [ApiController]
 [Route("fortnite")]
