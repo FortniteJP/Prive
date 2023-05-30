@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace Prive.Server.Http.Controllers;
 
 [ApiController]
-[Route("[controller]")]
+[Route("account")]
 public class AccountController : ControllerBase {
     [HttpPost("api/oauth/token")] [NoAuth]
     public async Task<object> OAuthToken([FromForm] OAuthTokenRequest request) {
@@ -134,7 +134,7 @@ public class AccountController : ControllerBase {
     }
 
     [HttpDelete("api/oauth/sessions/kill/{accessTokenString}")]
-    public object? OAuthSessionsKill() {
+    public object? OAuthSessionsKillToken() {
         var accessTokenString = Request.RouteValues["accessTokenString"]?.ToString();
         var authToken = AuthTokens.FirstOrDefault(x => x.TokenString == accessTokenString);
         var clientToken = ClientTokens.FirstOrDefault(x => x.TokenString == accessTokenString);
@@ -155,6 +155,12 @@ public class AccountController : ControllerBase {
 
         if (clientToken is not null) ClientTokens.Remove(clientToken);
         
+        Response.StatusCode = 204;
+        return null;
+    }
+
+    [HttpDelete("api/oauth/sessions/kill")]
+    public object? OAuthSessionsKill() {
         Response.StatusCode = 204;
         return null;
     }

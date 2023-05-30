@@ -13,7 +13,7 @@ public class MCPController : ControllerBase {
         profileChangesBaseRevision = rvn == 0 ? 1 : rvn,
         profileChanges = changes,
         profileCommandRevision = rvn + 1,
-        serverTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        serverTime = DateTimeOffset.UtcNow.ToString(DateTimeFormat),
         responseVersion = 1
     };
 

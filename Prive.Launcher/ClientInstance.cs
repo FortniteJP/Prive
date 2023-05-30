@@ -12,10 +12,13 @@ public class ClientInstance {
     public Process? EACProcess { get; private set; }
 
     // What to pass
-    private string Arguments = "-epicapp=Fortnite -epicenv=Prod -EpicPortal -noeac -nobe";
+    private string Arguments = "-epicapp=Fortnite -epicenv=Prod -EpicPortal -noeac -nobe -fromfl=eac -fltoken=h1cdhchd10150221h130eB56";
 
     public ClientInstance(string shippingPath) {
         ShippingPath = shippingPath;
+        #if DEBUG
+        Arguments += " -AUTH_LOGIN=pdf114514@fortnite.day -AUTH_PASSWORD=PriveDeveloper -AUTH_TYPE=epic";
+        #endif
     }
 
     public void Launch() {

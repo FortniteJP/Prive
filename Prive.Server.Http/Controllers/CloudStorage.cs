@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Cryptography;
-using System.Text.Json;
 
 namespace Prive.Server.Http.Controllers;
 
@@ -27,30 +26,51 @@ public class CloudStorageController : ControllerBase {
         }
         return result;
     }
+
+    [HttpGet("api/cloudstorage/system/{filename}")]
+    public async Task<object> CloudStorageSystemFile() {
+        var filename = Request.RouteValues["filename"] as string;
+        if (string.IsNullOrEmpty(filename) || !System.IO.File.Exists(filename)) return EpicError.Create(
+            "errors.com.epicgames.cloudstorage.file_not_found", 12004,
+            $"Sorry, we couldn't find a system file for {filename}",
+            "fortnite", "prod-live", new[] { filename ?? "" }
+        );
+        Response.Headers.ContentType = "application/octet-stream";
+        return await System.IO.File.ReadAllBytesAsync(filename);
+    }
+
+    [HttpGet("api/cloudstorage/user/{accountId}")]
+    public object CloudStorageUser() => new object[0];
+
+    [HttpGet("api/cloudstorage/user/{accountId}/{filename}")]
+    public IActionResult CloudStorageUserFile() => NoContent();
+    
+    [HttpPut("api/cloudstorage/user/{accountId}/{filename}")]
+    public IActionResult CloudStorageUserFilePut() => NoContent();
 }
 
 public class CloudStorageFile {
-    public static string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/CloudStorage");
-
     static CloudStorageFile() {
         if (!Directory.Exists(CloudStorageLocation)) {
             Directory.CreateDirectory(CloudStorageLocation);
         }
     }
 
-    public static CloudStorageFile[] LoadAll() {
-        var files = new List<CloudStorageFile>();
-        foreach (var filepath in Directory.GetFiles(CloudStorageLocation, "*.ini")) {
-            var filename = Path.GetFileName(filepath);
-            var file = File.OpenRead(filepath);
-            files.Add(new() {
-                Filepath = filepath,
-                Filename = filename,
-                Length = file.Length,
-                LastModified = File.GetLastWriteTime(filepath)
-            });
-        }
-        return files.ToArray();
+    public static CloudStorageFile[] LoadAll() => Directory.GetFiles(CloudStorageLocation, "*.ini").Aggregate(new List<CloudStorageFile>(), (r, x) => {
+        r.Add(Load(x));
+        return r;
+    }).ToArray();
+
+    public static CloudStorageFile Load(string filename) {
+        var filepath = Path.Combine(CloudStorageLocation, filename);
+        if (!File.Exists(filepath)) throw new FileNotFoundException();
+        var file = File.OpenRead(filepath);
+        return new() {
+            Filepath = filepath,
+            Filename = filename,
+            Length = file.Length,
+            LastModified = File.GetLastWriteTime(filepath)
+        };
     }
 
     public required string Filepath { get; init; }

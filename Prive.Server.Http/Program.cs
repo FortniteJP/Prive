@@ -30,7 +30,7 @@ public class Program {
             if (context.GetEndpoint()?.Metadata is var metadata && metadata is null) await next.Invoke();
             if (metadata?.Count <= 3) {
                 await next.Invoke(); // Not Found
-                Console.WriteLine($"{context.Response.StatusCode} {context.Request.Path.Value}");
+                Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
                 return;
             }
             var requiresAuth = metadata?.GetMetadata<NoAuthAttribute>() is null;
@@ -43,7 +43,7 @@ public class Program {
                         context.Items.Add("AuthToken", authToken);
                         context.Items.Add("ClientToken", clientToken);
                         await next.Invoke();
-                        Console.WriteLine($"{context.Response.StatusCode} {context.Request.Path.Value}");
+                        Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
                         return;
                     }
                 }
@@ -54,7 +54,7 @@ public class Program {
                     "com.epicgames.fortnite", "prod", new[] { context.Request.Path.Value ?? "" }
                 ));
             } else await next.Invoke();
-            Console.WriteLine($"{context.Response.StatusCode} {context.Request.Path.Value}");
+            Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
         });
 
         app.MapFallback(async context => {
