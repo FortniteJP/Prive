@@ -13,7 +13,11 @@ public class FriendsController : ControllerBase {
         }
 
         var friend = await DB.GetFriend(accountId);
-        return friend.Accepted.Aggregate(new object[friend.Accepted.Count], (r, x) => {
+        if (friend is null) {
+            friend = new() { AccountId = accountId };
+            await DB.Friends.InsertOneAsync(friend);
+        }
+        return friend.Accepted.Aggregate(new List<object>(), (r, x) => {
             r.Append(new {
                 accountId = x.AccountId,
                 groups = new object[0],
