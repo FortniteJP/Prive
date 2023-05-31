@@ -64,9 +64,9 @@ public class Program {
         app.Use(async (context, next) => {
             if (context.WebSockets.IsWebSocketRequest) {
                 Console.WriteLine("New WebSocket Request");
-                using var client = await context.WebSockets.AcceptWebSocketAsync();
+                using var connection = await context.WebSockets.AcceptWebSocketAsync();
                 var tcs = new TaskCompletionSource<object?>();
-                XMPPClients.Add(new XMPPClient(client, tcs));
+                XMPPClient.Handle(connection, tcs);
                 await tcs.Task;
             }
             await next.Invoke();
