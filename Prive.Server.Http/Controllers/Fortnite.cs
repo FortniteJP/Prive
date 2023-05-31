@@ -25,9 +25,9 @@ public class FortniteController : ControllerBase {
     [HttpGet("api/game/v2/matchmakingservice/ticket/player/{accountId}")]
     public object MatchMakingServiceTicket() {
         Console.WriteLine("MatchMakingServiceTicket");
-        Response.StatusCode = 501;
+        Response.StatusCode = 401; // 501
         return EpicError.Create(
-            "errors.unknown", 0,
+            "errors.not_implemented", 0,
             "Not Implemented",
             "fortnite", "prod-live"
         );
@@ -50,6 +50,9 @@ public class FortniteController : ControllerBase {
     [HttpPost("api/game/v2/grant_access")]
     public IActionResult GrantAccess() => NoContent();
     
-    [HttpPost("api/storefront/v2/catalog")]
+    [HttpGet("api/storefront/v2/catalog")]
     public object StorefrontCatalog() => ItemShop;
+
+    [HttpGet("api/receipts/v1/account/{accountId}/receipts")]
+    public object AccountReceipts() => new object[0];
 }

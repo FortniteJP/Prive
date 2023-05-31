@@ -9,10 +9,10 @@ public class CloudStorageController : ControllerBase {
     [HttpGet("api/cloudstorage/system")]
     public async Task<object[]> CloudStorageSystem() {
         var files = CloudStorageFile.LoadAll();
-        var result = new object[files.Length];
+        var result = new List<object>();
 
         foreach (var file in files) {
-            result.Append(new {
+            result.Add(new {
                 uniqueFilename = file.Filename,
                 filename = file.Filename,
                 hash = await file.ComputeSHA1(),
@@ -24,19 +24,19 @@ public class CloudStorageController : ControllerBase {
                 doNotCache = false
             });
         }
-        return result;
+        return result.ToArray();
     }
 
     [HttpGet("api/cloudstorage/system/{filename}")]
     public async Task<object> CloudStorageSystemFile() {
         var filename = Request.RouteValues["filename"] as string;
-        if (string.IsNullOrEmpty(filename) || !System.IO.File.Exists(filename)) return EpicError.Create(
+        var filepath = Path.Combine(CloudStorageLocation, filename ?? "");
+        if (string.IsNullOrEmpty(filename) || !System.IO.File.Exists(filepath)) return EpicError.Create(
             "errors.com.epicgames.cloudstorage.file_not_found", 12004,
             $"Sorry, we couldn't find a system file for {filename}",
             "fortnite", "prod-live", new[] { filename ?? "" }
         );
-        Response.Headers.ContentType = "application/octet-stream";
-        return await System.IO.File.ReadAllBytesAsync(filename);
+        return File(await System.IO.File.ReadAllBytesAsync(filepath), "application/octet-stream", filename);
     }
 
     [HttpGet("api/cloudstorage/user/{accountId}")]
@@ -56,15 +56,12 @@ public class CloudStorageFile {
         }
     }
 
-    public static CloudStorageFile[] LoadAll() => Directory.GetFiles(CloudStorageLocation, "*.ini").Aggregate(new List<CloudStorageFile>(), (r, x) => {
-        r.Add(Load(x));
-        return r;
-    }).ToArray();
+    public static CloudStorageFile[] LoadAll() => Directory.GetFiles(CloudStorageLocation, "*.ini").Aggregate<string, IEnumerable<CloudStorageFile>>(new List<CloudStorageFile>(), (r, x) => r.Append(Load(x))).ToArray();
 
-    public static CloudStorageFile Load(string filename) {
-        var filepath = Path.Combine(CloudStorageLocation, filename);
+    public static CloudStorageFile Load(string filepath) {
         if (!File.Exists(filepath)) throw new FileNotFoundException();
-        var file = File.OpenRead(filepath);
+        var filename = Path.GetFileName(filepath);
+        using var file = File.OpenRead(filepath);
         return new() {
             Filepath = filepath,
             Filename = filename,

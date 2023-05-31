@@ -175,4 +175,9 @@ public class FriendsController : ControllerBase {
     public object RecentFortnite() {
         return new object[0];
     }
+
+    [HttpGet("api/public/blocklist/{accountId}")]
+    public object PublicBlockList() {
+        return new object[0];
+    }
 }

@@ -9,4 +9,10 @@ public class OtherController : ControllerBase {
     public object UserSetting() {
         return new {};
     }
+
+    [HttpGet("/socialban/api/public/v1/{accountId}")]
+    public IActionResult SocialBanPublic() => NoContent();
+
+    [HttpGet("/socialban/api/public/v1/{accountId}/ban")]
+    public IActionResult SocialBanPublicBan() => NoContent();
 }
