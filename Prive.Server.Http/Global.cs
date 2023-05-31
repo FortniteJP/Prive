@@ -20,6 +20,7 @@ public static class Global {
     public static List<ClientToken> ClientTokens { get; } = new();
     public static List<AuthToken> AuthTokens { get; } = new();
     public static List<Party> Parties { get; } = new();
+    public static List<XMPPClient> XMPPClients { get; } = new();
 
     static Global() {
         RefreshKeyChain();

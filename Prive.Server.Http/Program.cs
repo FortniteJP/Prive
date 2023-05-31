@@ -23,6 +23,10 @@ public class Program {
 
         app.UseAuthorization();
 
+        app.UseWebSockets(new() {
+            KeepAliveInterval = TimeSpan.FromMinutes(1)
+        });
+
 
         app.MapControllers();
 
@@ -55,6 +59,17 @@ public class Program {
                 ));
             } else await next.Invoke();
             Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
+        });
+
+        app.Use(async (context, next) => {
+            if (context.WebSockets.IsWebSocketRequest) {
+                Console.WriteLine("New WebSocket Request");
+                using var client = await context.WebSockets.AcceptWebSocketAsync();
+                var tcs = new TaskCompletionSource<object?>();
+                XMPPClients.Add(new XMPPClient(client, tcs));
+                await tcs.Task;
+            }
+            await next.Invoke();
         });
 
         app.MapFallback(async context => {
