@@ -13,9 +13,11 @@ public static class Global {
     public static readonly string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/CloudStorage");
     public static readonly string KeyChainLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/keychain.json");
     public static readonly string BulkStatusLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/bulkstatus.json");
+    public static readonly string ItemShopLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/itemshop.json");
     
     public static string[] KeyChain { get; private set; } = new string[0];
     public static object[] BulkStatus { get; private set; } = new object[0];
+    public static object ItemShop { get; private set; } = new();
     
     public static List<ClientToken> ClientTokens { get; } = new();
     public static List<AuthToken> AuthTokens { get; } = new();
@@ -25,6 +27,7 @@ public static class Global {
     static Global() {
         RefreshKeyChain();
         RefreshBulkStatus();
+        RefreshItemShop();
     }
 
     public static string GenerateToken() {
@@ -44,6 +47,12 @@ public static class Global {
         if (Path.GetDirectoryName(CloudStorageLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
         if (!File.Exists(BulkStatusLocation)) File.WriteAllText(BulkStatusLocation, "[]");
         BulkStatus = JsonSerializer.Deserialize<object[]>(File.ReadAllText(BulkStatusLocation)) ?? new object[0];
+    }
+
+    public static void RefreshItemShop() {
+        if (Path.GetDirectoryName(CloudStorageLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        if (!File.Exists(ItemShopLocation)) File.WriteAllText(ItemShopLocation, "{}");
+        ItemShop = JsonSerializer.Deserialize<object>(File.ReadAllText(ItemShopLocation)) ?? new();
     }
 }
 

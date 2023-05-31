@@ -49,4 +49,7 @@ public class FortniteController : ControllerBase {
 
     [HttpPost("api/game/v2/grant_access")]
     public IActionResult GrantAccess() => NoContent();
+    
+    [HttpPost("api/storefront/v2/catalog")]
+    public object StorefrontCatalog() => ItemShop;
 }
