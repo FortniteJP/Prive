@@ -67,6 +67,19 @@ public class MainWindow : Window {
             });
         };
         Add(launchButton);
+
+        #if DEBUG
+        var dumpSDKButton = new Button() {
+            Text = "Dump SDK",
+            X = Pos.Center(),
+            Y = Pos.Center() + 4,
+        };
+        dumpSDKButton.Clicked += () => {
+            if (!(Instance?.ShippingProcess?.HasExited ?? true)) Instance?.InjectDll(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/UEDumper.dll"));
+            else Utils.MessageBox("Game is not running!", "Prive", 0x00000000 | 0x00000010);
+        };
+        Add(dumpSDKButton);
+        #endif
     }
 
     private async void DownloadClientNativeDll() {

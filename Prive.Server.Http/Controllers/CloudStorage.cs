@@ -1,22 +1,25 @@
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Cryptography;
+using Prive.Server.Http.CloudStorage;
 
 namespace Prive.Server.Http.Controllers;
 
 [ApiController]
 [Route("fortnite")]
 public class CloudStorageController : ControllerBase {
+    public static List<CloudStorageFile> CloudStorageFiles = new() {
+        new DefaultGame()
+    };
+    
     [HttpGet("api/cloudstorage/system")]
-    public async Task<object[]> CloudStorageSystem() {
-        var files = CloudStorageFile.LoadAll();
+    public object[] CloudStorageSystem() {
         var result = new List<object>();
 
-        foreach (var file in files) {
+        foreach (var file in CloudStorageFiles) {
             result.Add(new {
                 uniqueFilename = file.Filename,
                 filename = file.Filename,
-                hash = await file.ComputeSHA1(),
-                hash256 = await file.ComputeSHA256(),
+                hash = file.ComputeSHA1(),
+                hash256 = file.ComputeSHA256(),
                 length = file.Length,
                 contentType = "application/octet-stream",
                 uploaded = file.LastModified,
@@ -28,15 +31,19 @@ public class CloudStorageController : ControllerBase {
     }
 
     [HttpGet("api/cloudstorage/system/{filename}")]
-    public async Task<object> CloudStorageSystemFile() {
+    public object CloudStorageSystemFile() {
         var filename = Request.RouteValues["filename"] as string;
-        var filepath = Path.Combine(CloudStorageLocation, filename ?? "");
-        if (string.IsNullOrEmpty(filename) || !System.IO.File.Exists(filepath)) return EpicError.Create(
-            "errors.com.epicgames.cloudstorage.file_not_found", 12004,
-            $"Sorry, we couldn't find a system file for {filename}",
-            "fortnite", "prod-live", new[] { filename ?? "" }
-        );
-        return File(await System.IO.File.ReadAllBytesAsync(filepath), "application/octet-stream", filename);
+        // var filepath = Path.Combine(CloudStorageLocation, filename ?? "");
+        // Console.WriteLine($"{System.Text.Json.JsonSerializer.Serialize(CloudStorageFiles.Select(x => x.Filename))} {filename} {CloudStorageFiles.Any(x => x.Filename == filename)}");
+        if (string.IsNullOrEmpty(filename) || !CloudStorageFiles.Any(x => x.Filename == filename)) {
+            Response.StatusCode = 404;
+            return EpicError.Create(
+                "errors.com.epicgames.cloudstorage.file_not_found", 12004,
+                $"Sorry, we couldn't find a system file for {filename}",
+                "fortnite", "prod-live", new[] { filename ?? "" }
+            );
+        }
+        return File(CloudStorageFiles.First(x => x.Filename == filename).Data, "application/octet-stream", filename);
     }
 
     [HttpGet("api/cloudstorage/user/{accountId}")]
@@ -49,7 +56,7 @@ public class CloudStorageController : ControllerBase {
     public IActionResult CloudStorageUserFilePut() => NoContent();
 }
 
-public class CloudStorageFile {
+/* public class CloudStorageFile {
     static CloudStorageFile() {
         if (!Directory.Exists(CloudStorageLocation)) {
             Directory.CreateDirectory(CloudStorageLocation);
@@ -86,4 +93,4 @@ public class CloudStorageFile {
         using var stream = File.OpenRead(Filepath);
         return Convert.ToHexString(await sha256.ComputeHashAsync(stream));
     }
-}
+} */
