@@ -1,0 +1,41 @@
+<Project DefaultTargets="Build" ToolsVersion="17.0">
+    <PropertyGroup>
+        <ConfigurationType>DynamicLibrary</ConfigurationType>
+        <PlatformToolset>v143</PlatformToolset>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectConfiguration Include="Debug|x64">
+            <Configuration>Debug</Configuration>
+            <Platform>x64</Platform>
+            <UseDebugLibraries>true</UseDebugLibraries>
+            <CharacterSet>Unicode</CharacterSet>
+        </ProjectConfiguration>
+        <ProjectConfiguration Include="Release|x64">
+            <Configuration>Release</Configuration>
+            <Platform>x64</Platform>
+            <UseDebugLibraries>false</UseDebugLibraries>
+            <CharacterSet>Unicode</CharacterSet>
+        </ProjectConfiguration>
+    </ItemGroup>
+
+    <ItemDefinitionGroup>
+        <ClCompile>
+            <LanguageStandard>stdcpp20</LanguageStandard>
+            <LanguageStandard_C>stdc17</LanguageStandard_C>
+            <PrecompiledHeader>NotUsing</PrecompiledHeader>
+        </ClCompile>
+        <Link>
+            <SubSystem>Windows</SubSystem>
+            <GenerateDebugInformation>true</GenerateDebugInformation>
+        </Link>
+    </ItemDefinitionGroup>
+
+    <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+    <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+    <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Targets" />
+
+    <ItemGroup>
+        <ClCompile Include="dllmain.cpp" />
+    </ItemGroup>
+</Project>
