@@ -1,7 +1,7 @@
 using System.IO.Compression;
 
 public class MainWindow : Window {
-    public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Native.Client.dll");
+    public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Client.Native.dll");
     
     public MainWindow() : base("Prive") {
         Console.Title = "Prive Launcher";
@@ -43,7 +43,7 @@ public class MainWindow : Window {
             if (IsServer) return;
             
             if (!File.Exists(ClientNativeDllLocation)) {
-                Utils.MessageBox("Prive.Native.Client.dll is not found!", "Prive", 0x00000000 | 0x00000010);
+                Utils.MessageBox("Prive.Client.Native.dll is not found!", "Prive", 0x00000000 | 0x00000010);
                 return;
             }
 
@@ -93,8 +93,8 @@ public class MainWindow : Window {
 
         using (var ms = new MemoryStream(zipBin))
         using (var archive = new ZipArchive(ms, ZipArchiveMode.Read)) {
-            var entry = archive.GetEntry("Prive.Native.Client.dll");
-            if (entry is null) throw new FileNotFoundException("Failed to get Prive.Native.Client.dll from zip archive.");
+            var entry = archive.GetEntry("Prive.Client.Native.dll");
+            if (entry is null) throw new FileNotFoundException("Failed to get Prive.Client.Native.dll from zip archive.");
             using (var stream = entry.Open())
             using (var fs = new FileStream(ClientNativeDllLocation, FileMode.Create)) {
                 await stream.CopyToAsync(fs);

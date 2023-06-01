@@ -5,7 +5,7 @@ void Main() {
         AllocConsole();
         FILE* pFile;
         freopen_s(&pFile, "CONOUT$", "w", stdout);
-        // printf("Prive.Native.Server injected\n");
+        // printf("Prive.Server.Native injected\n");
     }
 }
 

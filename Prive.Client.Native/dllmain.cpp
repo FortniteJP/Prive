@@ -6,7 +6,7 @@ void Main() {
         AllocConsole();
         FILE* pFile;
         freopen_s(&pFile, "CONOUT$", "w", stdout);
-        // printf("Prive.Native.Client injected\n");
+        // printf("Prive.Client.Native injected\n");
     }
 
     auto easyFind = FindPattern(

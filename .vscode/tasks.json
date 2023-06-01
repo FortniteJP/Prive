@@ -2,11 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Debug Prive.Native.Client",
+            "label": "Debug Prive.Client.Native",
             "type": "shell",
             "command": "msbuild",
             "args": [
-                "Prive.Native.Client",
+                "Prive.Client.Native",
                 "/p:Configuration=Debug",
                 "/p:Platform=x64",
                 "/t:Build"
@@ -22,11 +22,11 @@
             "problemMatcher": "$msCompile"
         },
         {
-            "label": "Release Prive.Native.Client",
+            "label": "Release Prive.Client.Native",
             "type": "shell",
             "command": "msbuild",
             "args": [
-                "Prive.Native.Client",
+                "Prive.Client.Native",
                 "/p:Configuration=Release",
                 "/p:Platform=x64",
                 "/t:Build"

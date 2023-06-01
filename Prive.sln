@@ -5,7 +5,7 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Prive.Launcher", "Prive.Launcher\Prive.Launcher.csproj", "{25413E0A-4B7F-4D9B-8B41-BAFA0EEC58F3}"
 EndProject
-Project("{23427F39-5255-47E9-9AA6-6B28305688C0}") = "Prive.Native.Client", "Prive.Native.Client\Prive.Native.Client.vcxproj", "{90C8F274-BDDA-4C75-BB9F-7E24357C7004}"
+Project("{23427F39-5255-47E9-9AA6-6B28305688C0}") = "Prive.Client.Native", "Prive.Client.Native\Prive.Client.Native.vcxproj", "{90C8F274-BDDA-4C75-BB9F-7E24357C7004}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
