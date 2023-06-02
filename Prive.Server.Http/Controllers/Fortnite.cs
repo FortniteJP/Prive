@@ -55,4 +55,7 @@ public class FortniteController : ControllerBase {
 
     [HttpGet("api/receipts/v1/account/{accountId}/receipts")]
     public object AccountReceipts() => new object[0];
+
+    [HttpPost("api/game/v2/profileToken/verify/{accountId}")]
+    public IActionResult ProfileTokenVerify() => NoContent();
 }

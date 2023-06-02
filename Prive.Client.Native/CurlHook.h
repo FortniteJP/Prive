@@ -23,6 +23,7 @@ CURLcode CurlEasySetOptDetour(struct Curl_easy* data, CURLoption tag, ...) {
         result = CurlSetOpt(data, tag, 0);
     } else if (tag == CURLOPT_URL) {
         std::string url = va_arg(args, char*);
+        printf("URL: %s", url.c_str());
         size_t length = url.length();
 
         Url parsed = Url::Parse(url);

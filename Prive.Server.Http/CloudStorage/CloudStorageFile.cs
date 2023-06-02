@@ -47,17 +47,17 @@ public abstract class IniElement {
 
 public enum IniElementOption {
     None,
-    AddIfMissing,
-    RemoveExact,
-    AddNew,
-    RemoveIfExisting
+    AddIfMissing, // +
+    RemoveExact, // =
+    AddNew, // .
+    RemoveIfExisting // !
 }
 
 public class IniElementKeyValue : IniElement {
     public string Key { get; init; }
     public string? Value { get; init; }
 
-    protected override string SerializeProperty() => $"{Key}={Value}";
+    protected override string SerializeProperty() => $"{Key}={Value ?? ""}";
 
     public IniElementKeyValue() {
         if (Key is null) throw new ArgumentNullException(nameof(Key));
@@ -83,8 +83,8 @@ public class IniElementFunc : IniElement {
 }
 
 public class IniTextReplacements : IniElement {
-    public required IniTextReplacementArguments TextReplacements { get; init; }
-    protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacements.Category}\", bIsMinimalPatch={TextReplacements.bIsMinimalPatch}, Namespace=\"{TextReplacements.Namespace}\", Key=\"{TextReplacements.Key}\", NativeString=\"{TextReplacements.NativeString}\", LocalizedStrings=({string.Join(",", TextReplacements.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{x.Value}\")"))}))";
+    public required IniTextReplacementArguments TextReplacement { get; init; }
+    protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacement.Category}\", bIsMinimalPatch={TextReplacement.bIsMinimalPatch}, Namespace=\"{TextReplacement.Namespace}\", Key=\"{TextReplacement.Key}\", NativeString=\"{TextReplacement.NativeString}\", LocalizedStrings=({string.Join(",", TextReplacement.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{x.Value}\")"))}))";
 
     public class IniTextReplacementArguments {
         public string Category { get; init; } = "Game";
@@ -93,5 +93,18 @@ public class IniTextReplacements : IniElement {
         public required string Key { get; init; }
         public required string NativeString { get; init; }
         public Dictionary<string, string> LocalizedStrings { get; init; } = new();
+    }
+}
+
+public class IniRegionDefinitions : IniElement {
+    public required IniRegionDefinitionArguments RegionDefinition { get; init; }
+    protected override string SerializeProperty() => $"RegionDefinitions=(DisplayName=\"{RegionDefinition.DisplayName}\", RegionId=\"{RegionDefinition.RegionId}\", bEnabled={RegionDefinition.bEnabled}, bVisible={RegionDefinition.bVisible}, bAutoAssignable={RegionDefinition.bAutoAssignable})";
+
+    public class IniRegionDefinitionArguments {
+        public required string DisplayName { get; init; }
+        public required string RegionId { get; init; }
+        public bool bEnabled { get; init; } = true;
+        public bool bVisible { get; init; } = true;
+        public bool bAutoAssignable { get; init; } = true;
     }
 }

@@ -10,7 +10,7 @@ public class DefaultGame : CloudStorageFile {
             Elements = new() {
                 new IniTextReplacements() {
                     Option = IniElementOption.AddIfMissing,
-                    TextReplacements = new() {
+                    TextReplacement = new() {
                         Namespace = "Fortnite.FortMatchmakingV2",
                         Key = "Unauthorized",
                         NativeString = "You cannot play this game mode at this time.",

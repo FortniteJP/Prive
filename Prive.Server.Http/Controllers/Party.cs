@@ -5,10 +5,14 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("party")]
 public class PartyController : ControllerBase {
-    [HttpPost("api/v1/Fortnite/user/{accountId}")]
+    [HttpGet("api/v1/Fortnite/user/{accountId}")]
     public object FortniteUser() {
+        var accountId = Request.RouteValues["accountId"] as string;
         return new {
-            // WHAT
+            current = Parties.Where(x => x.Members.Any(y => y.AccountId == accountId)).ToArray() ?? new object[0],
+            invites = new object[0],
+            pending = new object[0],
+            pings = new object[0]
         };
     }
 
