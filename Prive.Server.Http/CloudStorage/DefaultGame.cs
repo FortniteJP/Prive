@@ -25,11 +25,26 @@ public class DefaultGame : CloudStorageFile {
         new() {
             Section = "/Script/FortniteGame.FortGameInstance",
             Elements = new() {
-                new IniElementKeyValue() {
-                    Option = IniElementOption.None,
-                    Key = "bBattleRoyaleMatchmakingEnabled",
-                    Value = "true"
-                }
+                new IniElementKeyValue("bBattleRoyaleMatchmakingEnabled", "true")
+            }
+        },
+        new() {
+            Section = "VoiceChatManager",
+            Elements = new() {
+                new IniElementKeyValue("bEnable", "false")
+            }
+        },
+        new() {
+            Section = "/Script/FortniteGame.FortOnlineAccount",
+            Elements = new() {
+                new IniElementKeyValue("bEnableEulaCheck", "false")
+            }
+        },
+        new() {
+            Section = "/Script/Account.OnlineAccountCommon",
+            Elements = new() {
+                new IniElementKeyValue("bEnableWaitingRoom", "false"),
+                new IniElementKeyValue("bRequireLightswitchAtStartup", "false")
             }
         }
     };

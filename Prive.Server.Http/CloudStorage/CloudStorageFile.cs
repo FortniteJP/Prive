@@ -54,10 +54,19 @@ public enum IniElementOption {
 }
 
 public class IniElementKeyValue : IniElement {
-    public required string Key { get; init; }
+    public string Key { get; init; }
     public string? Value { get; init; }
 
     protected override string SerializeProperty() => $"{Key}={Value}";
+
+    public IniElementKeyValue() {
+        if (Key is null) throw new ArgumentNullException(nameof(Key));
+    }
+
+    public IniElementKeyValue(string key, string? value = null) {
+        Key = key;
+        Value = value;
+    }
 }
 
 public class IniElementFunc : IniElement {
@@ -65,6 +74,12 @@ public class IniElementFunc : IniElement {
     public Dictionary<string, string> Properties { get; } = new();
 
     protected override string SerializeProperty() => $"{Name}=({string.Join(",", Properties.Select(x => $"{x.Key}={x.Value}"))})";
+
+    public IniElementFunc() {}
+
+    public IniElementFunc(string name) {
+        Name = name;
+    }
 }
 
 public class IniTextReplacements : IniElement {
