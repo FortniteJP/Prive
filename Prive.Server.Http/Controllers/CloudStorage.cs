@@ -6,10 +6,11 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("fortnite")]
 public class CloudStorageController : ControllerBase {
-    public static List<CloudStorageFile> CloudStorageFiles = new() {
-        new DefaultGame()
-    };
+    public static List<CloudStorageFile> CloudStorageFiles = typeof(CloudStorageFile).Assembly.GetTypes().Where(x => x.IsSubclassOf(typeof(CloudStorageFile))).Select(x => (CloudStorageFile)Activator.CreateInstance(x)!).ToList();
     
+    #if DEBUG
+    [NoAuth]
+    #endif
     [HttpGet("api/cloudstorage/system")]
     public object[] CloudStorageSystem() {
         var result = new List<object>();
@@ -30,6 +31,9 @@ public class CloudStorageController : ControllerBase {
         return result.ToArray();
     }
 
+    #if DEBUG
+    [NoAuth]
+    #endif
     [HttpGet("api/cloudstorage/system/{filename}")]
     public object CloudStorageSystemFile() {
         var filename = Request.RouteValues["filename"] as string;

@@ -22,7 +22,10 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("bUsePlainTextAuth", "true"),
                 #if DEBUG
                 new IniElementKeyValue("Domain", "localhost"),
-                new IniElementKeyValue("ServerAddr", "localhost"),
+                new IniElementKeyValue("ServerAddr", "127.0.0.1"),
+                new IniElementKeyValue("ServerPort", "8000"),
+                new IniElementKeyValue("Protocol", "http"),
+                new IniElementKeyValue("bUseSSL", "false")
                 #else
                 new IniElementKeyValue("Domain", "api.fortnite.day"),
                 new IniElementKeyValue("ServerAddr", "api.fortnite.day"),
@@ -34,9 +37,9 @@ public class DefaultEngine : CloudStorageFile {
             Elements = new() {
                 #if DEBUG
                 new IniElementKeyValue("Domain", "localhost"),
-                new IniElementKeyValue("ServerAddr", "ws://localhost"),
+                new IniElementKeyValue("ServerAddr", "127.0.0.1"),
                 new IniElementKeyValue("ServerPort", "8000"),
-                new IniElementKeyValue("Protocol", "ws"),
+                new IniElementKeyValue("Protocol", "http"),
                 new IniElementKeyValue("bUseSSL", "false")
                 #else
                 new IniElementKeyValue("Domain", "api.fortnite.day"),
@@ -52,7 +55,8 @@ public class DefaultEngine : CloudStorageFile {
             Elements = new() {
                 new IniElementKeyValue("bConnectToMucRooms", "false"),
                 new IniElementKeyValue("bDeletePingAfterJoin", "false"),
-                new IniElementKeyValue("CreatePartyWaitForXmppConnectionTimeoutSeconds", "2.0"),
+                // new IniElementKeyValue("CreatePartyWaitForXmppConnectionTimeoutSeconds", "2.0"),
+                new IniElementKeyValue("CreatePartyWaitForXmppConnectionTimeoutSeconds", "0.0"),
                 new IniElementKeyValue("bRequiresMatchingBuildId", "false")
             }
         },

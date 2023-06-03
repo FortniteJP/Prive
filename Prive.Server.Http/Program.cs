@@ -1,6 +1,10 @@
+using WebSocketSharp.Server;
+
 namespace Prive.Server.Http;
 
 public class Program {
+    public static WebSocketServer? XMPPServer { get; } = new WebSocketServer(System.Net.IPAddress.Loopback, 8001);
+    
     public static void Main(string[] args) {
         var builder = WebApplication.CreateBuilder(args);
 
@@ -22,11 +26,6 @@ public class Program {
         app.UseHttpsRedirection();
 
         app.UseAuthorization();
-
-        app.UseWebSockets(new() {
-            KeepAliveInterval = TimeSpan.FromMinutes(1)
-        });
-
 
         app.MapControllers();
 
@@ -61,17 +60,6 @@ public class Program {
             Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
         });
 
-        app.Use(async (context, next) => {
-            if (context.WebSockets.IsWebSocketRequest) {
-                Console.WriteLine("New WebSocket Request");
-                using var connection = await context.WebSockets.AcceptWebSocketAsync();
-                var tcs = new TaskCompletionSource<object?>();
-                XMPPClient.Handle(connection, tcs);
-                await tcs.Task;
-            }
-            await next.Invoke();
-        });
-
         app.MapFallback(async context => {
             context.Response.StatusCode = 404;
             await context.Response.WriteAsJsonAsync(EpicError.Create(
@@ -81,6 +69,40 @@ public class Program {
             ));
         });
 
+        XMPPServer!.Log.Level = WebSocketSharp.LogLevel.Trace;
+        XMPPServer.AddWebSocketService<XMPPClient>("/");
+        XMPPServer.Start();
+        XMPPClient.PresenceLoop = new(async () => {
+            while (true) {
+                XMPPClient.SendPresence();
+                await Task.Delay(10000);
+            }
+        });
+        XMPPClient.PresenceLoop.Start();
+
+        // new Thread(RunTcpListener).Start();
+
         app.Run();
+
+        // XMPPServer.Stop();
+    }
+
+    public async static void RunTcpListener() {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 8001);
+        listener.Start();
+        while (true) {
+            using (var client = await listener.AcceptTcpClientAsync()) {
+                var buffer = new byte[1024];
+                var data = "";
+                using (var stream = client.GetStream()) {
+                    while (stream.DataAvailable) {
+                        var size = await stream.ReadAsync(buffer, 0, buffer.Length);
+                        data += System.Text.Encoding.UTF8.GetString(buffer, 0, size);
+                        await stream.WriteAsync(buffer, 0, size);
+                    }
+                    Console.WriteLine($"RECV: {data}");
+                }
+            }
+        }
     }
 }
