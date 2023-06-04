@@ -96,6 +96,26 @@ public class IniTextReplacements : IniElement {
     }
 }
 
+public class IniFrontEndPlaylistData : IniElement {
+    public required IniFrontEndPlaylistDataArguments FrontEndPlaylistData { get; init; }
+    protected override string SerializeProperty() => $"FrontEndPlaylistData=(PlaylistName=\"{FrontEndPlaylistData.PlaylistName}\", PlaylistAccess=({string.Join(",", FrontEndPlaylistData.PlaylistAccess.GetType().GetProperties().Select(x => $"{x.Name}={x.GetValue(FrontEndPlaylistData.PlaylistAccess)}"))}))";
+
+    public class IniFrontEndPlaylistDataArguments {
+        public required string PlaylistName { get; init; }
+        public PlaylistAccessArguments PlaylistAccess { get; init; } = new();
+
+        public class PlaylistAccessArguments {
+            public bool bEnabled { get; init; } = true;
+            public bool bIsDefaultPlaylist { get; init; } = false;
+            public bool bVisibleWhenDisabled { get; init; } = false;
+            public bool bDisplayAsNew { get; init; } = false;
+            public int CategoryIndex { get; init; } = 0;
+            public bool bDisplayAsLimitedTime { get; init; } = false;
+            public int DisplayPriority { get; init; } = 0;
+        }
+    }
+}
+
 public class IniRegionDefinitions : IniElement {
     public required IniRegionDefinitionArguments RegionDefinition { get; init; }
     protected override string SerializeProperty() => $"RegionDefinitions=(DisplayName=\"{RegionDefinition.DisplayName}\", RegionId=\"{RegionDefinition.RegionId}\", bEnabled={RegionDefinition.bEnabled}, bVisible={RegionDefinition.bVisible}, bAutoAssignable={RegionDefinition.bAutoAssignable})";

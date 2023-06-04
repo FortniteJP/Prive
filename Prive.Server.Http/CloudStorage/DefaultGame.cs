@@ -25,7 +25,16 @@ public class DefaultGame : CloudStorageFile {
         new() {
             Section = "/Script/FortniteGame.FortGameInstance",
             Elements = new() {
-                new IniElementKeyValue("bBattleRoyaleMatchmakingEnabled", "true")
+                new IniElementKeyValue("bBattleRoyaleMatchmakingEnabled", "true"),
+
+                new IniElementKeyValue("FrontEndPlaylistData", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
+                new IniFrontEndPlaylistData() {
+                    Option = IniElementOption.AddIfMissing,
+                    FrontEndPlaylistData = new() {
+                        PlaylistName = "Playlist_DefaultSolo",
+                        PlaylistAccess = new() { bIsDefaultPlaylist = true }
+                    }
+                }
             }
         },
         new() {
@@ -44,7 +53,8 @@ public class DefaultGame : CloudStorageFile {
             Section = "/Script/Account.OnlineAccountCommon",
             Elements = new() {
                 new IniElementKeyValue("bEnableWaitingRoom", "false"),
-                new IniElementKeyValue("bRequireLightswitchAtStartup", "false")
+                new IniElementKeyValue("bRequireLightswitchAtStartup", "false"),
+                new IniElementKeyValue("AccessGrantDelaySeconds", "0.0")
             }
         }
     };
