@@ -8,11 +8,11 @@ namespace Prive.Server.Http.Controllers;
 [Route("fortnite")]
 public class MCPController : ControllerBase {
     public static object CreateResponse(object changes, string profileId, int rvn = 0) => new {
-        profileRevision = rvn + 1,
+        profileRevision = rvn == 0 ? 1 : rvn + 1,
         profileId = profileId,
         profileChangesBaseRevision = rvn == 0 ? 1 : rvn,
         profileChanges = changes,
-        profileCommandRevision = rvn + 1,
+        profileCommandRevision = rvn == 0 ? 1 : rvn + 1,
         serverTime = DateTimeOffset.UtcNow.ToString(DateTimeFormat),
         responseVersion = 1
     };
@@ -26,17 +26,30 @@ public class MCPController : ControllerBase {
             return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
         }
 
-        Profile profile;
         switch (profileId) {
             case "athena":
-                profile = await DB.GetAthenaProfile(accountId);
-                break;
+                var athenaProfile = await DB.GetAthenaProfile(accountId);
+                if (athenaProfile is null) {
+                    athenaProfile = new() { AccountId = accountId };
+                    await DB.AthenaProfiles.InsertOneAsync(athenaProfile);
+                }
+                var athenaChange = CreateProfileChange(athenaProfile);
+                athenaChange.Profile.Revision = rvn == 0 ? 1 : rvn + 1;
+                return CreateResponse(new[] { athenaChange }, profileId, rvn);
             case "profile0":
-                profile = await DB.GetAthenaProfile(accountId);
-                break;
+                var profile0Profile = await DB.GetAthenaProfile(accountId);
+                var profile0Change = CreateProfileChange(profile0Profile);
+                profile0Change.Profile.Revision = rvn == 0 ? 1 : rvn + 1;
+                return CreateResponse(new[] { profile0Change }, profileId, rvn);
             case "common_core":
-                profile = await DB.GetCommonCoreProfile(accountId);
-                break;
+                var commonCoreProfile = await DB.GetCommonCoreProfile(accountId);
+                if (commonCoreProfile is null) {
+                    commonCoreProfile = new() { AccountId = accountId };
+                    await DB.CommonCoreProfiles.InsertOneAsync(commonCoreProfile);
+                }
+                var commonCoreChange = CreateProfileChange(commonCoreProfile);
+                commonCoreChange.Profile.Revision = rvn == 0 ? 1 : rvn + 1;
+                return CreateResponse(new[] { commonCoreChange }, profileId, rvn);
             case "creative":
             case "common_public":
             case "collection_book_schematics0":
@@ -53,8 +66,6 @@ public class MCPController : ControllerBase {
                     "fortnite", "prod-live", new[] { profileId }
                 );
         }
-
-        return CreateResponse(profile, profileId, rvn);
     }
 
     [HttpPost("api/game/v2/profile/{accountId}/client/ClientQuestLogin")]
@@ -138,7 +149,7 @@ public class MCPController : ControllerBase {
                     }
                     await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set(setCosmeticLockerSlotRequest.Category, items));
                 } else {
-                    await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set($"{setCosmeticLockerSlotRequest.Category}.$[{setCosmeticLockerSlotRequest.SlotIndex}]", setCosmeticLockerSlotRequest.ItemToSlot));
+                    await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set($"{setCosmeticLockerSlotRequest.Category}s.$[{setCosmeticLockerSlotRequest.SlotIndex}]", setCosmeticLockerSlotRequest.ItemToSlot));
                 }
                 break;
             default:
@@ -149,7 +160,7 @@ public class MCPController : ControllerBase {
         if (setCosmeticLockerSlotRequest.VariantUpdates.Count > 0) await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set($"{setCosmeticLockerSlotRequest.Category}Variants", setCosmeticLockerSlotRequest.VariantUpdates));
 
         var athenaProfile = await DB.GetAthenaProfile(accountId);
-        return CreateResponse(new {
+        return CreateResponse(new[] { new {
             changeType = "itemAttrChanged",
             itemId = setCosmeticLockerSlotRequest.LockerItem,
             attributeName = "locker_slots_data",
@@ -187,7 +198,99 @@ public class MCPController : ControllerBase {
                     },
                 }
             }
-        }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+        } }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+    }
+
+    [HttpPost("api/game/v2/profile/{accountId}/client/EquipBattleRoyaleCustomization")]
+    public async Task<object> EquipBattleRoyaleCustomization() {
+        var accountId = (string)Request.RouteValues["accountId"]!;
+        if (HttpContext.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
+            return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
+        }
+
+        using var bodyReader = new StreamReader(Request.Body);
+        var equipBattleRoyaleCustomizationRequest = JsonSerializer.Deserialize<EquipBattleRoyaleCustomizationRequest>(await bodyReader.ReadToEndAsync())!;
+
+        if (equipBattleRoyaleCustomizationRequest.SlotName is null || equipBattleRoyaleCustomizationRequest.ItemToSlot is null) {
+            Response.StatusCode = 400;
+            return EpicError.Create(
+                "errors.com.epicgames.validation.validation_failed", 1040,
+                "Validation Failed.",
+                "fortnite", "prod-live", new string[0]
+            );
+        }
+
+        var validFields = new string[] {
+            "Backpack",
+            "VictoryPose",
+            "LoadingScreen",
+            "Character",
+            "Glider",
+            "Dance",
+            "CallingCard",
+            "ConsumableEmote",
+            "MapMarker",
+            "Charm",
+            "SkyDiveContrail",
+            "Hat",
+            "PetSkin",
+            "ItemWrap",
+            "MusicPack",
+            "BattleBus",
+            "Pickaxe",
+            "VehicleDecoration",
+        };
+        if (!validFields.Contains(equipBattleRoyaleCustomizationRequest.SlotName)) {
+            Response.StatusCode = 400;
+            return EpicError.Create(
+                "errors.com.epicgames.modules.profiles.invalid_payload", 12806,
+                "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.EquipBattleRoyaleCustomization. Value not one of declared Enum instance names", // [{string.join(", ", validFields)}]
+                "fortnite", "prod-live", new string[] { "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.EquipBattleRoyaleCustomization. Value not one of declared Enum instance names" }
+            );
+        }
+
+        switch (equipBattleRoyaleCustomizationRequest.SlotName) {
+            case "ItemWrap":
+            case "Dance":
+                if (equipBattleRoyaleCustomizationRequest.IndexWithinSlot == -1) {
+                    var max = equipBattleRoyaleCustomizationRequest.SlotName == "Dance" ? 6 : 7;
+                    var r = new List<string>();
+                    for (var i = 0; i < max; i++) r.Add(equipBattleRoyaleCustomizationRequest.ItemToSlot);
+                    await DB.AthenaProfiles.UpdateOneAsync(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId), Builders<AthenaProfile>.Update.Set(equipBattleRoyaleCustomizationRequest.SlotName, r));
+                } else {
+                    await DB.AthenaProfiles.UpdateOneAsync(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId), Builders<AthenaProfile>.Update.Set($"{equipBattleRoyaleCustomizationRequest.SlotName}s.{equipBattleRoyaleCustomizationRequest.IndexWithinSlot}", equipBattleRoyaleCustomizationRequest.ItemToSlot));
+                }
+                break;
+            default:
+                await DB.AthenaProfiles.UpdateOneAsync(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId), Builders<AthenaProfile>.Update.Set($"{equipBattleRoyaleCustomizationRequest.SlotName}Id", equipBattleRoyaleCustomizationRequest.ItemToSlot));
+                break;
+        }
+
+        var profile = await DB.GetAthenaProfile(accountId);
+        if (equipBattleRoyaleCustomizationRequest.SlotName == "ItemWrap" || equipBattleRoyaleCustomizationRequest.SlotName == "Dance") {
+            return CreateResponse(new object[] {
+                new {
+                    changeType = "statModified",
+                    name = $"favorite_{equipBattleRoyaleCustomizationRequest.SlotName}",
+                    value = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}s")!.GetValue(profile)
+                }
+            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+        } else {
+            return CreateResponse(new object[] {
+                new {
+                    changeType = "statModified",
+                    name = $"favorite_{equipBattleRoyaleCustomizationRequest.SlotName}",
+                    value = equipBattleRoyaleCustomizationRequest.ItemToSlot
+                }
+                // variants
+                // new {
+                //     changeType = "itemAttrChanged",
+                //     itemId = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}Id")!.GetValue(profile),
+                //     attributeName = "variants",
+                //     attributeValue = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}Variants")!.GetValue(profile)
+                // }
+            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+        }
     }
 }
 
@@ -216,4 +319,10 @@ public class VariantUpdate {
         Channel = variant.Channel,
         Owned = variant.Owned
     };
+}
+
+public class EquipBattleRoyaleCustomizationRequest {
+    [K("slotName")] public string? SlotName { get; set; }
+    [K("itemToSlot")] public string? ItemToSlot { get; set; }
+    [K("indexWithinSlot")] public int IndexWithinSlot { get; set; }
 }

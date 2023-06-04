@@ -54,6 +54,49 @@ public static class Global {
         if (!File.Exists(ItemShopLocation)) File.WriteAllText(ItemShopLocation, "{}");
         ItemShop = JsonSerializer.Deserialize<object>(File.ReadAllText(ItemShopLocation)) ?? new();
     }
+
+    public static ProfileChange CreateProfileChange(AthenaProfile profile) {
+        var p = new FortniteProfile() {
+            ProfileId = "athena",
+            Id = profile.AccountId,
+            AccountId = profile.AccountId
+        };
+        foreach (var item in Cosmetics.CosmeticItems) {
+            p.Items.Add($"{item.BackendType}:{item.Id}", new() {
+                TemplateId = $"{item.BackendType}:{item.Id}",
+                Attributes = new() {
+                    ["max_level_bonus"] = 0,
+                    ["level"] = 1,
+                    ["item_seen"] = true,
+                    ["rnd_sel_cnt"] = 0,
+                    ["xp"] = 0,
+                    ["variants"] = new object[0],
+                    ["favorite"] = false
+                }
+            });
+        }
+        return new() {
+            Profile = p
+        };
+    }
+
+    public static ProfileChange CreateProfileChange(CommonCoreProfile profile) {
+        var p = new FortniteProfile() {
+            ProfileId = "common_core",
+            Id = profile.AccountId,
+            AccountId = profile.AccountId
+        };
+        p.Items.Add("Currency:MtxPurchased", new() {
+            TemplateId = "Currency:MtxPurchased",
+            Attributes = new() {
+                ["platform"] = profile.MtxPlatform
+            },
+            Quantity = profile.VBucks
+        });
+        return new() {
+            Profile = p
+        };
+    }
 }
 
 public class ClientToken {
