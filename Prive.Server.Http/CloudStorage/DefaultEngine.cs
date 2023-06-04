@@ -96,7 +96,7 @@ public class DefaultEngine : CloudStorageFile {
             Section = "/Script/Qos.QosRegionManager",
             Elements = new() {
                 new IniElementKeyValue("NumTestsPerRegion", "1"),
-                new IniElementKeyValue("PingTimeout", "3.0"),
+                new IniElementKeyValue("PingTimeout", "0.0"),
                 new IniElementKeyValue("RegionDefinitions", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
                 new IniRegionDefinitions() {
                     Option = IniElementOption.AddIfMissing,
