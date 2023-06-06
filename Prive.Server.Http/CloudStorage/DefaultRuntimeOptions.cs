@@ -58,15 +58,15 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 				new IniElementKeyValue("RebootChipExpirationTime", "300.0"),
 				new IniElementKeyValue("RebootDirectiveDisplayTime", "300.0"),
 				new IniElementKeyValue("bRebootEnableInventoryDisplay", "true"),
-				new IniElementKeyValue("LobbyGenericLinkButtonURL", "https://fortnite.day/"), // "\"https://fortnite.day/\"" ?
+				new IniElementKeyValue("LobbyGenericLinkButtonURL", "\"https://fortnite.day/\""), // "\"https://fortnite.day/\"" ?
 				new IniElementKeyValue("bEnableLobbyGenericLinkButton", "true"),
 				new IniElementKeyValue("bAllowMimicingEmotes", "true"),
 				new IniElementKeyValue("bAllowMimicingEmotesInFrontend", "true"),
 				new IniElementKeyValue("bUsingBuildingExtraPiece", "true"),
 				new IniElementKeyValue("bEnableSolaris", "true"),
-				new IniElementKeyValue("bEnableLiveStream", "true"),
-				new IniElementKeyValue("bEnableLiveStreamCountdown", "true"),
-				new IniElementKeyValue("LiveStreamStartTime", ""), // FDateTime idk
+				// new IniElementKeyValue("bEnableLiveStream", "true"),
+				// new IniElementKeyValue("bEnableLiveStreamCountdown", "true"),
+				// new IniElementKeyValue("LiveStreamStartTime", ""), // FDateTime idk
 				new IniElementKeyValue("MaxSquadSize", "128"),
 				new IniElementKeyValue("MaxPartySizeCampaign", "128"),
 				new IniElementKeyValue("MaxPartySizeAthena", "128"),

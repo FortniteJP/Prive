@@ -86,6 +86,10 @@ public class IniTextReplacements : IniElement {
     public required IniTextReplacementArguments TextReplacement { get; init; }
     protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacement.Category}\", bIsMinimalPatch={TextReplacement.bIsMinimalPatch}, Namespace=\"{TextReplacement.Namespace}\", Key=\"{TextReplacement.Key}\", NativeString=\"{TextReplacement.NativeString}\", LocalizedStrings=({string.Join(",", TextReplacement.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{x.Value}\")"))}))";
 
+    public IniTextReplacements() {
+        Option = IniElementOption.AddIfMissing;
+    }
+    
     public class IniTextReplacementArguments {
         public string Category { get; init; } = "Game";
         public bool bIsMinimalPatch { get; init; } = true;

@@ -27,6 +27,10 @@ public class Program {
 
         app.UseAuthorization();
 
+        app.UseWebSockets(new() {
+            KeepAliveInterval = TimeSpan.FromMinutes(1)
+        });
+
         app.MapControllers();
 
         app.Use(async (context, next) => {

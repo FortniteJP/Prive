@@ -9,7 +9,7 @@ namespace Prive.Server.Http;
 
 public static class Global {
     public const string DateTimeFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
-    
+
     public static readonly string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/CloudStorage");
     public static readonly string KeyChainLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/keychain.json");
     public static readonly string BulkStatusLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/bulkstatus.json");
@@ -172,4 +172,11 @@ public static class DB {
     public static async Task<AthenaProfile> GetAthenaProfile(string accountId) => await AthenaProfiles.Find(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId)).FirstOrDefaultAsync();
 
     public static async Task<CommonCoreProfile> GetCommonCoreProfile(string accountId) => await CommonCoreProfiles.Find(Builders<CommonCoreProfile>.Filter.Eq("AccountId", accountId)).FirstOrDefaultAsync();
+}
+
+public static class WebSocketExtension {
+    public static Task SendAsync(this System.Net.WebSockets.WebSocket socket, string message) {
+        var buffer = System.Text.Encoding.UTF8.GetBytes(message);
+        return socket.SendAsync(buffer, System.Net.WebSockets.WebSocketMessageType.Text, true, CancellationToken.None);
+    }
 }

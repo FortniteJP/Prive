@@ -6,7 +6,7 @@ namespace Prive.Server.Http.Controllers;
 [Route("datarouter")]
 public class DataRouterController : ControllerBase {
     [HttpPost("api/v1/public/data")] [NoAuth]
-    public async Task<object> PublicData() {
+    public object PublicData() {
         Console.WriteLine("DataRouter posted");
         // using var reader = new StreamReader(Request.Body);
         // Console.WriteLine(await reader.ReadToEndAsync());

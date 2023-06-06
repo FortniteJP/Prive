@@ -9,7 +9,6 @@ public class DefaultGame : CloudStorageFile {
             Section = "/Script/FortniteGame.FortTextHotfixConfig",
             Elements = new() {
                 new IniTextReplacements() {
-                    Option = IniElementOption.AddIfMissing,
                     TextReplacement = new() {
                         Namespace = "Fortnite.FortMatchmakingV2",
                         Key = "Unauthorized",
@@ -17,6 +16,28 @@ public class DefaultGame : CloudStorageFile {
                         LocalizedStrings = new() {
                             ["en"] = "NO",
                             ["ja"] = "くたばれ"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "010435774CF42540ABD5B3B847DBEF5A",
+                        NativeString = "New Player Guide",
+                        LocalizedStrings = new() {
+                            ["en"] = "Prive Website",
+                            ["ja"] = "Prive ウェブサイト"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "4D36840A41019FF3527139AA29B51509",
+                        NativeString = "New Player Guide",
+                        LocalizedStrings = new() {
+                            ["en"] = "Prive Website",
+                            ["ja"] = "Prive ウェブサイト"
                         }
                     }
                 }

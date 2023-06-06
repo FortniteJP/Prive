@@ -24,13 +24,41 @@ public class FortniteController : ControllerBase {
 
     [HttpGet("api/game/v2/matchmakingservice/ticket/player/{accountId}")]
     public object MatchMakingServiceTicket() {
-        Console.WriteLine("MatchMakingServiceTicket");
-        Response.StatusCode = 401; // 501
-        return EpicError.Create(
-            "errors.not_implemented", 0,
-            "Not Implemented",
-            "fortnite", "prod-live"
-        );
+        var accountId = Request.RouteValues["accountId"]?.ToString() ?? "";
+        var netCL = "";
+        var region = "";
+        var playlist = "";
+        var hotfixVersion = -1;
+
+        var splitted = Request.Query["bucketId"].First()!.Split(':');
+        netCL = splitted[0];
+        hotfixVersion = int.Parse(splitted[1]);
+        playlist = splitted[2];
+        region = splitted[3];
+
+        Response.Cookies.Append("NetCL", netCL);
+
+        var data = new {
+            playerId = accountId,
+            partyPlayerIds = new[] { accountId },
+            bucketId = $"FN:Live:{netCL}:{hotfixVersion}:{region}:{playlist}:PC:public:1",
+            attributes = new Dictionary<string, string>() {
+                ["player.userAgent"] = Request.Headers.UserAgent.ToString(),
+                ["player.preferredSubregion"] = "None",
+                ["player.option.spectator"] = "false",
+                ["player.inputTypes"] = "",
+                ["playlist.revision"] = "1",
+                ["player.teamFormat"] = "unknown"
+            },
+            expireAt = DateTime.UtcNow.AddHours(1).ToString(DateTimeFormat),
+            nonce = GenerateToken()
+        };
+
+        return new {
+            serviceUrl = $"{(Request.Protocol == "https" ? "wss" : "ws")}://{Request.Host.Value}/matchmaking",
+            ticketType = "mms-player",
+            payload = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(data)))
+        };
     }
 
     [HttpGet("api/game/v2/privacy/account/{accountId}")]
