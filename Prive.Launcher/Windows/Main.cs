@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.Json;
 
 public class MainWindow : Window {
     public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Client.Native.dll");
@@ -68,11 +69,25 @@ public class MainWindow : Window {
         };
         Add(launchButton);
 
+        var downloadButton = new Button() {
+            Text = "Downloads",
+            X = Pos.Center(),
+            Y = Pos.Center() + 5,
+        };
+        downloadButton.Clicked += () => {
+            Application.Run<DownloadsWindow>();
+            if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
+                var installingInformation = DownloadsWindow.GetInstallingInformation();
+                throw new NotImplementedException();
+            }
+        };
+        Add(downloadButton);
+
         #if DEBUG
         var dumpSDKButton = new Button() {
             Text = "Dump SDK",
-            X = Pos.Center(),
-            Y = Pos.Center() + 4,
+            X = Pos.Right(this) - 14,
+            Y = Pos.Bottom(this) - 3,
         };
         dumpSDKButton.Clicked += () => {
             if (!(Instance?.ShippingProcess?.HasExited ?? true)) Instance?.InjectDll(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/UEDumper.dll"));
