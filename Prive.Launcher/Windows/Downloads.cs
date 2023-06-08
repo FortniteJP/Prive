@@ -63,7 +63,11 @@ public class DownloadsWindow : Window {
         var request = new HttpRequestMessage(HttpMethod.Get, info.Url);
         request.Headers.Range = new(downloaded, null);
         var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
+        if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable) {
+            progressCallback?.Invoke(info.Length, info.Length, true);
+            return;
+        }
+        // response.EnsureSuccessStatusCode();
         // var length = response.Content.Headers.ContentLength ?? throw new NullReferenceException();
         var length = info.Length;
         using var stream = await response.Content.ReadAsStreamAsync();
@@ -88,6 +92,8 @@ public class DownloadsWindow : Window {
         if (cancellationToken.IsCancellationRequested) return;
         progressCallback?.Invoke(downloaded, length, true);
     }
+
+    public static void UnzipDownloaded() {}
 }
 
 public class InstallingInformation {

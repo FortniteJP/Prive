@@ -83,6 +83,7 @@ public class MainWindow : Window {
             if (completed) {
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
+                DownloadsWindow.UnzipDownloaded();
             } else {
                 LaunchButton.Text = $"{(int)(((float)p/(float)max)*100)}% ({Utils.BytesToString(p)}/{Utils.BytesToString(max)})";
                 LaunchButton.Enabled = false;
@@ -105,7 +106,8 @@ public class MainWindow : Window {
                 LaunchButton.Enabled = false;
             }
         };
-        Add(DownloadButton);
+        // Add(DownloadButton);
+        // Make a download server before implementing this...
 
         #if DEBUG
         var dumpSDKButton = new Button() {
