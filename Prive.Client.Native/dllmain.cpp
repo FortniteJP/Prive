@@ -1,5 +1,9 @@
 #include <iostream>
 #include "Main.h"
+#include "CommunicateServer.h"
+#include <thread>
+
+CommunicateServer server;
 
 void Main() {
     if (true) {
@@ -7,6 +11,16 @@ void Main() {
         FILE* pFile;
         freopen_s(&pFile, "CONOUT$", "w", stdout);
         // printf("Prive.Client.Native injected\n");
+    }
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        std::cout << "Failed to initialize Winsock" << std::endl;
+        return;
+    }
+    if (!server.Start()) {
+        std::cout << "Failed to start server" << std::endl;
+        WSACleanup();
+        return;
     }
 
     auto easyFind = FindPattern(
@@ -29,9 +43,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
         case DLL_PROCESS_ATTACH:
             Main();
             break;
+        case DLL_PROCESS_DETACH:
+            server.Stop();
+            WSACleanup();
         case DLL_THREAD_ATTACH:
         case DLL_THREAD_DETACH:
-        case DLL_PROCESS_DETACH:
             break;
     }
     return TRUE;
