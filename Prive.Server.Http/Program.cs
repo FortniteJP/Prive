@@ -73,16 +73,16 @@ public class Program {
             ));
         });
 
-        XMPPServer!.Log.Level = WebSocketSharp.LogLevel.Trace;
-        XMPPServer.AddWebSocketService<XMPPClient>("/");
-        XMPPServer.Start();
-        XMPPClient.PresenceLoop = new(async () => {
-            while (true) {
-                XMPPClient.SendPresence();
-                await Task.Delay(10000);
-            }
-        });
-        XMPPClient.PresenceLoop.Start();
+        // XMPPServer!.Log.Level = WebSocketSharp.LogLevel.Trace;
+        // XMPPServer.AddWebSocketService<XMPPClient>("/");
+        // XMPPServer.Start();
+        // XMPPClient.PresenceLoop = new(async () => {
+        //     while (true) {
+        //         XMPPClient.SendPresence();
+        //         await Task.Delay(10000);
+        //     }
+        // });
+        // XMPPClient.PresenceLoop.Start();
 
         // new Thread(RunTcpListener).Start();
 
