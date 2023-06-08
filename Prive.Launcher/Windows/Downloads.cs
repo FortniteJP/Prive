@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -40,6 +39,30 @@ public class DownloadsWindow : Window {
     }
 
     public static InstallingInformation GetInstallingInformation() => JsonSerializer.Deserialize<InstallingInformation>(File.ReadAllText(InstallingInformationLocation)) ?? throw new NullReferenceException();
+
+    public static async void ContinueDownload(Action<long, long, bool>? progressCallback = null, CancellationToken cancellationToken = default) {
+        if (!File.Exists(InstallingInformationLocation)) return;
+        var info = GetInstallingInformation();
+        if (!File.Exists(info.Path)) await File.WriteAllBytesAsync(info.Path, new byte[0]);
+        var downloaded = new FileInfo(info.Path).Length;
+
+        var client = new HttpClient();
+        var request = new HttpRequestMessage(HttpMethod.Get, info.Url);
+        request.Headers.Range = new(downloaded, null);
+        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        var length = response.Content.Headers.ContentLength ?? throw new NullReferenceException();
+        using var stream = await response.Content.ReadAsStreamAsync();
+        
+        using var file = File.OpenWrite(info.Path);
+        var buffer = new byte[1024 * 8];
+        while (await stream.ReadAsync(buffer) > 0 && !cancellationToken.IsCancellationRequested) {
+            await file.WriteAsync(buffer);
+            downloaded += buffer.Length;
+            progressCallback?.Invoke(downloaded, length, false);
+        }
+        progressCallback?.Invoke(downloaded, length, true);
+    }
 }
 
 public class InstallingInformation {

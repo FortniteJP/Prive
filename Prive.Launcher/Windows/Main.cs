@@ -1,8 +1,11 @@
 using System.IO.Compression;
-using System.Text.Json;
 
 public class MainWindow : Window {
     public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Client.Native.dll");
+    public static CancellationTokenSource? DownloadCTS { get; set; }
+
+    public Button LaunchButton { get; set; } = default!;
+    public Button DownloadButton { get; set; } = default!;
     
     public MainWindow() : base("Prive") {
         Console.Title = "Prive Launcher";
@@ -35,12 +38,12 @@ public class MainWindow : Window {
         };
         Add(settingsButton);
         
-        var launchButton = new Button() {
+        LaunchButton = new Button() {
             Text = "Launch",
             X = Pos.Center(),
             Y = Pos.Center(),
         };
-        launchButton.Clicked += () => {
+        LaunchButton.Clicked += () => {
             if (IsServer) return;
             
             if (!File.Exists(ClientNativeDllLocation)) {
@@ -57,31 +60,59 @@ public class MainWindow : Window {
             Instance = new(config.GamePath);
             Instance.Launch();
 
-            launchButton.Text = "Running...";
-            launchButton.Enabled = false;
+            LaunchButton.Text = "Running...";
+            LaunchButton.Enabled = false;
+            DownloadButton.Enabled = false;
 
             Task.Run(() => {
                 Instance.InjectDll(ClientNativeDllLocation);
                 Instance.WaitForExit();
-                launchButton.Text = "Launch";
-                launchButton.Enabled = true;
+                LaunchButton.Text = "Launch";
+                LaunchButton.Enabled = true;
+                DownloadButton.Enabled = true;
             });
         };
-        Add(launchButton);
-
-        var downloadButton = new Button() {
+        Add(LaunchButton);
+        
+        DownloadButton = new Button() {
             Text = "Downloads",
             X = Pos.Center(),
             Y = Pos.Center() + 5,
         };
-        downloadButton.Clicked += () => {
-            Application.Run<DownloadsWindow>();
-            if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
-                var installingInformation = DownloadsWindow.GetInstallingInformation();
-                throw new NotImplementedException();
+        void progressHandler(long p, long max, bool completed) {
+            if (completed) {
+                LaunchButton.Text = "Launch";
+                LaunchButton.Enabled = true;
+            } else {
+                LaunchButton.Text = $"{(int)(((float)p/(float)max)*100)}% ({Utils.BytesToString(p)}/{Utils.BytesToString(max)})";
+                LaunchButton.Enabled = false;
             }
         };
-        Add(downloadButton);
+        DownloadButton.Clicked += () => {
+            if (DownloadButton.Text == "Cancel download") {
+                DownloadCTS?.Cancel();
+                LaunchButton.Text = "Launch";
+                LaunchButton.Enabled = true;
+                DownloadButton.Text = "Downloads";
+                return;
+            }
+            DownloadCTS = new();
+            if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
+                DownloadsWindow.ContinueDownload(progressHandler, DownloadCTS.Token);
+                DownloadButton.Text = "Cancel download";
+                LaunchButton.Text = "Loading...";
+                LaunchButton.Enabled = false;
+                return;
+            }
+            Application.Run<DownloadsWindow>();
+            if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
+                DownloadsWindow.ContinueDownload(progressHandler, DownloadCTS.Token);
+                DownloadButton.Text = "Cancel download";
+                LaunchButton.Text = "Loading...";
+                LaunchButton.Enabled = false;
+            }
+        };
+        Add(DownloadButton);
 
         #if DEBUG
         var dumpSDKButton = new Button() {
@@ -100,12 +131,8 @@ public class MainWindow : Window {
     private async void DownloadClientNativeDll() {
         if (Path.GetDirectoryName(ClientNativeDllLocation)! is var dir && !Directory.Exists(dir))  Directory.CreateDirectory(dir);
         
-        #if DEBUG
         var zipBin = await (new HttpClient()).GetByteArrayAsync("https://nightly.link/FortniteJP/Prive/workflows/msbuild/main/build-result.zip?h=6080f158f6a0765a5f4f2619c808f5fddfc58ee8");
-        #else
-        throw new NotImplementedException();
-        #endif
-
+        
         using (var ms = new MemoryStream(zipBin))
         using (var archive = new ZipArchive(ms, ZipArchiveMode.Read)) {
             var entry = archive.GetEntry("Prive.Client.Native.dll");
