@@ -96,16 +96,9 @@ public class MainWindow : Window {
                 DownloadButton.Text = "Downloads";
                 return;
             }
-            DownloadCTS = new();
-            if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
-                DownloadsWindow.ContinueDownload(progressHandler, DownloadCTS.Token);
-                DownloadButton.Text = "Cancel download";
-                LaunchButton.Text = "Loading...";
-                LaunchButton.Enabled = false;
-                return;
-            }
             Application.Run<DownloadsWindow>();
             if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
+                DownloadCTS = new();
                 DownloadsWindow.ContinueDownload(progressHandler, DownloadCTS.Token);
                 DownloadButton.Text = "Cancel download";
                 LaunchButton.Text = "Loading...";
