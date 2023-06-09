@@ -59,7 +59,7 @@ enum class EInternalObjectFlags : int {
     //~ Make sure this is up to date!
     AllFlags = LoaderImport | Garbage | PersistentGarbage | ReachableInCluster | ClusterRoot | Native | Async | AsyncLoading | Unreachable | PendingKill | RootSet | PendingConstruction
     PRAGMA_ENABLE_DEPRECATION_WARNINGS */
-}
+};
 
 ENUM_CLASS_FLAGS(EInternalObjectFlags)
 

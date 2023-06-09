@@ -2,6 +2,7 @@
     <PropertyGroup>
         <ConfigurationType>DynamicLibrary</ConfigurationType>
         <PlatformToolset>v143</PlatformToolset>
+        <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     </PropertyGroup>
 
     <ItemGroup>
@@ -21,13 +22,19 @@
 
     <ItemDefinitionGroup>
         <ClCompile>
-            <LanguageStandard>stdcpp20</LanguageStandard>
+            <LanguageStandard>stdcpplatest</LanguageStandard>
             <LanguageStandard_C>stdc17</LanguageStandard_C>
             <PrecompiledHeader>NotUsing</PrecompiledHeader>
+            <PreprocessorDefinitions>_UNICODE;UNICODE;_WINDOWS;_USRDLL;PRIVE_SERVER_NATIVE_EXPORTS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+            <MultiProcessorCompilation>true</MultiProcessorCompilation>
+            <SDLCheck>true</SDLCheck>
+            <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
         </ClCompile>
         <Link>
             <SubSystem>Windows</SubSystem>
             <GenerateDebugInformation>true</GenerateDebugInformation>
+            <EnableCOMDATFolding>true</EnableCOMDATFolding>
+            <OptimizeReferences>true</OptimizeReferences>
         </Link>
     </ItemDefinitionGroup>
 

@@ -1,5 +1,9 @@
-#include <Psapi.h>
+// #include <Psapi.h>
 #include "CommunicateServer.h"
+
+#include "Game/UObjectGlobals.h"
+
+CommunicateServer server;
 
 void Main() {
     if (true) {
