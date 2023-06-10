@@ -12,7 +12,7 @@ public class ServerInstance {
     public Process? EACProcess { get; private set; }
 
     // What to pass
-    private string Arguments = "-epicapp=Fortnite -epicenv=Prod -EpicPortal -noeac -nobe -fromfl=eac -fltoken=h1cdhchd10150221h130eB56";
+    private string Arguments = "-epicapp=Fortnite -epicenv=Prod -EpicPortal -noeac -nobe -fromfl=eac -fltoken=h1cdhchd10150221h130eB56 -nullrhi -nosplash -nosound";
 
     public ServerInstance(string shippingPath) {
         ShippingPath = shippingPath;

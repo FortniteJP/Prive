@@ -58,7 +58,7 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 				new IniElementKeyValue("RebootChipExpirationTime", "300.0"),
 				new IniElementKeyValue("RebootDirectiveDisplayTime", "300.0"),
 				new IniElementKeyValue("bRebootEnableInventoryDisplay", "true"),
-				new IniElementKeyValue("LobbyGenericLinkButtonURL", "\"https://fortnite.day/\""), // "\"https://fortnite.day/\"" ?
+				new IniElementKeyValue("LobbyGenericLinkButtonURL", "\"https://youtu.be/klfT41uZniI&t=85s\""), // https://fortnite.day/
 				new IniElementKeyValue("bEnableLobbyGenericLinkButton", "true"),
 				new IniElementKeyValue("bAllowMimicingEmotes", "true"),
 				new IniElementKeyValue("bAllowMimicingEmotesInFrontend", "true"),
