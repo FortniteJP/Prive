@@ -69,12 +69,6 @@ public class FortniteController : ControllerBase {
     [HttpGet("api/game/v2/world/info")]
     public object WorldInfo() => new();
 
-    [HttpGet("api/matchmaking/session/findPlayer/{accountId}")]
-    public IActionResult MatchMakingSessionFindPlayer() {
-        Console.WriteLine("MatchMakingSessionFindPlayer");
-        return NoContent();
-    }
-
     [HttpPost("api/game/v2/grant_access")]
     public IActionResult GrantAccess() => NoContent();
     
