@@ -36,7 +36,7 @@ bool CommunicateServer::Start() {
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1"); // INADDR_ANY
-    serverAddress.sin_port = htons(12345);
+    serverAddress.sin_port = htons(12346);
     if (bind(ServerSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR) {
         std::cout << "Failed to bind socket" << std::endl;
         return false;
@@ -83,6 +83,7 @@ void CommunicateServer::HandleConnection() {
 
         const int bufferSize = 1024;
         char buffer[bufferSize];
+        std::string message;
 
         while (true) {
             int bytesRead = recv(clientSocket, buffer, bufferSize, 0);
@@ -97,9 +98,16 @@ void CommunicateServer::HandleConnection() {
             }
 
             std::cout << "Received " << bytesRead << " bytes." << std::endl;
-            std::cout << buffer << std::endl;
-            MessageBoxA(nullptr, buffer, "Message", MB_OK);
-
+            std::cout << std::string(buffer) << std::endl;
+            message.clear();
+            message = std::string(buffer);
+            // MessageBoxA(nullptr, buffer, "Message", MB_OK);
+            if (message.starts_with("shutdown")) {
+                auto currentPid = GetCurrentProcessId();
+                HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPid);
+                TerminateProcess(hProcess, 0);
+                CloseHandle(hProcess);
+            }
         }
     }
 }

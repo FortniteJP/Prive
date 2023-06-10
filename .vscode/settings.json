@@ -72,7 +72,17 @@
         "xtree": "cpp",
         "charconv": "cpp",
         "format": "cpp",
-        "source_location": "cpp"
+        "source_location": "cpp",
+        "any": "cpp",
+        "chrono": "cpp",
+        "codecvt": "cpp",
+        "cstdarg": "cpp",
+        "filesystem": "cpp",
+        "forward_list": "cpp",
+        "numeric": "cpp",
+        "ranges": "cpp",
+        "span": "cpp",
+        "valarray": "cpp"
     },
     "C_Cpp.default.compilerPath": "cl.exe"
 }

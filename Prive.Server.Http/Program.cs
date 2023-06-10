@@ -1,9 +1,12 @@
 using WebSocketSharp.Server;
+using System.Diagnostics;
 
 namespace Prive.Server.Http;
 
 public class Program {
     public static WebSocketServer? XMPPServer { get; } = new WebSocketServer(System.Net.IPAddress.Loopback, 8001);
+    public static ServerInstance? Instance { get; set; }
+    public static CommunicateClient CClient { get; } = new("127.0.0.1", 12346);
     
     public static void Main(string[] args) {
         var builder = WebApplication.CreateBuilder(args);
