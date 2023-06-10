@@ -18,7 +18,7 @@ env:
   # Configuration type to build.
   # You can convert this to a build matrix if you need coverage of multiple configuration types.
   # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-  BUILD_CONFIGURATION: Debug
+  BUILD_CONFIGURATION: Release
 
 permissions:
   contents: read
@@ -41,10 +41,10 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       # Add additional options to the MSBuild command line here (like platform or verbosity level).
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
-      run: msbuild /m /p:OutDir="Out/" ${{env.SOLUTION_FILE_PATH}}\Prive.Launcher\Prive.Launcher.csproj
+      run: dotnet publish -c ${{env.BUILD_CONFIGURATION}} -o "Prive.Launcher/Publish/" ${{env.SOLUTION_FILE_PATH}}\Prive.Launcher\Prive.Launcher.csproj
 
     - name: Upload artifact
       uses: actions/upload-artifact@v1
       with:
         name: build-result
-        path: ./Prive.Launcher.csproj/Out/
+        path: ./Prive.Launcher/Publish/
