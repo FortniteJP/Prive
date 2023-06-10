@@ -1,0 +1,13 @@
+@page "/server"
+@inject IHttpClientFactory HttpFactory
+
+<button @onclick="StartProcess">Start Server Process</button>
+<button @onclick="StopProcess">Stop Server Process</button>
+
+@code {
+    HttpClient Http = default!;
+    protected override void OnInitialized() => Http = HttpFactory.CreateClient();
+    
+    async void StartProcess() => await Http.PostAsync("https://api.fortnite.day/serverapi/start", null);
+    async void StopProcess() => await Http.PostAsync("https://api.fortnite.day/serverapi/stop", null);
+}

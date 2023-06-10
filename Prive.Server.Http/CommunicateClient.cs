@@ -19,4 +19,6 @@ public class CommunicateClient {
     }
 
     public Task Shutdown() => Send("shutdown");
+
+    public Task NewBeacon() => Send($"newbeacon;{Guid.NewGuid().ToString().Replace("-", "")}");
 }
