@@ -28,7 +28,7 @@ CURLcode CurlEasySetOptDetour(struct Curl_easy* data, CURLoption tag, ...) {
 
         Url parsed = Url::Parse(url);
         if (parsed.Host.ends_with(".ol.epicgames.com")) {
-            url = Url::CreateUrl("http", "localhost", "8000", parsed.Path, parsed.QueryString);
+            url = Url::CreateUrl("https", "api.fortnite.day", "443", parsed.Path, parsed.QueryString);
         }
         if (url.length() < length) {
             url.append(length - url.length(), ' ');
