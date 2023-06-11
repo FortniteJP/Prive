@@ -1,8 +1,11 @@
 #include <iostream>
 #include <winsock2.h>
 #include <thread>
+#include <regex>
 
 #pragma comment(lib, "ws2_32.lib")
+
+std::regex PSetPort("setport;(\d+)");
 
 class CommunicateServer {
     public:
@@ -19,6 +22,11 @@ class CommunicateServer {
 CommunicateServer::CommunicateServer() : ServerSocket(INVALID_SOCKET), IsRunning(false) {}
 
 CommunicateServer::~CommunicateServer() { Stop(); }
+
+bool start_with(const std::string& s, const std::string& prefix) {
+    if (s.size() < prefix.size()) return false;
+    return std::equal(std::begin(prefix), std::end(prefix), std::begin(s));
+}
 
 bool CommunicateServer::Start() {
     ServerSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_HOPOPTS);
@@ -49,7 +57,7 @@ bool CommunicateServer::Start() {
     }
 
     IsRunning = true;
-    std::cout << "Listening on port " << 12345 << std::endl;
+    std::cout << "Listening on port " << 12346 << std::endl;
 
     std::thread t(&CommunicateServer::HandleConnection, this);
     t.detach();
@@ -84,6 +92,7 @@ void CommunicateServer::HandleConnection() {
         const int bufferSize = 1024;
         char buffer[bufferSize];
         std::string message;
+        std::smatch matches;
 
         while (true) {
             int bytesRead = recv(clientSocket, buffer, bufferSize, 0);
@@ -97,17 +106,19 @@ void CommunicateServer::HandleConnection() {
                 break;
             }
 
-            std::cout << "Received " << bytesRead << " bytes." << std::endl;
-            std::cout << std::string(buffer) << std::endl;
             message.clear();
-            message = std::string(buffer);
-            // MessageBoxA(nullptr, buffer, "Message", MB_OK);
-            if (message.starts_with("shutdown")) {
-                auto currentPid = GetCurrentProcessId();
-                HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPid);
-                TerminateProcess(hProcess, 0);
-                CloseHandle(hProcess);
+            message = std::string(buffer, bytesRead);
+            std::cout << "Received " << bytesRead << " bytes." << std::endl;
+            std::cout << "`" << message << "`" << std::endl;
+            // MessageBoxA(nullptr, message.c_str(), "Message", MB_OK);
+
+            if (std::regex_match(message, matches, PSetPort)) {
+                std::string port = matches[0].str();
+                std::cout << "Port: " << port << std::endl;
+            } else {
+                MessageBoxA(nullptr, message.c_str(), "Message", MB_OK);
             }
+
         }
     }
 }

@@ -92,10 +92,10 @@ public class MatchMakingController : ControllerBase {
             serverName = "PriveAsia",
             #if DEBUG
             serverAddress = "127.0.0.1",
-            serverPort = 7777,
+            serverPort = Port,
             #else
             serverAddress = "180.52.134.178",
-            serverPort = 20000,
+            serverPort = Port,
             #endif
             totalPlayers = 45,
             maxPublicPlayers = 220,

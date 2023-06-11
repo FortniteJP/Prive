@@ -20,12 +20,37 @@
     <button @onclick="CreateUser">Create User</button>
 </div>
 
+<div>
+    <p>Set Port</p>
+    <input type="number" placeholder="Port" @bind-value="Port" />
+    <button @onclick="SetPort">Set Port</button>
+</div>
+
+<div>
+    <p>Things</p>
+    <button @onclick="Restart">Restart</button>
+    <button @onclick="StartBus">Start Bus</button>
+    <button @onclick="InfiniteAmmoTrue">Infinite Ammo True</button>
+    <button @onclick="InfiniteAmmoFalse">Infinite Ammo False</button>
+    <button @onclick="InfiniteMaterialsTrue">Infinite Materials True</button>
+</div>
+
+<div>
+    <p>Zone</p>
+    <button @onclick="StartSafeZone">Start safe zone</button>
+    <button @onclick="StopSafeZone">Stop safe zone</button>
+    <button @onclick="SkipZone">Skip zone</button>
+    <button @onclick="StartShrinkSafeZone">Start shrink safe zone</button>
+    <button @onclick="SkipShrinkZone">Skip shrink zone</button>
+</div>
+
 @code {
     HttpClient Http = default!;
     protected override void OnInitialized() => Http = HttpFactory.CreateClient();
 
     string Username = string.Empty;
     string Password = string.Empty;
+    int Port = 20000;
 
     async void StartProcess() => await Http.PostAsync("https://api.fortnite.day/serverapi/start", null);
     async void StopProcess() => await Http.PostAsync("https://api.fortnite.day/serverapi/stop", null);
@@ -48,4 +73,24 @@
     void RandomPassword() {
         Password = Guid.NewGuid().ToString().Replace("-", "").Substring(0, 8);
     }
+
+    async void SetPort() => await Http.PostAsync("https://api.fortnite.day/serverapi/setport", new StringContent(JsonSerializer.Serialize(new {
+        port = Port
+    }), null, "application/json"));
+
+    async void Restart() => await Http.PostAsync("https://api.fortnite.day/serverapi/restart", null);
+
+    async void StartBus() => await Http.PostAsync("https://api.fortnite.day/serverapi/startbus", null);
+
+    async void InfiniteAmmoTrue() => await Http.PostAsync("https://api.fortnite.day/serverapi/infiniteammotrue", null);
+    async void InfiniteAmmoFalse() => await Http.PostAsync("https://api.fortnite.day/serverapi/infiniteammofalse", null);
+
+    async void InfiniteMaterialsTrue() => await Http.PostAsync("https://api.fortnite.day/serverapi/infinitematerialstrue", null);
+    async void InfiniteMaterialsFalse() => await Http.PostAsync("https://api.fortnite.day/serverapi/infinitematerialsfalse", null);
+
+    async void StartSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/startsafezone", null);
+    async void StopSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/stopsafezone", null);
+    async void SkipZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/skipzone", null);
+    async void StartShrinkSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/startshrinksafezone", null);
+    async void SkipShrinkZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/skipshrinksafezone", null);
 }

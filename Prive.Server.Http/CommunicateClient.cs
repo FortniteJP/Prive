@@ -20,5 +20,9 @@ public class CommunicateClient {
 
     public Task Shutdown() => Send("shutdown");
 
+    public Task SetPort(int port) => Send($"setport;{port}");
+
     public Task NewBeacon() => Send($"newbeacon;{Guid.NewGuid().ToString().Replace("-", "")}");
+
+    public Task StartBus() => Send("startbus");
 }

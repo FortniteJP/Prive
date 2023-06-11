@@ -4,6 +4,7 @@
 #include <thread>
 
 CommunicateServer server;
+bool RunServer = true;
 
 void Main() {
     if (true) {
@@ -17,7 +18,7 @@ void Main() {
         std::cout << "Failed to initialize Winsock" << std::endl;
         return;
     }
-    if (!server.Start()) {
+    if (RunServer && !server.Start()) {
         std::cout << "Failed to start server" << std::endl;
         WSACleanup();
         return;
@@ -44,7 +45,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
             Main();
             break;
         case DLL_PROCESS_DETACH:
-            server.Stop();
+            if (RunServer) server.Stop();
             WSACleanup();
         case DLL_THREAD_ATTACH:
         case DLL_THREAD_DETACH:
