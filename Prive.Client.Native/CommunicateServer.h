@@ -5,7 +5,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-std::regex PSetPort("setport;(\d+)");
+std::regex PSetPort("setport;(\\d+).*?");
 
 class CommunicateServer {
     public:
@@ -113,7 +113,7 @@ void CommunicateServer::HandleConnection() {
             // MessageBoxA(nullptr, message.c_str(), "Message", MB_OK);
 
             if (std::regex_match(message, matches, PSetPort)) {
-                std::string port = matches[0].str();
+                std::string port = matches[1].str();
                 std::cout << "Port: " << port << std::endl;
             } else {
                 MessageBoxA(nullptr, message.c_str(), "Message", MB_OK);

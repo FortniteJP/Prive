@@ -81,6 +81,13 @@ public class ServerApiController : ControllerBase {
         return NoContent();
     }
 
+    [HttpPost("restart")] [NoAuth]
+    public IActionResult Restart() {
+        Console.WriteLine("Restart posted");
+        CClient.Send("restart");
+        return NoContent();
+    }
+
     [HttpPost("startbus")] [NoAuth]
     public IActionResult StartBus() {
         Console.WriteLine("StartBus posted");
