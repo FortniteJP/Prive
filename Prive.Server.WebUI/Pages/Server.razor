@@ -1,13 +1,51 @@
 @page "/server"
 @inject IHttpClientFactory HttpFactory
+@using System.Text.Json
 
-<button @onclick="StartProcess">Start Server Process</button>
-<button @onclick="StopProcess">Stop Server Process</button>
+<div>
+    <button @onclick="StartProcess">Start Server Process</button>
+    <button @onclick="StopProcess">Stop Server Process</button>
+</div>
+
+<div>
+    <button @onclick="TimeToGoTrue">Time to go True</button>
+    <button @onclick="TimeToGoFalse">Time to go False</button>
+</div>
+
+<div>
+    <p>New User</p>
+    <input type="text" placeholder="Username" @bind-value="Username" />
+    <input type="text" placeholder="Password" @bind-value="Password" />
+    <button @onclick="RandomPassword">Random password</button>
+    <button @onclick="CreateUser">Create User</button>
+</div>
 
 @code {
     HttpClient Http = default!;
     protected override void OnInitialized() => Http = HttpFactory.CreateClient();
-    
+
+    string Username = string.Empty;
+    string Password = string.Empty;
+
     async void StartProcess() => await Http.PostAsync("https://api.fortnite.day/serverapi/start", null);
     async void StopProcess() => await Http.PostAsync("https://api.fortnite.day/serverapi/stop", null);
+
+    async void TimeToGoTrue() => await Http.PostAsync("https://api.fortnite.day/serverapi/timetogotrue", null);
+    async void TimeToGoFalse() => await Http.PostAsync("https://api.fortnite.day/serverapi/timetogofalse", null);
+
+    async void CreateUser() {
+        try {
+            var r = await Http.PostAsync("https://api.fortnite.day/serverapi/createuser", new StringContent(JsonSerializer.Serialize(new {
+                username = Username,
+                password = Password
+            }), null, "application/json"));
+            Console.WriteLine($"Response: {await r.Content.ReadAsStringAsync()}");
+        } catch (Exception e) {
+            Console.WriteLine(e.ToString());
+        }
+    }
+
+    void RandomPassword() {
+        Password = Guid.NewGuid().ToString().Replace("-", "").Substring(0, 8);
+    }
 }

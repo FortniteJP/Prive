@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
 
 namespace Prive.Server.Http.Controllers;
 
@@ -45,6 +46,23 @@ public class ServerApiController : ControllerBase {
     [HttpPost("timetogofalse")] [NoAuth]
     public IActionResult TimeToGoFalse() {
         MatchMakingController.TimeToGo = false;
+        return NoContent();
+    }
+
+    [HttpPost("createuser")]
+    public async Task<IActionResult> CreateUser() {
+        using var reader = new StreamReader(Request.Body);
+        var body = await reader.ReadToEndAsync();
+        var d = JsonSerializer.Deserialize<Dictionary<string, string>>(body) ?? throw new Exception("Failed to deserialize body");
+        var username = d["username"];
+        var password = d["password"];
+        var user = new User() {
+            Email = $"{username}@fortnite.day",
+            Password = password,
+            DisplayName = username,
+            AccountId = Guid.NewGuid().ToString().Replace("-", ""),
+        };
+        await DB.Users.InsertOneAsync(user);
         return NoContent();
     }
 }
