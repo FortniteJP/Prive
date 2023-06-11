@@ -49,7 +49,7 @@ public class ServerApiController : ControllerBase {
         return NoContent();
     }
 
-    [HttpPost("createuser")]
+    [HttpPost("createuser")] [NoAuth]
     public async Task<IActionResult> CreateUser() {
         using var reader = new StreamReader(Request.Body);
         var body = await reader.ReadToEndAsync();
