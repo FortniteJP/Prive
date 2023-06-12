@@ -3,21 +3,23 @@
 @using System.Text.Json
 
 <div>
-    <button @onclick="StartProcess">Start Server Process</button>
-    <button @onclick="StopProcess">Stop Server Process</button>
-</div>
-
-<div>
-    <button @onclick="TimeToGoTrue">Time to go True</button>
-    <button @onclick="TimeToGoFalse">Time to go False</button>
-</div>
-
-<div>
     <p>New User</p>
     <input type="text" placeholder="Username" @bind-value="Username" />
     <input type="text" placeholder="Password" @bind-value="Password" />
     <button @onclick="RandomPassword">Random password</button>
     <button @onclick="CreateUser">Create User</button>
+</div>
+
+<div>
+    <p>Process</p>
+    <button @onclick="StartProcess">Start Server Process</button>
+    <button @onclick="StopProcess">Stop Server Process</button>
+</div>
+
+<div>
+    <p>MatchMaking</p>
+    <button @onclick="TimeToGoTrue">Time to go True</button>
+    <button @onclick="TimeToGoFalse">Time to go False</button>
 </div>
 
 <div>
@@ -33,6 +35,7 @@
     <button @onclick="InfiniteAmmoTrue">Infinite Ammo True</button>
     <button @onclick="InfiniteAmmoFalse">Infinite Ammo False</button>
     <button @onclick="InfiniteMaterialsTrue">Infinite Materials True</button>
+    <button @onclick="InfiniteMaterialsFalse">Infinite Materials False</button>
 </div>
 
 <div>

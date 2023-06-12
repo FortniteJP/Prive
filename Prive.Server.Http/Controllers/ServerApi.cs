@@ -84,7 +84,7 @@ public class ServerApiController : ControllerBase {
     [HttpPost("restart")] [NoAuth]
     public IActionResult Restart() {
         Console.WriteLine("Restart posted");
-        CClient.Send("restart");
+        CClient.Send("restart;");
         return NoContent();
     }
 
@@ -126,35 +126,35 @@ public class ServerApiController : ControllerBase {
     [HttpPost("startsafezone")] [NoAuth]
     public IActionResult StartSafeZone() {
         Console.WriteLine("StartSafeZone posted");
-        CClient.Send("startsafezone");
+        CClient.Send("startsafezone;");
         return NoContent();
     }
 
     [HttpPost("stopsafezone")] [NoAuth]
     public IActionResult StopSafeZone() {
         Console.WriteLine("StopSafeZone posted");
-        CClient.Send("stopsafezone");
+        CClient.Send("stopsafezone;");
         return NoContent();
     }
 
     [HttpPost("skipzone")] [NoAuth]
     public IActionResult SkipZone() {
         Console.WriteLine("SkipZone posted");
-        CClient.Send("skipzone");
+        CClient.Send("skipzone;");
         return NoContent();
     }
 
     [HttpPost("startshrinksafezone")] [NoAuth]
     public IActionResult StartShrinkSafeZone() {
         Console.WriteLine("StartShrinkSafeZone posted");
-        CClient.Send("startshrinksafezone");
+        CClient.Send("startshrinksafezone;");
         return NoContent();
     }
 
     [HttpPost("skipshrinksafezone")] [NoAuth]
     public IActionResult SkipShrinkSafeZone() {
         Console.WriteLine("SkipShrinkSafeZone posted");
-        CClient.Send("skipshrinksafezone");
+        CClient.Send("skipshrinksafezone;");
         return NoContent();
     }
 }
