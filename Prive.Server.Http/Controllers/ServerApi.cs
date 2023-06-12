@@ -9,7 +9,7 @@ public class ServerApiController : ControllerBase {
     public static readonly string BaseDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher");
     public static readonly string ClientNativeDllLocation = Path.Combine(BaseDllLocation, "Prive.Client.Native.dll");
     public static readonly string ServerNativeDllLocation = Path.Combine(BaseDllLocation, "Prive.Server.Native.dll");
-    public static readonly string ShippingLocation = @"C:\Users\User\Documents\Fortnite\v10.40\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe"; // Hardcoded
+    public static readonly string ShippingLocation = @"D:\Documents\Fortnite\10.4\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe" is var p && System.IO.File.Exists(p) ? p : @"C:\Users\User\Documents\Fortnite\v10.40\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe"; // Hardcoded
 
     private static ServerInstance? Instance { get => Program.Instance; set => Program.Instance = value; }
     private static CommunicateClient CClient { get => Program.CClient; }
@@ -21,7 +21,7 @@ public class ServerApiController : ControllerBase {
         Instance.Launch();
         Instance.InjectDll(ClientNativeDllLocation);
         // have to wait because required things does not load instantly
-        Task.Run(async () => await Instance.WaitForLogAndInjectDll(line => line.Contains("Region "), ServerNativeDllLocation));
+        Task.Run(async () => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), ServerNativeDllLocation));
         return NoContent();
     }
 
@@ -137,10 +137,10 @@ public class ServerApiController : ControllerBase {
         return NoContent();
     }
 
-    [HttpPost("skipzone")] [NoAuth]
-    public IActionResult SkipZone() {
-        Console.WriteLine("SkipZone posted");
-        CClient.Send("skipzone;");
+    [HttpPost("skipsafezone")] [NoAuth]
+    public IActionResult SkipSafeZone() {
+        Console.WriteLine("SkipSafeZone posted");
+        CClient.Send("skipsafezone;");
         return NoContent();
     }
 
