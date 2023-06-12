@@ -55,7 +55,7 @@ public class FortniteController : ControllerBase {
         };
 
         return new {
-            serviceUrl = $"{(Request.Protocol == "https" ? "wss" : "ws")}://{Request.Host.Value}/matchmaking",
+            serviceUrl = $"{(Request.Host.Value == "api.fortnite.day" ? "wss" : "ws")}://{Request.Host.Value}/matchmaking",
             ticketType = "mms-player",
             payload = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(data)))
         };
