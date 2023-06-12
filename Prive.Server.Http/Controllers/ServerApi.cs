@@ -79,8 +79,8 @@ public class ServerApiController : ControllerBase {
     public async Task<IActionResult> SetPort() {
         using var reader = new StreamReader(Request.Body);
         var body = await reader.ReadToEndAsync();
-        var d = JsonSerializer.Deserialize<Dictionary<string, string>>(body) ?? throw new Exception("Failed to deserialize body");
-        var port = int.Parse(d["port"]);
+        var d = JsonSerializer.Deserialize<Dictionary<string, int>>(body) ?? throw new Exception("Failed to deserialize body");
+        var port = d["port"];
         await CClient.SetPort(port);
         Port = port;
         Console.WriteLine($"Set port to {port}");
