@@ -42,7 +42,7 @@
     <p>Zone</p>
     <button @onclick="StartSafeZone">Start safe zone</button>
     <button @onclick="StopSafeZone">Stop safe zone</button>
-    <button @onclick="SkipZone">Skip zone</button>
+    <button @onclick="SkipSafeZone">Skip safe zone</button>
     <button @onclick="StartShrinkSafeZone">Start shrink safe zone</button>
     <button @onclick="SkipShrinkZone">Skip shrink zone</button>
 </div>
@@ -93,7 +93,7 @@
 
     async void StartSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/startsafezone", null);
     async void StopSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/stopsafezone", null);
-    async void SkipZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/skipzone", null);
+    async void SkipSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/skipsafezone", null);
     async void StartShrinkSafeZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/startshrinksafezone", null);
     async void SkipShrinkZone() => await Http.PostAsync("https://api.fortnite.day/serverapi/skipshrinksafezone", null);
 }

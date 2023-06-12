@@ -40,7 +40,13 @@ public class ServerApiController : ControllerBase {
     }
 
     [HttpPost("timetogotrue")] [NoAuth]
-    public IActionResult TimeToGoTrue() {
+    public async Task<IActionResult> TimeToGoTrue() {
+        var cursor = await DB.Database.GetCollection<User>("Users").FindAsync<User>(MongoDB.Driver.Builders<User>.Filter.Empty);
+        while (await cursor.MoveNextAsync()) {
+            foreach (var user in cursor.Current) {
+                await CClient.SendOutfit(user.AccountId, (await DB.GetAthenaProfile(user.AccountId)).CharacterId);
+            }
+        }
         MatchMakingController.TimeToGo = true;
         return NoContent();
     }

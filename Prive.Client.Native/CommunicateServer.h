@@ -5,7 +5,16 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-std::regex PSetPort("setport;(\\d+).*?");
+std::string ToLower(std::string str) {
+    std::string result = "";
+    std::transform(str.begin(), str.end(), std::back_inserter(result), ::tolower);
+    return result;
+}
+
+#define Pattern(x) std::regex P##x(ToLower(#x) + ";" + ".?");
+#define PatternA(x, y) std::regex P##x(ToLower(#x) + ";" + #y + ".?");
+
+PatternA(Outfit, (.*?);(.*?))
 
 class CommunicateServer {
     public:
@@ -112,9 +121,10 @@ void CommunicateServer::HandleConnection() {
             std::cout << "`" << message << "`" << std::endl;
             // MessageBoxA(nullptr, message.c_str(), "Message", MB_OK);
 
-            if (std::regex_match(message, matches, PSetPort)) {
-                std::string port = matches[1].str();
-                std::cout << "Port: " << port << std::endl;
+            if (std::regex_match(message, matches, POutfit)) {
+                std::string id = matches[1].str();
+                std::string cid = matches[2].str();
+                MessageBoxA(nullptr, ("Outfit ID `" + id + "`, CID `" + cid + "`").c_str(), "Message", MB_OK);
             } else {
                 MessageBoxA(nullptr, message.c_str(), "Message", MB_OK);
             }

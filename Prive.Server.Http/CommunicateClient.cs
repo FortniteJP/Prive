@@ -25,4 +25,6 @@ public class CommunicateClient {
     public Task NewBeacon() => Send($"newbeacon;{Guid.NewGuid().ToString().Replace("-", "")}");
 
     public Task StartBus() => Send("startbus;");
+
+    public Task SendOutfit(string id, string cid) => Send($"outfit;{id};{cid};");
 }
