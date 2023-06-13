@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Driver;
 using System.Text.Json;
 
 namespace Prive.Server.Http.Controllers;
@@ -41,11 +42,9 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("timetogotrue")] [NoAuth]
     public async Task<IActionResult> TimeToGoTrue() {
-        var cursor = await DB.Database.GetCollection<User>("Users").FindAsync<User>(MongoDB.Driver.Builders<User>.Filter.Empty);
-        while (await cursor.MoveNextAsync()) {
-            foreach (var user in cursor.Current) {
-                await CClient.SendOutfit(user.AccountId, (await DB.GetAthenaProfile(user.AccountId)).CharacterId);
-            }
+        var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
+        foreach (var user in users) {
+            await CClient.SendOutfit(user.AccountId, (await DB.GetAthenaProfile(user.AccountId)).CharacterId);
         }
         MatchMakingController.TimeToGo = true;
         return NoContent();
