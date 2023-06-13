@@ -12,7 +12,7 @@ public class DefaultRuntimeOptions : CloudStorageFile {
                 new IniElementKeyValue("bEnableNickname", "false"),
                 new IniElementKeyValue("bEnableEULA", "false"),
                 new IniElementKeyValue("bEnableHiddenMatchmakingDelay", "false"),
-                new IniElementKeyValue("bShouldSkipAvailabilityCheck", "false"),
+                new IniElementKeyValue("bShouldSkipAvailabilityCheck", "true"), // false
                 new IniElementKeyValue("bEnableClientSettingsSaveToDisk", "true"),
                 new IniElementKeyValue("bEnableClientSettingsSaveToCloud", "false"),
                 
@@ -29,6 +29,16 @@ public class DefaultRuntimeOptions : CloudStorageFile {
                 new IniElementKeyValue("bLoginEpicWeb", "true"),
 
                 new IniElementKeyValue("ExperimentalCohortPercent", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
+
+				new IniElementKeyValue("DisabledFrontendNavigationTabs", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
+				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaCompete", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaCareer", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaStore", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "BattlePass", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "CareerScreen", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaDirectAcquisition", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				// new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaCustomize", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				// new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "Lobby", TabState = "EFortRuntimeOptionTabState::Hidden" } },
 
 				new IniElementKeyValue("bEnableAllRemoteClientInfos", "true"),
 				new IniElementKeyValue("bAllowPartySuggestions", "true"),
@@ -74,6 +84,10 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 				new IniElementKeyValue("bAllowOfflineInvites", "true"),
 				new IniElementKeyValue("EnableCommunityVotingScreen", "true"),
 				new IniElementKeyValue("bDebugForceLoginRelaunch", "true"),
+
+				new IniElementKeyValue("bSkipSubgameSelect", "true"),
+				new IniElementKeyValue("bEnableSavedLoadouts", "true"),
+				new IniElementKeyValue("bForceBRMode", "true"),
             }
         }
     };

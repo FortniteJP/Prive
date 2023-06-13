@@ -99,7 +99,6 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("PingTimeout", "0.0"),
                 new IniElementKeyValue("RegionDefinitions", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
                 new IniRegionDefinitions() {
-                    Option = IniElementOption.AddIfMissing,
                     RegionDefinition = new() {
                         DisplayName = "Prive Asia",
                         RegionId = "ASIA",

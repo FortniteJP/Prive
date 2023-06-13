@@ -124,11 +124,29 @@ public class IniRegionDefinitions : IniElement {
     public required IniRegionDefinitionArguments RegionDefinition { get; init; }
     protected override string SerializeProperty() => $"RegionDefinitions=(DisplayName=\"{RegionDefinition.DisplayName}\", RegionId=\"{RegionDefinition.RegionId}\", bEnabled={RegionDefinition.bEnabled}, bVisible={RegionDefinition.bVisible}, bAutoAssignable={RegionDefinition.bAutoAssignable})";
 
+    public IniRegionDefinitions() {
+        Option = IniElementOption.AddIfMissing;
+    }
+
     public class IniRegionDefinitionArguments {
         public required string DisplayName { get; init; }
         public required string RegionId { get; init; }
         public bool bEnabled { get; init; } = true;
         public bool bVisible { get; init; } = true;
         public bool bAutoAssignable { get; init; } = true;
+    }
+}
+
+public class IniDisabledFrontendNavigationTabs : IniElement {
+    public required DisabledFrontendNavigationTabArguments DisabledFrontendNavigationTab { get; init; }
+    protected override string SerializeProperty() => $"DisabledFrontendNavigationTabs=(TabName=\"{DisabledFrontendNavigationTab.TabName}\", TabState={DisabledFrontendNavigationTab.TabState})";
+
+    public IniDisabledFrontendNavigationTabs() {
+        Option = IniElementOption.AddIfMissing;
+    }
+
+    public class DisabledFrontendNavigationTabArguments {
+        public required string TabName { get; init; }
+        public string TabState { get; init; } = "EFortRuntimeOptionTabState::Hidden";
     }
 }
