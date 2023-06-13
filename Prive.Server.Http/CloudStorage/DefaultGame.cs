@@ -77,6 +77,14 @@ public class DefaultGame : CloudStorageFile {
                 new IniElementKeyValue("bRequireLightswitchAtStartup", "false"),
                 new IniElementKeyValue("AccessGrantDelaySeconds", "0.0")
             }
-        }
+        },
+        // Uncomment for funny
+        // new() {
+        //     Section = "AssetHotfix",
+        //     Elements = new() {
+        //         new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_R_Ore_T03;FiringRate;1000") { Option = IniElementOption.AddIfMissing },
+        //         new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_R_Ore_T03;ReloadTime;0.1") { Option = IniElementOption.AddIfMissing },
+        //     }
+        // },
     };
 }

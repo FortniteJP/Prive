@@ -16,40 +16,41 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("Fort.ShutdownWhenContentBeaconFails", "0")
             }
         },
-        new() {
-            Section = "OnlineSubsystemMcp.Xmpp",
-            Elements = new() {
-                new IniElementKeyValue("bUsePlainTextAuth", "true"),
-                #if DEBUG
-                new IniElementKeyValue("Domain", "localhost"),
-                new IniElementKeyValue("ServerAddr", "127.0.0.1"),
-                new IniElementKeyValue("ServerPort", "8000"),
-                new IniElementKeyValue("Protocol", "http"),
-                new IniElementKeyValue("bUseSSL", "false")
-                #else
-                new IniElementKeyValue("Domain", "api.fortnite.day"),
-                new IniElementKeyValue("ServerAddr", "api.fortnite.day"),
-                #endif
-            }
-        },
-        new() {
-            Section = "OnlineSubsystemMcp.Xmpp Prod",
-            Elements = new() {
-                #if DEBUG
-                new IniElementKeyValue("Domain", "localhost"),
-                new IniElementKeyValue("ServerAddr", "127.0.0.1"),
-                new IniElementKeyValue("ServerPort", "8000"),
-                new IniElementKeyValue("Protocol", "http"),
-                new IniElementKeyValue("bUseSSL", "false")
-                #else
-                new IniElementKeyValue("Domain", "api.fortnite.day"),
-                new IniElementKeyValue("ServerAddr", $"{(UseSSL ? "wss" : "ws")}://api.fortnite.day"),
-                new IniElementKeyValue("ServerPort", UseSSL ? "443" : "80"),
-                new IniElementKeyValue("Protocol", UseSSL ? "wss" : "ws"),
-                new IniElementKeyValue("bUseSSL", $"{UseSSL}")
-                #endif
-            }
-        },
+        // BROKEN WHY
+        // new() {
+        //     Section = "OnlineSubsystemMcp.Xmpp",
+        //     Elements = new() {
+        //         new IniElementKeyValue("bUsePlainTextAuth", "true"),
+        //         #if DEBUG
+        //         new IniElementKeyValue("Domain", "localhost"),
+        //         new IniElementKeyValue("ServerAddr", "127.0.0.1"),
+        //         new IniElementKeyValue("ServerPort", "8000"),
+        //         new IniElementKeyValue("Protocol", "http"),
+        //         new IniElementKeyValue("bUseSSL", "false")
+        //         #else
+        //         new IniElementKeyValue("Domain", "api.fortnite.day"),
+        //         new IniElementKeyValue("ServerAddr", "api.fortnite.day"),
+        //         #endif
+        //     }
+        // },
+        // new() {
+        //     Section = "OnlineSubsystemMcp.Xmpp Prod",
+        //     Elements = new() {
+        //         #if DEBUG
+        //         new IniElementKeyValue("Domain", "localhost"),
+        //         new IniElementKeyValue("ServerAddr", "127.0.0.1"),
+        //         new IniElementKeyValue("ServerPort", "8000"),
+        //         new IniElementKeyValue("Protocol", "http"),
+        //         new IniElementKeyValue("bUseSSL", "false")
+        //         #else
+        //         new IniElementKeyValue("Domain", "api.fortnite.day"),
+        //         new IniElementKeyValue("ServerAddr", $"{(UseSSL ? "wss" : "ws")}://api.fortnite.day"),
+        //         new IniElementKeyValue("ServerPort", UseSSL ? "443" : "80"),
+        //         new IniElementKeyValue("Protocol", UseSSL ? "wss" : "ws"),
+        //         new IniElementKeyValue("bUseSSL", $"{UseSSL}")
+        //         #endif
+        //     }
+        // },
         new() {
             Section = "OnlineSubsystemMcp.OnlinePartySystemMcpV2",
             Elements = new() {

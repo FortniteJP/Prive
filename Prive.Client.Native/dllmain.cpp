@@ -4,7 +4,7 @@
 #include <thread>
 
 CommunicateServer server;
-bool RunServer = true;
+bool RunServer = false;
 
 void Main() {
     if (true) {
