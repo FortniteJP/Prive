@@ -124,7 +124,7 @@ public class MainWindow : Window {
     }
 
     private async void DownloadClientNativeDll() {
-        if (Path.GetDirectoryName(ClientNativeDllLocation)! is var dir && !Directory.Exists(dir))  Directory.CreateDirectory(dir);
+        if (Path.GetDirectoryName(ClientNativeDllLocation)! is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
         
         var zipBin = await (new HttpClient()).GetByteArrayAsync("https://nightly.link/FortniteJP/Prive/workflows/Prive.Client.Native/main/Prive.Client.Native.zip?h=6080f158f6a0765a5f4f2619c808f5fddfc58ee8");
         

@@ -72,7 +72,7 @@ public class DownloadsWindow : Window {
         var length = info.Length;
         using var stream = await response.Content.ReadAsStreamAsync();
         
-        var file = new FileStream(info.Path, FileMode.Append);
+        using var file = new FileStream(info.Path, FileMode.Append);
         var buffer = new byte[1024 * 8];
         try {
             while (await stream.ReadAsync(buffer) > 0 && !cancellationToken.IsCancellationRequested) {

@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 public class SettingsWindow : Window {
-    private string gamePathLabelText(Configuration config) => $"Current Game Path:\n{string.Join('\n', Regex.Matches(Path.GetDirectoryName(config.GamePath) ?? "", @$".{{1,{Console.WindowWidth - 2}}}").Cast<Match>().Select(m => m.Value).ToArray())}";
+    private string GamePathLabelText(Configuration config) => $"Current Game Path:\n{string.Join('\n', Regex.Matches(Path.GetDirectoryName(config.GamePath) ?? "", @$".{{1,{Console.WindowWidth - 2}}}").Cast<Match>().Select(m => m.Value).ToArray())}";
 
     public SettingsWindow() : base("Prive") {
         Console.Title = "Prive Settings";
@@ -11,7 +11,7 @@ public class SettingsWindow : Window {
         var config = Configurations.GetConfiguration();
 
         var gamePathLabel = new Label() {
-            Text = gamePathLabelText(config),
+            Text = GamePathLabelText(config),
             X = 1
         };
         Add(gamePathLabel);
@@ -38,7 +38,7 @@ public class SettingsWindow : Window {
                 // This window closes wtf
                 config.GamePath = openFile.lpstrFile;
                 Configurations.SaveConfiguration(config);
-                gamePathLabel.Text = gamePathLabelText(config);
+                gamePathLabel.Text = GamePathLabelText(config);
                 selectGamePathButton.Y = gamePathLabel.Y + gamePathLabel.Text.Split("\n").Length + 1;
             } else Utils.MessageBox("Canceled");
         };
