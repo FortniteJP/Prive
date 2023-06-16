@@ -1,17 +1,28 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SharpCompress.Archives.Rar;
 
 public class DownloadsWindow : Window {
+    public const string SevenZipUrl = "https://www.7-zip.org/a/7zr.exe";
+    public static string SevenZipPath { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/7zr.exe");
+
     public static string InstallingInformationLocation { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/InstallingInformation.json");
     public static string DownloadsDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Downloads/");
     public static Dictionary<string, string> AvailableInstalls { get; set; } = new() {
-        ["v10.40"] = "https://cdn.fnbuilds.services/10.40.rar"
+        // ["v10.40"] = "https://cdn.fnbuilds.services/10.40.rar"
+        ["v10.40"] = "http://localhost:9080/10.40.rar"
     };
 
     public DownloadsWindow() : base("Prive") {
         Console.Title = "Prive Download";
         ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
         if (!Directory.Exists(DownloadsDirectory)) Directory.CreateDirectory(DownloadsDirectory);
+
+        // USING THIS IS FASTER
+        // if (!File.Exists(SevenZipPath)) Task.Run(async () => {
+        //     using var file = File.Create(SevenZipPath);
+        //     await file.WriteAsync(await new HttpClient().GetByteArrayAsync(SevenZipUrl));
+        // });
 
         var cancelButton = new Button() {
             Text = "Cancel",
@@ -31,6 +42,7 @@ public class DownloadsWindow : Window {
             };
             installButton.Clicked += () => {
                 var installingInformation = new InstallingInformation() {
+                    Version = kv.Key,
                     Url = kv.Value,
                     Path = Path.Combine(DownloadsDirectory, Path.GetFileName(kv.Value)),
                     Length = GetContentLength(kv.Value)
@@ -73,30 +85,73 @@ public class DownloadsWindow : Window {
         using var stream = await response.Content.ReadAsStreamAsync();
         
         using var file = new FileStream(info.Path, FileMode.Append);
-        var buffer = new byte[1024 * 8];
+        var buffer = new byte[1024 * 4];
         try {
-            while (await stream.ReadAsync(buffer) > 0 && !cancellationToken.IsCancellationRequested) {
-                await file.WriteAsync(buffer);
+            while (await stream.ReadAsync(buffer) is int read && read > 0 && !cancellationToken.IsCancellationRequested) {
+                await file.WriteAsync(buffer.AsMemory(0, read));
                 await file.FlushAsync();
-                downloaded += buffer.Length;
+                downloaded += read;
                 progressCallback?.Invoke(downloaded, length, false);
             }
             file.Close();
             await file.DisposeAsync();
-        } catch (IOException) {
+        } catch (IOException e) {
             if (r > 5) throw;
             file.Close();
             await file.DisposeAsync();
-            ContinueDownload(progressCallback, cancellationToken, r + 1);
+            ContinueDownload(progressCallback, cancellationToken, e.Message.StartsWith("The response ended prematurely") ? r : r + 1);
+            return;
         }
         if (cancellationToken.IsCancellationRequested) return;
         progressCallback?.Invoke(downloaded, length, true);
     }
 
-    public static void UnzipDownloaded() {}
+    public static async void DecompressDownloaded(Action<int, int, int, bool>? progressCallback = null) {
+        var info = GetInstallingInformation();
+        var extractPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", info.Version);
+        if (!Directory.Exists(extractPath)) Directory.CreateDirectory(extractPath);
+        var archive = RarArchive.Open(info.Path);
+        var fileCount = archive.Entries.Count(entry => !entry.IsDirectory);
+        var reader = archive.ExtractAllEntries();
+        var p = 0;
+        while (reader.MoveToNextEntry()) {
+            // Utils.MessageBox($"{p}/{fileCount}, {file.Key}");
+            p += 1;
+            if (!reader.Entry.IsDirectory) {
+                var path = Path.Combine(extractPath, reader.Entry.Key);
+                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                using var file = File.OpenWrite(path);
+                using var stream = reader.OpenEntryStream();
+                var length = (float)reader.Entry.Size;
+                var wrote = 0;
+                var buffer = new byte[1024 * 16];
+                while (await stream.ReadAsync(buffer) is int read && read > 0) {
+                    await file.WriteAsync(buffer.AsMemory(0, read));
+                    await file.FlushAsync();
+                    wrote += read;
+                    if (wrote < 0 || length < 0) Utils.MessageBox($"something being minus wtf {wrote}, {read}, {length}");
+                    progressCallback?.Invoke((int)(((float)wrote/length)*100), p, fileCount, false);
+                }
+            }
+        }
+        archive.Dispose();
+        if (!Directory.Exists(Path.Combine(extractPath, "FortniteGame")) && new DirectoryInfo(extractPath).GetDirectories() is var directories && directories.Length == 1) {
+            foreach (var directory in new DirectoryInfo(Path.Combine(extractPath, directories.First().FullName)).GetDirectories()) {
+                directory.MoveTo(Path.Combine(extractPath, directory.Name));
+            }
+            directories.First().Delete();
+        }
+        File.Delete(info.Path);
+        File.Delete(InstallingInformationLocation);
+        var config = Configurations.GetConfiguration();
+        config.GamePath = Path.Combine(extractPath, "FortniteGame", "Binaries", "Win64");
+        Configurations.SaveConfiguration(config);
+        progressCallback?.Invoke(p, fileCount, 0, true);
+    }
 }
 
 public class InstallingInformation {
+    [JsonPropertyName("Version")] public required string Version { get; set; }
     [JsonPropertyName("Url")] public required string Url { get; set; }
     [JsonPropertyName("Path")] public required string Path { get; set; }
     [JsonPropertyName("Length")] public required long Length { get; set; }

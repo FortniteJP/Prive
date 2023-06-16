@@ -79,19 +79,29 @@ public class MainWindow : Window {
             X = Pos.Center(),
             Y = Pos.Center() + 5,
         };
-        void progressHandler(long p, long max, bool completed) {
+        void decompressProgressHandler(int e, int p, int max, bool completed) {
             if (completed) {
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
-                DownloadsWindow.UnzipDownloaded();
+                DownloadButton.Text = "Downloads";
+                DownloadButton.Enabled = true;
+                return;
+            }
+            LaunchButton.Text = $"{string.Format("{0, 3}", e)}% ({p}/{max})";
+            LaunchButton.Enabled = false;
+        }
+        void progressHandler(long p, long max, bool completed) {
+            if (completed) {
+                DownloadsWindow.DecompressDownloaded(decompressProgressHandler);
             } else {
                 LaunchButton.Text = $"{(int)(((float)p/(float)max)*100)}% ({Utils.BytesToString(p)}/{Utils.BytesToString(max)})";
                 LaunchButton.Enabled = false;
             }
         };
-        DownloadButton.Clicked += () => {
-            if (DownloadButton.Text == "Cancel download") {
+        DownloadButton.Clicked += async () => {
+            if (DownloadButton.Text == "Cancel download") { // Cancel decompress too
                 DownloadCTS?.Cancel();
+                await Task.Delay(10); // ???
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
                 DownloadButton.Text = "Downloads";
@@ -106,7 +116,7 @@ public class MainWindow : Window {
                 LaunchButton.Enabled = false;
             }
         };
-        // Add(DownloadButton);
+        Add(DownloadButton);
         // Make a download server before implementing this...
 
         #if DEBUG
