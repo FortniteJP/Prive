@@ -57,7 +57,10 @@ public class MainWindow : Window {
                 return;
             }
             
-            Instance = new(config.GamePath);
+            Instance = new(config.GamePath) {
+                Username = config.Username,
+                Password = config.Password
+            };
             Instance.Launch();
 
             LaunchButton.Text = "Running...";
@@ -79,7 +82,7 @@ public class MainWindow : Window {
             X = Pos.Center(),
             Y = Pos.Center() + 5,
         };
-        void decompressProgressHandler(int e, int p, int max, bool completed) {
+        void extractProgressHandler(int e, int p, int max, bool completed) {
             if (completed) {
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
@@ -92,7 +95,9 @@ public class MainWindow : Window {
         }
         void progressHandler(long p, long max, bool completed) {
             if (completed) {
-                DownloadsWindow.DecompressDownloaded(decompressProgressHandler);
+                DownloadButton.Text = "Extracting..."; // Cancel extract
+                DownloadButton.Enabled = false; // TODO: implement
+                DownloadsWindow.ExtractDownloaded(extractProgressHandler);
             } else {
                 LaunchButton.Text = $"{(int)(((float)p/(float)max)*100)}% ({Utils.BytesToString(p)}/{Utils.BytesToString(max)})";
                 LaunchButton.Enabled = false;

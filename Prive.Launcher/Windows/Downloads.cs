@@ -9,8 +9,11 @@ public class DownloadsWindow : Window {
     public static string InstallingInformationLocation { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/InstallingInformation.json");
     public static string DownloadsDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Downloads/");
     public static Dictionary<string, string> AvailableInstalls { get; set; } = new() {
-        // ["v10.40"] = "https://cdn.fnbuilds.services/10.40.rar"
+        #if DEBUG
         ["v10.40"] = "http://localhost:9080/10.40.rar"
+        #else
+        ["v10.40"] = "https://cdn.fnbuilds.services/10.40.rar"
+        #endif
     };
 
     public DownloadsWindow() : base("Prive") {
@@ -85,9 +88,9 @@ public class DownloadsWindow : Window {
         using var stream = await response.Content.ReadAsStreamAsync();
         
         using var file = new FileStream(info.Path, FileMode.Append);
-        var buffer = new byte[1024 * 4];
+        var buffer = new byte[1024 * 64];
         try {
-            while (await stream.ReadAsync(buffer) is int read && read > 0 && !cancellationToken.IsCancellationRequested) {
+            while (!cancellationToken.IsCancellationRequested && await stream.ReadAsync(buffer) is int read && read > 0) {
                 await file.WriteAsync(buffer.AsMemory(0, read));
                 await file.FlushAsync();
                 downloaded += read;
@@ -106,7 +109,7 @@ public class DownloadsWindow : Window {
         progressCallback?.Invoke(downloaded, length, true);
     }
 
-    public static async void DecompressDownloaded(Action<int, int, int, bool>? progressCallback = null) {
+    public static async void ExtractDownloaded(Action<int, int, int, bool>? progressCallback = null) {
         var info = GetInstallingInformation();
         var extractPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", info.Version);
         if (!Directory.Exists(extractPath)) Directory.CreateDirectory(extractPath);
@@ -122,14 +125,14 @@ public class DownloadsWindow : Window {
                 if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 using var file = File.OpenWrite(path);
                 using var stream = reader.OpenEntryStream();
-                var length = (float)reader.Entry.Size;
-                var wrote = 0;
-                var buffer = new byte[1024 * 16];
+                var length = reader.Entry.Size;
+                var wrote = 0L;
+                var buffer = new byte[1024 * 64];
                 while (await stream.ReadAsync(buffer) is int read && read > 0) {
                     await file.WriteAsync(buffer.AsMemory(0, read));
                     await file.FlushAsync();
                     wrote += read;
-                    if (wrote < 0 || length < 0) Utils.MessageBox($"something being minus wtf {wrote}, {read}, {length}");
+                    // if (wrote < 0 || length < 0) Utils.MessageBox($"something being minus wtf {wrote}, {read}, {length}"); // because of overflow, use long instead of int
                     progressCallback?.Invoke((int)(((float)wrote/length)*100), p, fileCount, false);
                 }
             }
@@ -144,7 +147,7 @@ public class DownloadsWindow : Window {
         File.Delete(info.Path);
         File.Delete(InstallingInformationLocation);
         var config = Configurations.GetConfiguration();
-        config.GamePath = Path.Combine(extractPath, "FortniteGame", "Binaries", "Win64");
+        config.GamePath = Path.Combine(extractPath, "FortniteGame/Binaries/Win64");
         Configurations.SaveConfiguration(config);
         progressCallback?.Invoke(p, fileCount, 0, true);
     }

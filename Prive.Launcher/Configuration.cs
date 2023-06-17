@@ -26,4 +26,6 @@ public static class Configurations {
 
 public class Configuration {
     public string GamePath { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
 }

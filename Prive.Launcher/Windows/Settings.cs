@@ -10,9 +10,38 @@ public class SettingsWindow : Window {
         ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
         var config = Configurations.GetConfiguration();
 
+        var usernameLabel = new Label() {
+            Text = "Username:",
+            X = 1, Y = 0
+        };
+        var usernameText = new TextField(config.Username) {
+            Width = Dim.Fill() - 1,
+            X = Pos.Right(usernameLabel) + 1, Y = 0
+        };
+        usernameText.TextChanged += text => {
+            var config = Configurations.GetConfiguration();
+            config.Username = usernameText.Text.ToString() ?? "";
+            Configurations.SaveConfiguration(config);
+        };
+        var passwordLabel = new Label() {
+            Text = "Password:",
+            X = 1, Y = 2
+        };
+        var passwordText = new TextField(config.Password) {
+            Secret = true,
+            Width = Dim.Fill() - 1,
+            X = Pos.Right(passwordLabel) + 1, Y = 2
+        };
+        passwordText.TextChanged += text => {
+            var config = Configurations.GetConfiguration();
+            config.Password = passwordText.Text.ToString() ?? "";
+            Configurations.SaveConfiguration(config);
+        };
+        Add(usernameLabel, usernameText, passwordLabel, passwordText);
+
         var gamePathLabel = new Label() {
             Text = GamePathLabelText(config),
-            X = 1
+            X = 1, Y = 4
         };
         Add(gamePathLabel);
 
