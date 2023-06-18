@@ -147,7 +147,7 @@ public class DownloadsWindow : Window {
         File.Delete(info.Path);
         File.Delete(InstallingInformationLocation);
         var config = Configurations.GetConfiguration();
-        config.GamePath = Path.Combine(extractPath, "FortniteGame/Binaries/Win64");
+        config.GamePath = Path.Combine(extractPath, $"FortniteGame/Binaries/Win64/{Utils.ShippingExecutableName}");
         Configurations.SaveConfiguration(config);
         progressCallback?.Invoke(p, fileCount, 0, true);
     }

@@ -65,11 +65,12 @@ public class SettingsWindow : Window {
                     return;
                 }
                 // This window closes wtf
+                var config = Configurations.GetConfiguration();
                 config.GamePath = openFile.lpstrFile;
                 Configurations.SaveConfiguration(config);
                 gamePathLabel.Text = GamePathLabelText(config);
                 selectGamePathButton.Y = gamePathLabel.Y + gamePathLabel.Text.Split("\n").Length + 1;
-            } else Utils.MessageBox("Canceled");
+            } // else Utils.MessageBox("Canceled");
         };
         Add(selectGamePathButton);
     }
