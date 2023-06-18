@@ -10,7 +10,7 @@ namespace Prive.Server.Http;
 public static class Global {
     public const string DateTimeFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
 
-    public static readonly string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/CloudStorage");
+    public static readonly string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/CloudStorage/");
     public static readonly string KeyChainLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/keychain.json");
     public static readonly string BulkStatusLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/bulkstatus.json");
     public static readonly string ItemShopLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/itemshop.json");
@@ -27,6 +27,7 @@ public static class Global {
     public static int Port { get; set; } = 20000;
 
     static Global() {
+        if (!Directory.Exists(CloudStorageLocation)) Directory.CreateDirectory(CloudStorageLocation);
         RefreshKeyChain();
         RefreshBulkStatus();
         RefreshItemShop();
@@ -40,19 +41,19 @@ public static class Global {
     }
 
     public static void RefreshKeyChain() {
-        if (Path.GetDirectoryName(CloudStorageLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        if (Path.GetDirectoryName(KeyChainLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
         if (!File.Exists(KeyChainLocation)) File.WriteAllText(KeyChainLocation, "[]");
         KeyChain = JsonSerializer.Deserialize<string[]>(File.ReadAllText(KeyChainLocation)) ?? new string[0];
     }
 
     public static void RefreshBulkStatus() {
-        if (Path.GetDirectoryName(CloudStorageLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        if (Path.GetDirectoryName(BulkStatusLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
         if (!File.Exists(BulkStatusLocation)) File.WriteAllText(BulkStatusLocation, "[]");
         BulkStatus = JsonSerializer.Deserialize<object[]>(File.ReadAllText(BulkStatusLocation)) ?? new object[0];
     }
 
     public static void RefreshItemShop() {
-        if (Path.GetDirectoryName(CloudStorageLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        if (Path.GetDirectoryName(ItemShopLocation) is string dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
         if (!File.Exists(ItemShopLocation)) File.WriteAllText(ItemShopLocation, "{}");
         ItemShop = JsonSerializer.Deserialize<object>(File.ReadAllText(ItemShopLocation)) ?? new();
     }
@@ -77,6 +78,14 @@ public static class Global {
                 }
             });
         }
+        p.Stats.Attributes.Add("favorite_backpack", profile.BackpackId);
+        p.Stats.Attributes.Add("favorite_character", profile.CharacterId);
+        p.Stats.Attributes.Add("favorite_pickaxe", profile.PickaxeId);
+        p.Stats.Attributes.Add("favorite_dance", profile.Dances);
+        p.Stats.Attributes.Add("favorite_itemwraps", profile.ItemWraps);
+        p.Stats.Attributes.Add("favorite_loadingscreen", profile.LoadingScreenId);
+        p.Stats.Attributes.Add("favorite_skydivecontrail", profile.SkyDiveContrailId);
+        p.Stats.Attributes.Add("favorite_musicpack", profile.MusicPackId);
         return new() {
             Profile = p
         };

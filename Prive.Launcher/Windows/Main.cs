@@ -57,10 +57,7 @@ public class MainWindow : Window {
                 return;
             }
             
-            Instance = new(config.GamePath) {
-                Username = config.Username,
-                Password = config.Password
-            };
+            Instance = new(config.GamePath, config.Username, config.Password);
             Instance.Launch();
 
             LaunchButton.Text = "Running...";

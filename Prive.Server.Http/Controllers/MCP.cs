@@ -8,11 +8,11 @@ namespace Prive.Server.Http.Controllers;
 [Route("fortnite")]
 public class MCPController : ControllerBase {
     public static object CreateResponse(object changes, string profileId, int rvn = 0) => new {
-        profileRevision = rvn == 0 ? 1 : rvn + 1,
+        profileRevision = rvn,
         profileId = profileId,
-        profileChangesBaseRevision = rvn == 0 ? 1 : rvn,
+        profileChangesBaseRevision = rvn,
         profileChanges = changes,
-        profileCommandRevision = rvn == 0 ? 1 : rvn + 1,
+        profileCommandRevision = rvn,
         serverTime = DateTimeOffset.UtcNow.ToString(DateTimeFormat),
         responseVersion = 1
     };
@@ -21,7 +21,7 @@ public class MCPController : ControllerBase {
     public async Task<object> QueryProfile() {
         var accountId = (string)Request.RouteValues["accountId"]!;
         var profileId = Request.Query["profileId"].First()!;
-        var rvn = int.Parse(Request.Query["rvn"].First() ?? "0");
+        var rvn = int.Parse(Request.Query["rvn"].First() ?? "0") + 1;
         if (HttpContext.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
             return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
         }
@@ -34,12 +34,14 @@ public class MCPController : ControllerBase {
                     await DB.AthenaProfiles.InsertOneAsync(athenaProfile);
                 }
                 var athenaChange = CreateProfileChange(athenaProfile);
-                athenaChange.Profile.Revision = rvn == 0 ? 1 : rvn + 1;
+                athenaChange.Profile.Revision = rvn;
+                athenaChange.Profile.CommandRevision = rvn;
                 return CreateResponse(new[] { athenaChange }, profileId, rvn);
             case "profile0":
                 var profile0Profile = await DB.GetAthenaProfile(accountId);
                 var profile0Change = CreateProfileChange(profile0Profile);
-                profile0Change.Profile.Revision = rvn == 0 ? 1 : rvn + 1;
+                profile0Change.Profile.Revision = rvn;
+                profile0Change.Profile.CommandRevision = rvn;
                 return CreateResponse(new[] { profile0Change }, profileId, rvn);
             case "common_core":
                 var commonCoreProfile = await DB.GetCommonCoreProfile(accountId);
@@ -48,7 +50,8 @@ public class MCPController : ControllerBase {
                     await DB.CommonCoreProfiles.InsertOneAsync(commonCoreProfile);
                 }
                 var commonCoreChange = CreateProfileChange(commonCoreProfile);
-                commonCoreChange.Profile.Revision = rvn == 0 ? 1 : rvn + 1;
+                commonCoreChange.Profile.Revision = rvn;
+                commonCoreChange.Profile.CommandRevision = rvn;
                 return CreateResponse(new[] { commonCoreChange }, profileId, rvn);
             case "creative":
             case "common_public":
@@ -274,7 +277,7 @@ public class MCPController : ControllerBase {
                     name = $"favorite_{equipBattleRoyaleCustomizationRequest.SlotName}",
                     value = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}s")!.GetValue(profile)
                 }
-            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0") + 1);
         } else {
             return CreateResponse(new object[] {
                 new {
@@ -289,7 +292,7 @@ public class MCPController : ControllerBase {
                 //     attributeName = "variants",
                 //     attributeValue = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}Variants")!.GetValue(profile)
                 // }
-            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0") + 1);
         }
     }
 }

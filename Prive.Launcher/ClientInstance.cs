@@ -13,14 +13,15 @@ public class ClientInstance {
 
     // What to pass
     private string Arguments = "-epicapp=Fortnite -epicenv=Prod -EpicPortal -noeac -nobe -fromfl=eac -fltoken=h1cdhchd10150221h130eB56";
-
-    public string? Username { get; init; }
-    public string? Password { get; init; }
     
     public ClientInstance(string shippingPath) {
         ShippingPath = shippingPath;
-        if (!string.IsNullOrWhiteSpace(Username) || !string.IsNullOrWhiteSpace(Password)) {
-            Arguments += $" -AUTH_LOGIN={Username} -AUTH_PASSWORD={Password} -AUTH_TYPE=epic";
+    }
+
+    public ClientInstance(string shippingPath, string? username = null, string? password = null) {
+        ShippingPath = shippingPath;
+        if (!string.IsNullOrWhiteSpace(username) || !string.IsNullOrWhiteSpace(password)) {
+            Arguments += $" -AUTH_LOGIN={username} -AUTH_PASSWORD={password} -AUTH_TYPE=epic";
         }
     }
 
