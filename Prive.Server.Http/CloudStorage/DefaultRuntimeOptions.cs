@@ -13,8 +13,8 @@ public class DefaultRuntimeOptions : CloudStorageFile {
                 new IniElementKeyValue("bEnableEULA", "false"),
                 new IniElementKeyValue("bEnableHiddenMatchmakingDelay", "false"),
                 new IniElementKeyValue("bShouldSkipAvailabilityCheck", "true"), // false
-                new IniElementKeyValue("bEnableClientSettingsSaveToDisk", "true"),
-                new IniElementKeyValue("bEnableClientSettingsSaveToCloud", "false"),
+                // new IniElementKeyValue("bEnableClientSettingsSaveToDisk", "true"),
+                // new IniElementKeyValue("bEnableClientSettingsSaveToCloud", "false"),
                 
                 new IniElementKeyValue("bEnableSidekick", "false"),
                 new IniElementKeyValue("bEnableSidekickFOMO", "false"),

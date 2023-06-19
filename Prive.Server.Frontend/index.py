@@ -13,7 +13,8 @@ oauth2 = Oauth2(
     server,
     client_id = 1120267062200258590,
     client_secret = "0RjTRk-1yHGufRYFGWe5FujtXZ_88tOa",
-    redirect_uri="http://127.0.0.1:8010/callback",
+    redirect_uri="https://fortnite.day/callback",
+    # redirect_uri="http://127.0.0.1:8010/callback",
 )
 
 LAUNCHER_URL = "https://nightly.link/FortniteJP/Prive/workflows/Prive.Launcher/main/Prive.Launcher.zip?h=6080f158f6a0765a5f4f2619c808f5fddfc58ee8"
