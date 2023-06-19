@@ -85,5 +85,6 @@
         "valarray": "cpp"
     },
     "C_Cpp.default.compilerPath": "cl.exe",
-    "dotnet.defaultSolution": "Prive.sln"
+    "dotnet.defaultSolution": "Prive.sln",
+    "python.analysis.typeCheckingMode": "off"
 }

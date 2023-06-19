@@ -63,15 +63,29 @@ public class ServerApiController : ControllerBase {
         var d = JsonSerializer.Deserialize<Dictionary<string, string>>(body) ?? throw new Exception("Failed to deserialize body");
         var username = d["username"];
         var password = d["password"];
+        var discord = d["discord"];
         if ((await DB.GetUser($"{username}@fortnite.day", "Email")) is not null) return Conflict();
         var user = new User() {
             Email = $"{username}@fortnite.day",
             Password = password,
             DisplayName = username,
             AccountId = Guid.NewGuid().ToString().Replace("-", ""),
+            DiscordAccountId = discord
         };
         await DB.Users.InsertOneAsync(user);
         return NoContent();
+    }
+
+    [HttpGet("discord/{discordAccountId}")] [NoAuth]
+    public async Task<IActionResult> DiscordAccountId() {
+        var discordAccountId = RouteData.Values["discordAccountId"] as string ?? throw new Exception("Failed to get discordAccountId");
+        Response.ContentType = "application/json";
+        try {
+            var user = await DB.Users.Find(Builders<User>.Filter.Eq("DiscordAccountId", discordAccountId)).FirstOrDefaultAsync();
+            if (user is null) return NotFound();
+            else return Ok(user);
+        } catch {}
+        return NotFound();
     }
 
     [HttpPost("setport")] [NoAuth]
