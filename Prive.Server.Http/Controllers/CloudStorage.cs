@@ -83,7 +83,7 @@ public class CloudStorageController : ControllerBase {
             );
         }
         var filename = Request.RouteValues["filename"] as string;
-        var filepath = Path.Combine(CloudStorageLocation, $"{accountId}_{filename ?? ""}");
+        var filepath = Path.Combine(CloudStorageLocation, $"{accountId}_{filename?.ToLower() ?? ""}");
         if (!System.IO.File.Exists(filepath)) {
             Response.StatusCode = 404;
             return EpicError.Create(
@@ -119,10 +119,11 @@ public class CloudStorageController : ControllerBase {
     }
 
     public object GetCloudStorageFiles(string accountId) {
-        var files = Directory.GetFiles(CloudStorageLocation).Where(x => x.StartsWith(accountId + "_"));
+        var prefix = $"{accountId}_";
+        var files = Directory.GetFiles(CloudStorageLocation).Where(x => Path.GetFileName(x).StartsWith(prefix));
         return files.Select(x => new {
-            uniqueFilename = Path.GetFileName(x),
-            filename = Path.GetFileName(x),
+            uniqueFilename = Path.GetFileName(x).Replace(prefix, ""),
+            filename = Path.GetFileName(x).Replace(prefix, ""),
             hash = ComputeSHA1(x),
             hash256 = ComputeSHA256(x),
             length = new FileInfo(x).Length,
