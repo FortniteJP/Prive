@@ -119,10 +119,11 @@ public class CloudStorageController : ControllerBase {
     }
 
     public object GetCloudStorageFiles(string accountId) {
-        var files = Directory.GetFiles(CloudStorageLocation).Where(x => Path.GetFileName(x).StartsWith(accountId + "_"));
+        var prefix = $"{accountId}_";
+        var files = Directory.GetFiles(CloudStorageLocation).Where(x => Path.GetFileName(x).StartsWith(prefix));
         return files.Select(x => new {
-            uniqueFilename = Path.GetFileName(x),
-            filename = Path.GetFileName(x),
+            uniqueFilename = Path.GetFileName(x).Replace(prefix, ""),
+            filename = Path.GetFileName(x).Replace(prefix, ""),
             hash = ComputeSHA1(x),
             hash256 = ComputeSHA256(x),
             length = new FileInfo(x).Length,
@@ -138,7 +139,7 @@ public class CloudStorageController : ControllerBase {
     }
 
     public string ComputeSHA256(string filePath) {
-        return Convert.ToHexString(System.IO.File.ReadAllBytes(filePath));
+        return Convert.ToHexString(SHA256.HashData(System.IO.File.ReadAllBytes(filePath)));
     }
 }
 
