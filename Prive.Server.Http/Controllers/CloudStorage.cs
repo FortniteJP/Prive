@@ -83,7 +83,7 @@ public class CloudStorageController : ControllerBase {
             );
         }
         var filename = Request.RouteValues["filename"] as string;
-        var filepath = Path.Combine(CloudStorageLocation, $"{accountId}_{filename ?? ""}");
+        var filepath = Path.Combine(CloudStorageLocation, $"{accountId}_{filename.ToLower() ?? ""}");
         if (!System.IO.File.Exists(filepath)) {
             Response.StatusCode = 404;
             return EpicError.Create(
