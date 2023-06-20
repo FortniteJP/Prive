@@ -34,10 +34,7 @@ public static class Global {
     }
 
     public static string GenerateToken() {
-        var bytes = new byte[32];
-        using var rng = RandomNumberGenerator.Create();
-        rng.GetBytes(bytes);
-        return Convert.ToBase64String(bytes);
+        return Guid.NewGuid().ToString().Replace("-", "");
     }
 
     public static void RefreshKeyChain() {

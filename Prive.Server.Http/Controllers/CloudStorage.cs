@@ -7,17 +7,38 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("fortnite")]
 public class CloudStorageController : ControllerBase {
-    public static List<CloudStorageFile> CloudStorageFiles = typeof(CloudStorageFile).Assembly.GetTypes().Where(x => x.IsSubclassOf(typeof(CloudStorageFile))).Select(x => (CloudStorageFile)Activator.CreateInstance(x)!).ToList();
+    public static List<CloudStorageFile> CloudStorageFiles = typeof(CloudStorageFile).Assembly.GetTypes().Where(x => x.IsSubclassOf(typeof(CloudStorageFile)) && x.Name.StartsWith("Default")).Select(x => (CloudStorageFile)Activator.CreateInstance(x)!).ToList();
     
     #if DEBUG
     [NoAuth]
     #endif
     [HttpGet("api/cloudstorage/system")]
     public object[] CloudStorageSystem() {
+        // NoAuthAttribute doesn't store the token to context
+        var token = Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").LastOrDefault();
+        // if (AuthTokens.FirstOrDefault(x => x.TokenString == token) is var authToken && authToken is not null) Console.WriteLine($"\nGET FROM {System.Text.Json.JsonSerializer.Serialize(authToken)}\n");
+        // else if (ClientTokens.FirstOrDefault(x => x.TokenString == token) is var clientToken && clientToken is not null) Console.WriteLine($"\nGET FROM {System.Text.Json.JsonSerializer.Serialize(clientToken)}\n");
+        // else Console.WriteLine($"\nGET FROM UNKNOWN {System.Text.Json.JsonSerializer.Serialize(HttpContext.Items)}\n");
+        var authToken = AuthTokens.FirstOrDefault(x => x.TokenString == token);
+        // Console.WriteLine($"AuthToken is {authToken?.AccountId ?? "null"}");
         var result = new List<object>();
 
         foreach (var file in CloudStorageFiles) {
-            result.Add(new {
+            if (file is DefaultGame && authToken is not null && (authToken.AccountId == "42fc8fa6481f4cb4b75f97a514540304" || authToken.AccountId == "454404e79a6b4038a8f04485b41795eb")) {
+                // Console.WriteLine("\nGET FROM MODIFIED DEFAULT GAME\n");
+                var newFile = new ModifiedDefaultGame();
+                result.Add(new {
+                    uniqueFilename = newFile.Filename,
+                    filename = newFile.Filename,
+                    hash = newFile.ComputeSHA1(),
+                    hash256 = newFile.ComputeSHA256(),
+                    length = newFile.Length,
+                    contentType = "application/octet-stream",
+                    uploaded = newFile.LastModified,
+                    storageType = "S3",
+                    doNotCache = false
+                });
+            } else result.Add(new {
                 uniqueFilename = file.Filename,
                 filename = file.Filename,
                 hash = file.ComputeSHA1(),
@@ -29,6 +50,7 @@ public class CloudStorageController : ControllerBase {
                 doNotCache = false
             });
         }
+        // Console.WriteLine($"Result is {System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}");
         return result.ToArray();
     }
 
@@ -47,6 +69,13 @@ public class CloudStorageController : ControllerBase {
                 $"Sorry, we couldn't find a system file for {filename}",
                 "fortnite", "prod-live", new[] { filename ?? "" }
             );
+        }
+        var token = Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").LastOrDefault();
+        var authToken = AuthTokens.FirstOrDefault(x => x.TokenString == token);
+        // Console.WriteLine($"AuthToken is {authToken?.AccountId ?? "null"}");
+        if (filename == "DefaultGame.ini" && authToken is not null && (authToken.AccountId == "42fc8fa6481f4cb4b75f97a514540304" || authToken.AccountId == "454404e79a6b4038a8f04485b41795eb")) {
+            var newFile = new ModifiedDefaultGame();
+            return File(newFile.Data, "application/octet-stream", filename);
         }
         return File(CloudStorageFiles.First(x => x.Filename == filename).Data, "application/octet-stream", filename);
     }

@@ -42,10 +42,10 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("timetogotrue")] [NoAuth]
     public async Task<IActionResult> TimeToGoTrue() {
-        var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
-        foreach (var user in users) {
-            if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string && cid.Split(":") is var splited && splited.Length > 0) await CClient.SendOutfit(user.DisplayName, splited[1]);
-        }
+        // var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
+        // foreach (var user in users) {
+        //     if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string && cid.Split(":") is var splited && splited.Length > 0) await CClient.SendOutfit(user.DisplayName, splited[1]);
+        // }
         MatchMakingController.TimeToGo = true;
         return NoContent();
     }
