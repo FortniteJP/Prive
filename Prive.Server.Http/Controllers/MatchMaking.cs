@@ -36,9 +36,9 @@ public class MatchMakingController : ControllerBase {
                 name = "StatusUpdate"
             }));
             await Task.Delay(500);
-            var u = GenerateToken();
+            // var u = GenerateToken();
             while (!TimeToGo) {
-                Console.WriteLine($"{u}, {client.State.ToString()}, {Connections}");
+                // Console.WriteLine($"{u}, {client.State.ToString()}, {Connections}");
                 // if (client.State != System.Net.WebSockets.WebSocketState.Open) {
                 await client.SendAsync(JsonSerializer.Serialize(new {
                     payload = new {

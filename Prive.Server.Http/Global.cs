@@ -171,7 +171,7 @@ public static class DB {
 
     public static async Task<User> GetUser(string input, string? type = null) {
         if (type is null) type = (input.Length == 32 ? "AccountId" : EmailPattern.IsMatch(input) ? "Email" : "DisplayName");
-        return await Users.Find(Builders<User>.Filter.Eq(type, input.ToLowerInvariant())).FirstOrDefaultAsync();
+        return await Users.Find(Builders<User>.Filter.Eq(type, input.ToLowerInvariant()), new() { Collation = new("en", strength: CollationStrength.Primary) }).FirstOrDefaultAsync();
     }
 
     public static async Task<List<User>> GetUsers(string[] input) {

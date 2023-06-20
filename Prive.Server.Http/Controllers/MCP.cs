@@ -150,7 +150,7 @@ public class MCPController : ControllerBase {
                         var x = setCosmeticLockerSlotRequest.ItemToSlot.Split(':');
                         items.Add($"{x[0]}:{x[1].ToLowerInvariant()}");
                     }
-                    await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set(setCosmeticLockerSlotRequest.Category, items));
+                    await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set(setCosmeticLockerSlotRequest.Category + "s", items));
                 } else {
                     await DB.AthenaProfiles.UpdateOneAsync(filter, Builders<AthenaProfile>.Update.Set($"{setCosmeticLockerSlotRequest.Category}s.$[{setCosmeticLockerSlotRequest.SlotIndex}]", setCosmeticLockerSlotRequest.ItemToSlot));
                 }
@@ -259,7 +259,7 @@ public class MCPController : ControllerBase {
                     var max = equipBattleRoyaleCustomizationRequest.SlotName == "Dance" ? 6 : 7;
                     var r = new List<string>();
                     for (var i = 0; i < max; i++) r.Add(equipBattleRoyaleCustomizationRequest.ItemToSlot);
-                    await DB.AthenaProfiles.UpdateOneAsync(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId), Builders<AthenaProfile>.Update.Set(equipBattleRoyaleCustomizationRequest.SlotName, r));
+                    await DB.AthenaProfiles.UpdateOneAsync(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId), Builders<AthenaProfile>.Update.Set(equipBattleRoyaleCustomizationRequest.SlotName + "s", r));
                 } else {
                     await DB.AthenaProfiles.UpdateOneAsync(Builders<AthenaProfile>.Filter.Eq("AccountId", accountId), Builders<AthenaProfile>.Update.Set($"{equipBattleRoyaleCustomizationRequest.SlotName}s.{equipBattleRoyaleCustomizationRequest.IndexWithinSlot}", equipBattleRoyaleCustomizationRequest.ItemToSlot));
                 }
