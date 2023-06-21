@@ -17,6 +17,7 @@ oauth2 = Oauth2(
     # redirect_uri="http://127.0.0.1:8010/callback",
 )
 
+DISCORD_URL = "https://discord.gg/uxRmrFngaa"
 LAUNCHER_URL = "https://nightly.link/FortniteJP/Prive/workflows/Prive.Launcher/main/Prive.Launcher.zip?h=6080f158f6a0765a5f4f2619c808f5fddfc58ee8"
 DISPLAYNAME_PATTERN = re.compile(r"^[a-zA-Z0-9]{3,16}$")
 
@@ -32,6 +33,10 @@ def after_server_stop(server, loop):
 @server.get("/")
 async def Rindex(request: sanic.Request):
     return await sanic.response.file("./index.html")
+
+@server.get("/discord")
+async def Rdiscord(request: sanic.Request):
+    return sanic.response.redirect(DISCORD_URL)
 
 @server.get("/launcher")
 async def Rlauncher(request: sanic.Request):

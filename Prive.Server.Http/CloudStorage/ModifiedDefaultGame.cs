@@ -21,6 +21,17 @@ public class ModifiedDefaultGame : CloudStorageFile {
                 },
                 new IniTextReplacements() {
                     TextReplacement = new() {
+                        Namespace = "Fortnite.FortMatchmakingV2",
+                        Key = "MMSCommunicationIssue",
+                        NativeString = "Issue communicating with Matchmaking Service.",
+                        LocalizedStrings = new() {
+                            ["en"] = "Fortnite.FortMatchmakingV2::MMSCommunicationIssue",
+                            ["ja"] = "既にマッチが始まっています。終わるまでお待ちください。"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
                         Namespace = "",
                         Key = "010435774CF42540ABD5B3B847DBEF5A",
                         NativeString = "New Player Guide",
