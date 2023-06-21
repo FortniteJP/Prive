@@ -26,7 +26,7 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         NativeString = "New Player Guide",
                         LocalizedStrings = new() {
                             ["en"] = "Prive Website",
-                            ["ja"] = "Prive ウェブサイト"
+                            ["ja"] = "Prive 開発者"
                         }
                     }
                 },
@@ -37,7 +37,29 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         NativeString = "New Player Guide",
                         LocalizedStrings = new() {
                             ["en"] = "Prive Website",
-                            ["ja"] = "Prive ウェブサイト"
+                            ["ja"] = "Prive 開発者"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "33A9AC6243F5DA1ABE6F3E8768563105",
+                        NativeString = "Assault Rifle  ",
+                        LocalizedStrings = new() {
+                            ["en"] = "Rifle.",
+                            ["ja"] = "人権アサルトライフル"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "BD28BA574DBCAC8A97550AA3E3F006A4",
+                        NativeString = "Tactical Submachine Gun",
+                        LocalizedStrings = new() {
+                            ["en"] = "Submachine Gun.",
+                            ["ja"] = "人権サブマシンガン"
                         }
                     }
                 }
@@ -84,22 +106,32 @@ public class ModifiedDefaultGame : CloudStorageFile {
             Elements = new() {
                 // new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_R_Ore_T03;FiringRate;1000") { Option = IniElementOption.AddIfMissing },
                 // new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_R_Ore_T03;ReloadTime;0.1") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;ReloadTime;0.1") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;Spread;0.1") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;SpreadDownsights;0.1") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;DmgPB;45.0") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;DmgMid;45.0") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;DmgLong;45.0") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;ClipSize;3000") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T02;FiringRate;7.0") { Option = IniElementOption.AddIfMissing },
                 
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;Spread;0.1") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;SpreadDownsights;0.1") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;ReloadTime;1.5") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;Spread;0.01") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;SpreadDownsights;0.01") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;DmgPB;45.0") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;DmgMid;45.0") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;DmgLong;45.0") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;ClipSize;3000") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;FiringRate;7.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;EnvDmgPB;45.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;EnvDmgMid;45.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;EnvDmgLong;45.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;ClipSize;30") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;FiringRate;6.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Assault_Auto_Athena_C_Ore_T03;AmmoCostPerFire;1") { Option = IniElementOption.AddIfMissing },
+
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;ReloadTime;1.5") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;Spread;0.01") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;SpreadDownsights;0.01") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;DmgPB;22.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;DmgMid;22.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;DmgLong;22.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;EnvDmgPB;30.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;EnvDmgMid;30.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;EnvDmgLong;30.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;ClipSize;35") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;FiringRate;16.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;AmmoCostPerFire;1") { Option = IniElementOption.AddIfMissing },
             }
         },
     };

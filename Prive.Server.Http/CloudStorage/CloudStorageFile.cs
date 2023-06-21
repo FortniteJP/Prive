@@ -6,7 +6,7 @@ namespace Prive.Server.Http.CloudStorage;
 public abstract class CloudStorageFile {
     public abstract string Filename { get; }
     public virtual byte[] Data { get {
-        if (_Data is null) _Data = Encoding.UTF8.GetBytes(string.Join("\n\n", Elements.Select(x => x.Serialize())));
+        _Data ??= Encoding.UTF8.GetBytes(string.Join("\n\n", Elements.Select(x => x.Serialize())));
         return _Data;
     } }
     private byte[]? _Data = null;
@@ -14,15 +14,9 @@ public abstract class CloudStorageFile {
     public virtual long Length => Data.Length;
     public virtual DateTime LastModified { get; } = DateTime.UtcNow;
 
-    public string ComputeSHA1() {
-        using var sha1 = SHA1.Create();
-        return Convert.ToHexString(sha1.ComputeHash(Data));
-    }
+    public string ComputeSHA1() => Convert.ToHexString(SHA1.HashData(Data));
 
-    public string ComputeSHA256() {
-        using var sha256 = SHA256.Create();
-        return Convert.ToHexString(sha256.ComputeHash(Data));
-    }
+    public string ComputeSHA256() => Convert.ToHexString(SHA256.HashData(Data));
 }
 
 public class IniElementSection {
@@ -106,9 +100,9 @@ public class IniFrontEndPlaylistData : IniElement {
 
     public class IniFrontEndPlaylistDataArguments {
         public required string PlaylistName { get; init; }
-        public PlaylistAccessArguments PlaylistAccess { get; init; } = new();
+        public IniPlaylistAccessArguments PlaylistAccess { get; init; } = new();
 
-        public class PlaylistAccessArguments {
+        public class IniPlaylistAccessArguments {
             public bool bEnabled { get; init; } = true;
             public bool bIsDefaultPlaylist { get; init; } = false;
             public bool bVisibleWhenDisabled { get; init; } = false;
@@ -138,14 +132,14 @@ public class IniRegionDefinitions : IniElement {
 }
 
 public class IniDisabledFrontendNavigationTabs : IniElement {
-    public required DisabledFrontendNavigationTabArguments DisabledFrontendNavigationTab { get; init; }
+    public required IniDisabledFrontendNavigationTabArguments DisabledFrontendNavigationTab { get; init; }
     protected override string SerializeProperty() => $"DisabledFrontendNavigationTabs=(TabName=\"{DisabledFrontendNavigationTab.TabName}\", TabState={DisabledFrontendNavigationTab.TabState})";
 
     public IniDisabledFrontendNavigationTabs() {
         Option = IniElementOption.AddIfMissing;
     }
 
-    public class DisabledFrontendNavigationTabArguments {
+    public class IniDisabledFrontendNavigationTabArguments {
         public required string TabName { get; init; }
         public string TabState { get; init; } = "EFortRuntimeOptionTabState::Hidden";
     }
