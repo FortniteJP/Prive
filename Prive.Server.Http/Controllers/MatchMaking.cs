@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Net.WebSockets;
 using System.Text.Json;
 
 namespace Prive.Server.Http.Controllers;
@@ -6,7 +7,7 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("")]
 public class MatchMakingController : ControllerBase {
-    private static int Connections = 0;
+    private static List<WebSocket> Connections = new();
     private object ConnectionsLock = new();
     public static bool TimeToGo = false;
 
@@ -17,9 +18,9 @@ public class MatchMakingController : ControllerBase {
             return null;
         }
         using var client = await HttpContext.WebSockets.AcceptWebSocketAsync();
-        lock (ConnectionsLock) Connections++;
 
         try {
+            lock (ConnectionsLock) Connections.Add(client);
             await client.SendAsync(JsonSerializer.Serialize(new {
                 payload = new {
                     state = "Connecting"
@@ -44,7 +45,7 @@ public class MatchMakingController : ControllerBase {
                     payload = new {
                         state = "Queued",
                         ticketId = "TEST_TICKET_ID",
-                        queuedPlayers = Connections,
+                        queuedPlayers = Connections.Count,
                         estimatedWaitSec = 0,
                         status = new {}
                     },
@@ -72,10 +73,10 @@ public class MatchMakingController : ControllerBase {
                 name = "Play"
             }));
             await Task.Delay(500);
-            lock (ConnectionsLock) Connections--;
         } catch (Exception e) {
             Console.WriteLine(e);
-            lock (ConnectionsLock) Connections--;
+        } finally {
+            lock (ConnectionsLock) Connections.Remove(client);
         }
         return null;
     }
