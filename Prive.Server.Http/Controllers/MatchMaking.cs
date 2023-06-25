@@ -104,13 +104,19 @@ public class MatchMakingController : ControllerBase {
         if (DateTime.Now - LastMatchTime < TimeSpan.FromMinutes(20)) return;
         Program.Instance?.Kill();
         Program.Instance = new ServerInstance(ServerApiController.ShippingLocation);
+        Console.WriteLine("Launching server...");
         Program.Instance.Launch();
+        Console.WriteLine("Injecting dll...");
         Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation);
+        Console.WriteLine("Waiting for log...");
         await Program.Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), ServerApiController.ServerNativeDllLocation);
+        Console.WriteLine("Waiting for server to be ready...");
         await Task.Delay(60 * 1000);
         LastMatchTime = DateTime.Now;
+        Console.WriteLine("Starting match...");
         TimeToGo = true;
         await Task.Delay(60 * 1000);
+        Console.WriteLine("Resetting...");
         TimeToGo = false;
     }
 

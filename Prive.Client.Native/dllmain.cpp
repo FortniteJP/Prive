@@ -7,7 +7,7 @@ CommunicateServer server;
 bool RunServer = false;
 
 void Main() {
-    if (!true) {
+    if (true) {
         AllocConsole();
         FILE* pFile;
         freopen_s(&pFile, "CONOUT$", "w", stdout);
