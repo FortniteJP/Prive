@@ -110,6 +110,8 @@ public class MatchMakingController : ControllerBase {
         await Task.Delay(60 * 1000);
         LastMatchTime = DateTime.Now;
         TimeToGo = true;
+        await Task.Delay(60 * 1000);
+        TimeToGo = false;
     }
 
     [HttpGet("fortnite/api/matchmaking/session/{sessionId}")]

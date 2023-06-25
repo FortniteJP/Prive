@@ -44,6 +44,25 @@ public class ClientInstance {
         return true;
     }
 
+    public async Task<bool> WaitForLogAndInjectDll(Func<string, bool> logFunc, string dllPath) {
+        if (ShippingProcess?.HasExited ?? true) return false;
+        ShippingProcess.WaitForInputIdle();
+        using var reader = new StreamReader(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame/Saved/Logs/FortniteGame.log"), new FileStreamOptions {
+            Access = FileAccess.Read,
+            Mode = FileMode.Open,
+            Share = FileShare.ReadWrite
+        });
+        while (!ShippingProcess.HasExited) {
+            var line = await reader.ReadLineAsync();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (logFunc(line)) break;
+            await Task.Delay(1);
+        }
+        Console.WriteLine("WaitForLogAndInjectDll done");
+        Utils.InjectDll(ShippingProcess, dllPath);
+        return true;
+    }
+
     public void Kill() {
         ShippingProcess?.Kill();
         LauncherProcess?.Kill();
