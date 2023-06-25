@@ -10,6 +10,8 @@ public class MatchMakingController : ControllerBase {
     private static List<WebSocket> Connections = new();
     private object ConnectionsLock = new();
     public static bool TimeToGo = false;
+    public static bool AutoMatchMaking = true;
+    public static DateTime LastMatchTime = DateTime.Now;
 
     [Route("matchmaking")] [NoAuth]
     public async Task<object?> MatchMaking() {
@@ -38,7 +40,20 @@ public class MatchMakingController : ControllerBase {
             }));
             await Task.Delay(500);
             // var u = GenerateToken();
+            #if DEBUG
+            await client.SendAsync(JsonSerializer.Serialize(new {
+                    payload = new {
+                        state = "Queued",
+                        ticketId = "TEST_TICKET_ID",
+                        queuedPlayers = Connections.Count,
+                        estimatedWaitSec = 0,
+                        status = new {}
+                    },
+                    name = "StatusUpdate"
+                }));
+            #else
             while (!TimeToGo) {
+                OnNewConnection();
                 // Console.WriteLine($"{u}, {client.State.ToString()}, {Connections}");
                 // if (client.State != System.Net.WebSockets.WebSocketState.Open) {
                 await client.SendAsync(JsonSerializer.Serialize(new {
@@ -56,6 +71,7 @@ public class MatchMakingController : ControllerBase {
                 }
                 await Task.Delay(5000);
             }
+            #endif
             await client.SendAsync(JsonSerializer.Serialize(new {
                 payload = new {
                     state = "SessionAssignment",
@@ -79,6 +95,21 @@ public class MatchMakingController : ControllerBase {
             lock (ConnectionsLock) Connections.Remove(client);
         }
         return null;
+    }
+
+    public async void OnNewConnection() {
+        if (!AutoMatchMaking) return;
+        if (Connections.Count < 9) return;
+        // prevent if match is started in 20 minutes
+        if (DateTime.Now - LastMatchTime < TimeSpan.FromMinutes(20)) return;
+        Program.Instance?.Kill();
+        Program.Instance = new ServerInstance(ServerApiController.ShippingLocation);
+        Program.Instance.Launch();
+        Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation);
+        await Program.Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), ServerApiController.ServerNativeDllLocation);
+        await Task.Delay(60 * 1000);
+        LastMatchTime = DateTime.Now;
+        TimeToGo = true;
     }
 
     [HttpGet("fortnite/api/matchmaking/session/{sessionId}")]

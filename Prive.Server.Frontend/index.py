@@ -42,9 +42,9 @@ async def Rdiscord(request: sanic.Request):
 async def Rlauncher(request: sanic.Request):
     return sanic.response.redirect(LAUNCHER_URL)
 
-@server.get("/launcher.html")
-async def Rlauncher_html(request: sanic.Request):
-    return sanic.response.redirect(LAUNCHER_URL)
+@server.get("/console")
+async def Rconsole(request: sanic.Request):
+    return await sanic.response.file("./FortniteConsole.dll")
 
 @server.get("/callback")
 @exchange_code(state = "")
