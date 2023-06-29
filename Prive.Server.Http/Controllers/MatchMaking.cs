@@ -52,8 +52,8 @@ public class MatchMakingController : ControllerBase {
                     name = "StatusUpdate"
                 }));
             #else
+            OnNewConnection();
             while (!TimeToGo) {
-                OnNewConnection();
                 // Console.WriteLine($"{u}, {client.State.ToString()}, {Connections}");
                 // if (client.State != System.Net.WebSockets.WebSocketState.Open) {
                 await client.SendAsync(JsonSerializer.Serialize(new {
@@ -118,6 +118,9 @@ public class MatchMakingController : ControllerBase {
         await Task.Delay(60 * 1000);
         Console.WriteLine("Resetting...");
         TimeToGo = false;
+        Console.WriteLine("Starting bus...");
+        await ServerApiController.CClient.StartBus();
+        Console.WriteLine("Done");
     }
 
     [HttpGet("fortnite/api/matchmaking/session/{sessionId}")]
