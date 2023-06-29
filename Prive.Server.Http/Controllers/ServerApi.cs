@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
+using System.Net;
 using System.Text.Json;
 
 namespace Prive.Server.Http.Controllers;
@@ -15,11 +16,12 @@ public class ServerApiController : ControllerBase {
     public static ServerInstance? Instance { get => Program.Instance; set => Program.Instance = value; }
     public static CommunicateClient CClient { get => Program.CClient; }
 
-    public bool IsPrivateNetwork() => HttpContext.Connection.RemoteIpAddress?.ToString().StartsWith("192.168.") ?? false;
+    public string IP = Dns.GetHostEntry("xthe.org").AddressList.First().ToString();
+    public bool IsFromAuthorized() => !Request.Headers.ContainsKey("X-Forwarded-For") || Request.Headers["X-Forwarded-For"].Select(x => x?.Split(", ")).Any(x => x?.Any(x => x == IP) ?? false);
     
     [HttpPost("start")] [NoAuth]
     public IActionResult Start() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("Start posted");
         Instance?.Kill();
         Instance = new ServerInstance(ShippingLocation);
@@ -32,7 +34,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("stop")] [NoAuth]
     public IActionResult Stop() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("Stop posted");
         Program.Instance?.Kill();
         return NoContent();
@@ -40,7 +42,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("shutdown")] [NoAuth]
     public IActionResult Shutdown() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("Shutdown posted");
         CClient.Shutdown();
         return NoContent();
@@ -48,7 +50,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("timetogotrue")] [NoAuth]
     public async Task<IActionResult> TimeToGoTrue() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
         foreach (var user in users) {
             if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
@@ -64,14 +66,14 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("timetogofalse")] [NoAuth]
     public IActionResult TimeToGoFalse() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         MatchMakingController.TimeToGo = false;
         return NoContent();
     }
 
     [HttpPost("createuser")] [NoAuth]
     public async Task<IActionResult> CreateUser() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         using var reader = new StreamReader(Request.Body);
         var body = await reader.ReadToEndAsync();
         var d = JsonSerializer.Deserialize<Dictionary<string, string>>(body) ?? throw new Exception("Failed to deserialize body");
@@ -92,7 +94,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpGet("discord/{discordAccountId}")] [NoAuth]
     public async Task<IActionResult> DiscordAccountId() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         var discordAccountId = RouteData.Values["discordAccountId"] as string ?? throw new Exception("Failed to get discordAccountId");
         Response.ContentType = "application/json";
         try {
@@ -105,7 +107,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("setport")] [NoAuth]
     public async Task<IActionResult> SetPort() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         using var reader = new StreamReader(Request.Body);
         var body = await reader.ReadToEndAsync();
         var d = JsonSerializer.Deserialize<Dictionary<string, int>>(body) ?? throw new Exception("Failed to deserialize body");
@@ -118,7 +120,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("restart")] [NoAuth]
     public IActionResult Restart() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("Restart posted");
         CClient.Send("restart;");
         return NoContent();
@@ -126,7 +128,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("startbus")] [NoAuth]
     public IActionResult StartBus() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StartBus posted");
         CClient.StartBus();
         return NoContent();
@@ -134,7 +136,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("infiniteammotrue")] [NoAuth]
     public IActionResult InfiniteAmmoTrue() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteAmmoTrue posted");
         CClient.Send("infiniteammo;true");
         return NoContent();
@@ -142,7 +144,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("infiniteammofalse")] [NoAuth]
     public IActionResult InfiniteAmmoFalse() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteAmmoFalse posted");
         CClient.Send("infiniteammo;false");
         return NoContent();
@@ -150,7 +152,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("infinitematerialstrue")] [NoAuth]
     public IActionResult InfiniteMaterialsTrue() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteMaterialsTrue posted");
         CClient.Send("infinitematerials;true");
         return NoContent();
@@ -158,7 +160,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("infinitematerialsfalse")] [NoAuth]
     public IActionResult InfiniteMaterialsFalse() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteMaterialsFalse posted");
         CClient.Send("infinitematerials;false");
         return NoContent();
@@ -166,7 +168,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("startsafezone")] [NoAuth]
     public IActionResult StartSafeZone() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StartSafeZone posted");
         CClient.Send("startsafezone;");
         return NoContent();
@@ -174,7 +176,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("stopsafezone")] [NoAuth]
     public IActionResult StopSafeZone() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StopSafeZone posted");
         CClient.Send("stopsafezone;");
         return NoContent();
@@ -182,7 +184,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("skipsafezone")] [NoAuth]
     public IActionResult SkipSafeZone() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("SkipSafeZone posted");
         CClient.Send("skipsafezone;");
         return NoContent();
@@ -190,7 +192,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("startshrinksafezone")] [NoAuth]
     public IActionResult StartShrinkSafeZone() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StartShrinkSafeZone posted");
         CClient.Send("startshrinksafezone;");
         return NoContent();
@@ -198,7 +200,7 @@ public class ServerApiController : ControllerBase {
 
     [HttpPost("skipshrinksafezone")] [NoAuth]
     public IActionResult SkipShrinkSafeZone() {
-        if (!IsPrivateNetwork()) return Unauthorized();
+        if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("SkipShrinkSafeZone posted");
         CClient.Send("skipshrinksafezone;");
         return NoContent();
