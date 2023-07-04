@@ -7,11 +7,14 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("")]
 public class MatchMakingController : ControllerBase {
-    private static List<WebSocket> Connections = new();
-    private object ConnectionsLock = new();
-    public static bool TimeToGo = false;
-    public static bool AutoMatchMaking = true;
-    public static DateTime LastMatchTime = DateTime.Now;
+    private static List<WebSocket> Connections { get; } = new();
+    private object ConnectionsLock { get; } = new();
+    public static bool TimeToGo { get; internal set; } = false;
+    public static bool AutoMatchMaking { get; internal set; } = true;
+    public static DateTime LastMatchTime { get; internal set; } = DateTime.Now;
+    public static DateTime MatchMakingStartTime { get; internal set; } = DateTime.Now;
+    public static bool MatchMakingStarted { get; internal set; } = false;
+    public static bool Starting { get; internal set; } = false;
 
     [Route("matchmaking")] [NoAuth]
     public async Task<object?> MatchMaking() {
@@ -52,8 +55,8 @@ public class MatchMakingController : ControllerBase {
                     name = "StatusUpdate"
                 }));
             #else
-            OnNewConnection();
             while (!TimeToGo) {
+                OnNewConnection();
                 // Console.WriteLine($"{u}, {client.State.ToString()}, {Connections}");
                 // if (client.State != System.Net.WebSockets.WebSocketState.Open) {
                 await client.SendAsync(JsonSerializer.Serialize(new {
@@ -99,9 +102,16 @@ public class MatchMakingController : ControllerBase {
 
     public async void OnNewConnection() {
         if (!AutoMatchMaking) return;
-        if (Connections.Count < 9) return;
+        if (!MatchMakingStarted) {
+            MatchMakingStarted = true;
+            MatchMakingStartTime = DateTime.Now;
+        }
+        // prevent if connections count is less than 10 and MatchMakingStartTime is less than 10 minutes
+        if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)) return;
         // prevent if match is started in 20 minutes
         if (DateTime.Now - LastMatchTime < TimeSpan.FromMinutes(20)) return;
+        if (Starting) return;
+        Starting = true;
         Program.Instance?.Kill();
         Program.Instance = new ServerInstance(ServerApiController.ShippingLocation);
         Console.WriteLine("Launching server...");
@@ -120,6 +130,8 @@ public class MatchMakingController : ControllerBase {
         TimeToGo = false;
         Console.WriteLine("Starting bus...");
         await ServerApiController.CClient.StartBus();
+        MatchMakingStarted = false;
+        Starting = false;
         Console.WriteLine("Done");
     }
 
