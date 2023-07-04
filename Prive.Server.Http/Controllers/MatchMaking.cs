@@ -11,8 +11,8 @@ public class MatchMakingController : ControllerBase {
     private object ConnectionsLock { get; } = new();
     public static bool TimeToGo { get; internal set; } = false;
     public static bool AutoMatchMaking { get; internal set; } = true;
-    public static DateTime LastMatchTime { get; internal set; } = DateTime.Now;
-    public static DateTime MatchMakingStartTime { get; internal set; } = DateTime.Now;
+    public static DateTime LastMatchTime { get; internal set; } = new();
+    public static DateTime MatchMakingStartTime { get; internal set; } = new();
     public static bool MatchMakingStarted { get; internal set; } = false;
     public static bool Starting { get; internal set; } = false;
 
@@ -106,6 +106,9 @@ public class MatchMakingController : ControllerBase {
             MatchMakingStarted = true;
             MatchMakingStartTime = DateTime.Now;
         }
+        Console.WriteLine($"Connections.Count < 10: {Connections.Count < 10}, DateTime.Now - MatchMakingStartTime < TimeSpan.FromSeconds(30)");
+        Console.WriteLine($"{DateTime.Now - MatchMakingStartTime < TimeSpan.FromSeconds(30)} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < 30");
+        
         // prevent if connections count is less than 10 and MatchMakingStartTime is less than 10 minutes
         if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)) return;
         // prevent if match is started in 20 minutes
