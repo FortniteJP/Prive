@@ -51,6 +51,28 @@ public class DefaultGame : CloudStorageFile {
                             ["ja"] = "Prive ウェブサイト"
                         }
                     }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "CF55FCAA45F271CCCC3B1B847B24BDC1",
+                        NativeString = "Automatics",
+                        LocalizedStrings = new() {
+                            ["en"] = "LateGame Solo",
+                            ["ja"] = "レイトゲーム ソロ"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "4A664F244BA0F12E6641C2BF52158907",
+                        NativeString = "The only weapons in the game are the automatic firing ones. Spray and pray!",
+                        LocalizedStrings = new() {
+                            ["en"] = "TEST DESCRIPTION",
+                            ["ja"] = "準備中"
+                        }
+                    }
                 }
             }
         },
@@ -66,7 +88,21 @@ public class DefaultGame : CloudStorageFile {
                         PlaylistName = "Playlist_DefaultSolo",
                         PlaylistAccess = new() { bIsDefaultPlaylist = true }
                     }
-                }
+                },
+                new IniFrontEndPlaylistData() {
+                    Option = IniElementOption.AddIfMissing,
+                    FrontEndPlaylistData = new() {
+                        PlaylistName = "Playlist_Auto_Solo",
+                        PlaylistAccess = new() { bEnabled = true } // needed ?
+                    }
+                },
+                new IniFrontEndPlaylistData() {
+                    Option = IniElementOption.AddIfMissing,
+                    FrontEndPlaylistData = new() {
+                        PlaylistName = "Playlist_Auto_Duo",
+                        PlaylistAccess = new() { bEnabled = false }
+                    }
+                },
             }
         },
         new() {

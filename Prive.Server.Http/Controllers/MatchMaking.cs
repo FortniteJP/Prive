@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Net.WebSockets;
+using System.Text;
 using System.Text.Json;
 
 namespace Prive.Server.Http.Controllers;
@@ -22,6 +23,16 @@ public class MatchMakingController : ControllerBase {
             Response.StatusCode = 400;
             return null;
         }
+
+        // Console.WriteLine(Request.Headers.Authorization.ToString());
+        // Console.WriteLine(Request.Headers.Authorization.ToString().Split(" ")[2]);
+        // Console.WriteLine(Encoding.UTF8.GetString(Convert.FromBase64String(Request.Headers.Authorization.ToString().Split(" ")[2])));
+
+        var obj = JsonSerializer.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(Convert.FromBase64String(Request.Headers.Authorization.ToString().Split(" ")[2]))) ?? throw new Exception("Invalid payload");
+        var bucketId = obj["bucketId"].ToString()!;
+        var playlistId = bucketId.Split(":")[4];
+        Console.WriteLine($"MatchMaking: {playlistId} ({bucketId})");
+        
         using var client = await HttpContext.WebSockets.AcceptWebSocketAsync();
 
         try {

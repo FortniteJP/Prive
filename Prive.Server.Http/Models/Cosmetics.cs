@@ -2,6 +2,7 @@ namespace Prive.Server.Http;
 
 public static class Cosmetics {
     public static List<CosmeticItem> CosmeticItems { get; } = new() {
+        new() { BackendType = "AthenaDance", Id = "EID_Roll" },
         new() { BackendType = "AthenaBackpack", Id = "Backpack_AgentXKoi" },
         new() { BackendType = "AthenaBackpack", Id = "Backpack_AllKnowing" },
         new() { BackendType = "AthenaBackpack", Id = "Backpack_Amour" },

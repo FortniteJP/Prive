@@ -35,6 +35,15 @@ public class FortniteController : ControllerBase {
         hotfixVersion = int.Parse(splitted[1]);
         playlist = splitted[2];
         region = splitted[3];
+        
+        if (playlist.ToLower() != "Playlist_DefaultSolo".ToLower()) {
+            Response.StatusCode = 406;
+            return EpicError.Create(
+                "errors.prive.server.unsupported_playlist", 1,
+                "This playlist is not supported for now.",
+                "Fortnite"
+            );
+        }
 
         Response.Cookies.Append("NetCL", netCL);
 
