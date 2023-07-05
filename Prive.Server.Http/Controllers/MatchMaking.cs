@@ -117,8 +117,8 @@ public class MatchMakingController : ControllerBase {
             MatchMakingStarted = true;
             MatchMakingStartTime = DateTime.Now;
         }
-        Console.WriteLine($"Connections.Count < 10: {Connections.Count < 10}, DateTime.Now - MatchMakingStartTime < TimeSpan.FromSeconds(30)");
-        Console.WriteLine($"{DateTime.Now - MatchMakingStartTime < TimeSpan.FromSeconds(30)} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < 30");
+        Console.WriteLine($"Connections.Count < 10: {Connections.Count < 10}");
+        Console.WriteLine($"2: {DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < {TimeSpan.FromMinutes(10)}");
         
         // prevent if connections count is less than 10 and MatchMakingStartTime is less than 10 minutes
         if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)) return;
@@ -143,7 +143,12 @@ public class MatchMakingController : ControllerBase {
         Console.WriteLine("Resetting...");
         TimeToGo = false;
         Console.WriteLine("Starting bus...");
-        await ServerApiController.CClient.StartBus();
+        try {
+            await ServerApiController.CClient.StartBus();
+        } catch (TimeoutException) {
+            Console.WriteLine("StartBus() timed out!");
+            Program.Instance?.Kill();
+        }
         MatchMakingStarted = false;
         Starting = false;
         Console.WriteLine("Done");
