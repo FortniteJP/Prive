@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Driver;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +33,18 @@ public class MatchMakingController : ControllerBase {
         var bucketId = obj["bucketId"].ToString()!;
         var playlistId = bucketId.Split(":")[5];
         Console.WriteLine($"MatchMaking: {playlistId} ({bucketId})");
+
+        #if DEBUG
+        var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
+        foreach (var user in users) {
+            if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
+                var splited = cid.Split(":");
+                Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
+                if (string.IsNullOrWhiteSpace(cid)) continue;
+                await Controllers.ServerApiController.CClient.SendOutfit(user.DisplayName, splited[1]);
+            }
+        }
+        #endif
         
         using var client = await HttpContext.WebSockets.AcceptWebSocketAsync();
 
@@ -127,6 +140,8 @@ public class MatchMakingController : ControllerBase {
         if (Starting) return;
         Starting = true;
         Program.Instance?.Kill();
+        Console.WriteLine("Deleting logs...");
+        Directory.GetFiles(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "Saved", "Logs")).ToList().ForEach(System.IO.File.Delete);
         Program.Instance = new ServerInstance(ServerApiController.ShippingLocation);
         Console.WriteLine("Launching server...");
         Program.Instance.Launch();
@@ -137,6 +152,16 @@ public class MatchMakingController : ControllerBase {
         Console.WriteLine("Waiting for server to be ready...");
         await Task.Delay(60 * 1000);
         LastMatchTime = DateTime.Now;
+        Console.WriteLine("Sending Outfits...");
+        var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
+        foreach (var user in users) {
+            if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
+                var splited = cid.Split(":");
+                // Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
+                if (string.IsNullOrWhiteSpace(cid)) continue;
+                await Controllers.ServerApiController.CClient.SendOutfit(user.DisplayName, splited[1]);
+            }
+        }
         Console.WriteLine("Starting match...");
         TimeToGo = true;
         await Task.Delay(60 * 1000);

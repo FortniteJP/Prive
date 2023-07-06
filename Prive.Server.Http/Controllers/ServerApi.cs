@@ -134,6 +134,14 @@ public class ServerApiController : ControllerBase {
         return NoContent();
     }
 
+    [HttpPost("startlategame")] [NoAuth]
+    public IActionResult StartLateGame() {
+        if (!IsFromAuthorized()) return Unauthorized();
+        Console.WriteLine("StartLateGame posted");
+        CClient.Send("startlategame;");
+        return NoContent();
+    }
+
     [HttpPost("infiniteammotrue")] [NoAuth]
     public IActionResult InfiniteAmmoTrue() {
         if (!IsFromAuthorized()) return Unauthorized();
@@ -203,6 +211,14 @@ public class ServerApiController : ControllerBase {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("SkipShrinkSafeZone posted");
         CClient.Send("skipshrinksafezone;");
+        return NoContent();
+    }
+
+    [HttpPost("executetest")] [NoAuth]
+    public IActionResult ExecuteTest() {
+        if (!IsFromAuthorized()) return Unauthorized();
+        Console.WriteLine("ExecuteTest posted");
+        CClient.Send("executetest;");
         return NoContent();
     }
 }

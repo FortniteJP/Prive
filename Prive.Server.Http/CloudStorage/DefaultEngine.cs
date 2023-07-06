@@ -113,6 +113,7 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("bXBLGoldRequired", "false")
             }
         },
+        #if DEBUG
         new() {
             Section = "Core.Log",
             Elements = new() {
@@ -167,6 +168,7 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("LogExec", "All"),
             }
         },
+        #endif
         new() {
             Section = "OnlineSubsystemMcp.AccountServiceMcp Prod",
             Elements = new() {

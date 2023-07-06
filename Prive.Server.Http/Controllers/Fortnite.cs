@@ -41,8 +41,13 @@ public class FortniteController : ControllerBase {
         // region = splitted[3];
 
         // Console.WriteLine($"{playlist.ToLower()} != Playlist_DefaultSolo.ToLower() => {playlist.ToLower() != "Playlist_DefaultSolo".ToLower()}");
+
+        bool isPlaylistSupported(string playlistId) => (new string[] {
+            "Playlist_DefaultSolo",
+            "Playlist_Auto_Solo",
+        }).Any(x => x.Equals(playlistId, StringComparison.InvariantCultureIgnoreCase));
         
-        if (playlist.ToLower() != "Playlist_DefaultSolo".ToLower()) {
+        if (!isPlaylistSupported(playlist)) {
             Response.StatusCode = 406;
             return EpicError.Create(
                 "errors.prive.server.unsupported_playlist", 1,
