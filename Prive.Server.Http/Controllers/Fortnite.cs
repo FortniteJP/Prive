@@ -31,10 +31,16 @@ public class FortniteController : ControllerBase {
         var hotfixVersion = -1;
 
         var splitted = Request.Query["bucketId"].First()!.Split(':');
+        Console.WriteLine($"Bucket: {string.Join(", ", splitted)}");
         netCL = splitted[0];
         hotfixVersion = int.Parse(splitted[1]);
-        playlist = splitted[2];
-        region = splitted[3];
+        region = splitted[2];
+        playlist = splitted[3];
+        // wtf
+        // playlist = splitted[2];
+        // region = splitted[3];
+
+        // Console.WriteLine($"{playlist.ToLower()} != Playlist_DefaultSolo.ToLower() => {playlist.ToLower() != "Playlist_DefaultSolo".ToLower()}");
         
         if (playlist.ToLower() != "Playlist_DefaultSolo".ToLower()) {
             Response.StatusCode = 406;

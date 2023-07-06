@@ -92,17 +92,9 @@ public class DefaultGame : CloudStorageFile {
                 new IniFrontEndPlaylistData() {
                     Option = IniElementOption.AddIfMissing,
                     FrontEndPlaylistData = new() {
-                        PlaylistName = "Playlist_Auto_Solo",
-                        PlaylistAccess = new() { bEnabled = true } // needed ?
+                        PlaylistName = "Playlist_Auto_Solo"
                     }
-                },
-                new IniFrontEndPlaylistData() {
-                    Option = IniElementOption.AddIfMissing,
-                    FrontEndPlaylistData = new() {
-                        PlaylistName = "Playlist_Auto_Duo",
-                        PlaylistAccess = new() { bEnabled = false }
-                    }
-                },
+                }
             }
         },
         new() {

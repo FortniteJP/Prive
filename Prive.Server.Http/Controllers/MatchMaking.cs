@@ -30,7 +30,7 @@ public class MatchMakingController : ControllerBase {
 
         var obj = JsonSerializer.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(Convert.FromBase64String(Request.Headers.Authorization.ToString().Split(" ")[2]))) ?? throw new Exception("Invalid payload");
         var bucketId = obj["bucketId"].ToString()!;
-        var playlistId = bucketId.Split(":")[4];
+        var playlistId = bucketId.Split(":")[5];
         Console.WriteLine($"MatchMaking: {playlistId} ({bucketId})");
         
         using var client = await HttpContext.WebSockets.AcceptWebSocketAsync();
