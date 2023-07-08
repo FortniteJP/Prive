@@ -131,7 +131,7 @@ public class MatchMakingController : ControllerBase {
             MatchMakingStartTime = DateTime.Now;
         }
         Console.WriteLine($"Connections.Count < 10: {Connections.Count < 10}");
-        Console.WriteLine($"2: {DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < {TimeSpan.FromMinutes(10)}");
+        Console.WriteLine($"2: {DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < {(long)TimeSpan.FromMinutes(10).TotalSeconds}");
         
         // prevent if connections count is less than 10 and MatchMakingStartTime is less than 10 minutes
         if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)) return;
@@ -141,7 +141,7 @@ public class MatchMakingController : ControllerBase {
         Starting = true;
         Program.Instance?.Kill();
         Console.WriteLine("Deleting logs...");
-        Directory.GetFiles(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "Saved", "Logs")).ToList().ForEach(System.IO.File.Delete);
+        Directory.GetFiles(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "Saved", "Logs")).ToList().ForEach(x => {try { System.IO.File.Delete(x); } catch { }});
         Program.Instance = new ServerInstance(ServerApiController.ShippingLocation);
         Console.WriteLine("Launching server...");
         Program.Instance.Launch();
@@ -153,14 +153,18 @@ public class MatchMakingController : ControllerBase {
         await Task.Delay(60 * 1000);
         LastMatchTime = DateTime.Now;
         Console.WriteLine("Sending Outfits...");
-        var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
-        foreach (var user in users) {
-            if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
-                var splited = cid.Split(":");
-                // Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
-                if (string.IsNullOrWhiteSpace(cid)) continue;
-                await Controllers.ServerApiController.CClient.SendOutfit(user.DisplayName, splited[1]);
+        try {
+            var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
+            foreach (var user in users) {
+                if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
+                    var splited = cid.Split(":");
+                    // Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
+                    if (string.IsNullOrWhiteSpace(cid)) continue;
+                    await Controllers.ServerApiController.CClient.SendOutfit(user.DisplayName, splited[1]);
+                }
             }
+        } catch {
+            Console.WriteLine("Sending outfits timed out!");
         }
         Console.WriteLine("Starting match...");
         TimeToGo = true;

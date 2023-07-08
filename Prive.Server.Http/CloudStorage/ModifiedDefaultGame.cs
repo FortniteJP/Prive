@@ -74,6 +74,102 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         }
                     }
                 },
+                // new IniTextReplacements() {
+                //     TextReplacement = new() {
+                //         Namespace = "",
+                //         Key = "155CDE9D44B50F271DC7D9B727BF9703",
+                //         NativeString = "Automatics",
+                //         LocalizedStrings = new() {
+                //             ["ja"] = "155CDE9D44B50F271DC7D9B727BF9703"
+                //         }
+                //     }
+                // },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "5CC62D22428453A9FD896BA82ED8B258",
+                        NativeString = "Automatics",
+                        LocalizedStrings = new() {
+                            ["ja"] = "5CC62D22428453A9FD896BA82ED8B258" // this
+                        }
+                    }
+                },
+                // new IniTextReplacements() {
+                //     TextReplacement = new() {
+                //         Namespace = "",
+                //         Key = "FF5A51304BB7A9D4DE6F3D8EAF340C08",
+                //         NativeString = "Automatics",
+                //         LocalizedStrings = new() {
+                //             ["ja"] = "FF5A51304BB7A9D4DE6F3D8EAF340C08"
+                //         }
+                //     }
+                // },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "423957A447BCC38E7AF190B60C9E47D2",
+                        NativeString = "Spray and Pray",
+                        LocalizedStrings = new() {
+                            ["en"] = "DESCRIPTION TITLE 1",
+                            ["ja"] = "DESCRIPTION TITLE 1"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "D73A8E6646FA6FC31B0943A53B8F44A2",
+                        NativeString = "All weapons in this mode are ones that automatically fire.",
+                        LocalizedStrings = new() {
+                            ["en"] = "DESCRIPTION DETAIL 1",
+                            ["ja"] = "DESCRIPTION DETAIL 1"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "5E74EA754670747F914C6CBAE14C40ED",
+                        NativeString = "Metal is Good",
+                        LocalizedStrings = new() {
+                            ["en"] = "DESCRIPTION TITLE 2",
+                            ["ja"] = "DESCRIPTION TITLE 2"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "684E866D44983FB4673764879E7B32BB",
+                        NativeString = "Farm resources that build stronger walls to survive the steady stream of fire.",
+                        LocalizedStrings = new() {
+                            ["en"] = "DESCRIPTION DETAIL 2",
+                            ["ja"] = "DESCRIPTION DETAIL 2"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "BACA7EAB4A5B8B50FC11CFAB98055697",
+                        NativeString = "Covering Fire",
+                        LocalizedStrings = new() {
+                            ["en"] = "DESCRIPTION TITLE 3",
+                            ["ja"] = "DESCRIPTION TITLE 3"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
+                        Key = "6026A926449F96ABDB4622AE0897B09B",
+                        NativeString = "Help your team by laying down suppressing fire!",
+                        LocalizedStrings = new() {
+                            ["en"] = "DESCRIPTION DETAIL 3",
+                            ["ja"] = "DESCRIPTION DETAIL 3"
+                        }
+                    }
+                },
                 new IniTextReplacements() {
                     TextReplacement = new() {
                         Namespace = "",
