@@ -27,7 +27,7 @@ public class ServerInstance {
 
         ShippingProcess = Process.Start(new ProcessStartInfo(ShippingPath, Arguments) {
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = false
         })!;
     }
 

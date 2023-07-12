@@ -130,11 +130,12 @@ public class MatchMakingController : ControllerBase {
             MatchMakingStarted = true;
             MatchMakingStartTime = DateTime.Now;
         }
+        var waitTime = TimeSpan.FromMinutes(5);
         Console.WriteLine($"Connections.Count < 10: {Connections.Count < 10}");
-        Console.WriteLine($"2: {DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < {(long)TimeSpan.FromMinutes(10).TotalSeconds}");
+        Console.WriteLine($"2: {DateTime.Now - MatchMakingStartTime < waitTime} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < {(long)waitTime.TotalSeconds}");
         
         // prevent if connections count is less than 10 and MatchMakingStartTime is less than 10 minutes
-        if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < TimeSpan.FromMinutes(10)) return;
+        if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < waitTime) return;
         // prevent if match is started in 20 minutes
         if (DateTime.Now - LastMatchTime < TimeSpan.FromMinutes(20)) return;
         if (Starting) return;
@@ -146,7 +147,17 @@ public class MatchMakingController : ControllerBase {
         Console.WriteLine("Launching server...");
         Program.Instance.Launch();
         Console.WriteLine("Injecting dll...");
-        Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation);
+        if (!Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation)) {
+            Console.WriteLine("Failed to inject dll!");
+            Program.Instance.Launch();
+            if (!Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation)) {
+                Console.WriteLine("Failed to inject dll TWICE!");
+                LastMatchTime = new();
+                Starting = false;
+                MatchMakingStarted = false;
+                return;
+            }
+        }
         Console.WriteLine("Waiting for log...");
         await Program.Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), ServerApiController.ServerNativeDllLocation);
         Console.WriteLine("Waiting for server to be ready...");
