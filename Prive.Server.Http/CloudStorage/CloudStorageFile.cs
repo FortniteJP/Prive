@@ -37,6 +37,7 @@ public abstract class IniElement {
         IniElementOption.RemoveIfExisting => '!',
         _ => ' '
     };
+    public static string Escape(string str) => str.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
 }
 
 public enum IniElementOption {
@@ -78,7 +79,7 @@ public class IniElementFunc : IniElement {
 
 public class IniTextReplacements : IniElement {
     public required IniTextReplacementArguments TextReplacement { get; init; }
-    protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacement.Category}\", bIsMinimalPatch={TextReplacement.bIsMinimalPatch}, Namespace=\"{TextReplacement.Namespace}\", Key=\"{TextReplacement.Key}\", NativeString=\"{TextReplacement.NativeString}\", LocalizedStrings=({string.Join(",", TextReplacement.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{x.Value}\")"))}))";
+    protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacement.Category}\", bIsMinimalPatch={TextReplacement.bIsMinimalPatch}, Namespace=\"{TextReplacement.Namespace}\", Key=\"{TextReplacement.Key}\", NativeString=\"{Escape(TextReplacement.NativeString)}\", LocalizedStrings=({string.Join(",", TextReplacement.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{Escape(x.Value)}\")"))}))";
 
     public IniTextReplacements() {
         Option = IniElementOption.AddIfMissing;
@@ -116,7 +117,7 @@ public class IniFrontEndPlaylistData : IniElement {
 
 public class IniRegionDefinitions : IniElement {
     public required IniRegionDefinitionArguments RegionDefinition { get; init; }
-    protected override string SerializeProperty() => $"RegionDefinitions=(DisplayName=\"{RegionDefinition.DisplayName}\", RegionId=\"{RegionDefinition.RegionId}\", bEnabled={RegionDefinition.bEnabled}, bVisible={RegionDefinition.bVisible}, bAutoAssignable={RegionDefinition.bAutoAssignable})";
+    protected override string SerializeProperty() => $"RegionDefinitions=(DisplayName=\"{Escape(RegionDefinition.DisplayName)}\", RegionId=\"{RegionDefinition.RegionId}\", bEnabled={RegionDefinition.bEnabled}, bVisible={RegionDefinition.bVisible}, bAutoAssignable={RegionDefinition.bAutoAssignable})";
 
     public IniRegionDefinitions() {
         Option = IniElementOption.AddIfMissing;

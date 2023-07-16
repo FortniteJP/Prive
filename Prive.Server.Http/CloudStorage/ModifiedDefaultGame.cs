@@ -55,6 +55,17 @@ public class ModifiedDefaultGame : CloudStorageFile {
                 new IniTextReplacements() {
                     TextReplacement = new() {
                         Namespace = "",
+                        Key = "AC35E95A452317CB8F53B88A9D072AB2",
+                        NativeString = "We're having trouble retrieving data from the Events Neural Network. \r\nWe'll try unplugging it and plugging it back in. \r\n\r\nPlease try back later.",
+                        LocalizedStrings = new() {
+                            ["en"] = "https://fortnite.day/",
+                            ["ja"] = "ﾌｫｰﾄﾅｲﾄ♡"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
                         Key = "CF55FCAA45F271CCCC3B1B847B24BDC1",
                         NativeString = "Automatics",
                         LocalizedStrings = new() {
