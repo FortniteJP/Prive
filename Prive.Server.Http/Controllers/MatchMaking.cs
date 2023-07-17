@@ -9,8 +9,8 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("")]
 public class MatchMakingController : ControllerBase {
-    public static MatchMakingManager MatchMakingManagerSolo { get; } = new("Playlist_DefaultSolo", TimeSpan.FromSeconds(10));
-    public static MatchMakingManager MatchMakingManagerLateGameSolo { get; } = new("Playlist_Auto_Solo", TimeSpan.FromSeconds(10));
+    public static MatchMakingManager MatchMakingManagerSolo { get; } = new("Playlist_DefaultSolo", TimeSpan.FromMinutes(5));
+    public static MatchMakingManager MatchMakingManagerLateGameSolo { get; } = new("Playlist_Auto_Solo", TimeSpan.FromMinutes(3));
     public static Dictionary<string, string> SessionIds { get; } = new();
 
     [Route("matchmaking")] [NoAuth]

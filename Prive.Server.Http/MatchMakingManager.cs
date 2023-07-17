@@ -174,7 +174,7 @@ public class MatchMakingManager {
                 return;
             }
         }
-        await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), PlaylistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? Controllers.ServerApiController.ServerNativeDllLocation.Replace(".dll", ".lg.dll") : Controllers.ServerApiController.ServerNativeDllLocation);
+        await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), PlaylistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? Controllers.ServerApiController.ServerNativeDllLocation.Replace(".dll", ".lg.dll") : Controllers.ServerApiController.ServerNativeDllLocation);
         while (!await Communicator.IsListening()) {
             await Task.Delay(1000);
         }

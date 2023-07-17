@@ -72,7 +72,7 @@ public class MainWindow : Window {
 
             Task.Run(() => {
                 Instance.InjectDll(ClientNativeDllLocation);
-                Task.Run(async() => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), FortniteConsoleDllLocation));
+                Task.Run(async() => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), FortniteConsoleDllLocation));
                 Instance.WaitForExit();
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;

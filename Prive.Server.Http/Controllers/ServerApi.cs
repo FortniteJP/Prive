@@ -28,7 +28,7 @@ public class ServerApiController : ControllerBase {
         Instance.Launch();
         Instance.InjectDll(ClientNativeDllLocation);
         // have to wait because required things does not load instantly
-        Task.Run(async () => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), ServerNativeDllLocation));
+        Task.Run(async () => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), ServerNativeDllLocation));
         return NoContent();
     }
 
