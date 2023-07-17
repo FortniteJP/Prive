@@ -80,8 +80,8 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         Key = "4A664F244BA0F12E6641C2BF52158907",
                         NativeString = "The only weapons in the game are the automatic firing ones. Spray and pray!",
                         LocalizedStrings = new() {
-                            ["en"] = "TEST DESCRIPTION",
-                            ["ja"] = "準備中"
+                            ["en"] = "Maybe\r\nReleased: 2023-07-17",
+                            ["ja"] = "多分\r\nリリース: 2023-07-17"
                         }
                     }
                 },
@@ -95,16 +95,16 @@ public class ModifiedDefaultGame : CloudStorageFile {
                 //         }
                 //     }
                 // },
-                new IniTextReplacements() {
-                    TextReplacement = new() {
-                        Namespace = "",
-                        Key = "5CC62D22428453A9FD896BA82ED8B258",
-                        NativeString = "Automatics",
-                        LocalizedStrings = new() {
-                            ["ja"] = "5CC62D22428453A9FD896BA82ED8B258" // this
-                        }
-                    }
-                },
+                // new IniTextReplacements() {
+                //     TextReplacement = new() {
+                //         Namespace = "",
+                //         Key = "5CC62D22428453A9FD896BA82ED8B258",
+                //         NativeString = "Automatics",
+                //         LocalizedStrings = new() {
+                //             ["ja"] = "5CC62D22428453A9FD896BA82ED8B258" // this
+                //         }
+                //     }
+                // },
                 // new IniTextReplacements() {
                 //     TextReplacement = new() {
                 //         Namespace = "",
@@ -118,11 +118,22 @@ public class ModifiedDefaultGame : CloudStorageFile {
                 new IniTextReplacements() {
                     TextReplacement = new() {
                         Namespace = "",
+                        Key = "5CC62D22428453A9FD896BA82ED8B258",
+                        NativeString = "Automatics",
+                        LocalizedStrings = new() {
+                            ["en"] = "LateGame Solo",
+                            ["ja"] = "レイトゲーム ソロ"
+                        }
+                    }
+                },
+                new IniTextReplacements() {
+                    TextReplacement = new() {
+                        Namespace = "",
                         Key = "423957A447BCC38E7AF190B60C9E47D2",
                         NativeString = "Spray and Pray",
                         LocalizedStrings = new() {
-                            ["en"] = "DESCRIPTION TITLE 1",
-                            ["ja"] = "DESCRIPTION TITLE 1"
+                            ["en"] = "This is LateGame Solo",
+                            ["ja"] = "これはレイトゲーム ソロです"
                         }
                     }
                 },
@@ -132,8 +143,8 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         Key = "D73A8E6646FA6FC31B0943A53B8F44A2",
                         NativeString = "All weapons in this mode are ones that automatically fire.",
                         LocalizedStrings = new() {
-                            ["en"] = "DESCRIPTION DETAIL 1",
-                            ["ja"] = "DESCRIPTION DETAIL 1"
+                            ["en"] = "Maybe",
+                            ["ja"] = "多分"
                         }
                     }
                 },
@@ -143,8 +154,8 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         Key = "5E74EA754670747F914C6CBAE14C40ED",
                         NativeString = "Metal is Good",
                         LocalizedStrings = new() {
-                            ["en"] = "DESCRIPTION TITLE 2",
-                            ["ja"] = "DESCRIPTION TITLE 2"
+                            ["en"] = "?",
+                            ["ja"] = "ﾌｫｰﾄﾅｲﾄ♡"
                         }
                     }
                 },
@@ -154,8 +165,8 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         Key = "684E866D44983FB4673764879E7B32BB",
                         NativeString = "Farm resources that build stronger walls to survive the steady stream of fire.",
                         LocalizedStrings = new() {
-                            ["en"] = "DESCRIPTION DETAIL 2",
-                            ["ja"] = "DESCRIPTION DETAIL 2"
+                            ["en"] = "...",
+                            ["ja"] = "?"
                         }
                     }
                 },
@@ -165,8 +176,8 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         Key = "BACA7EAB4A5B8B50FC11CFAB98055697",
                         NativeString = "Covering Fire",
                         LocalizedStrings = new() {
-                            ["en"] = "DESCRIPTION TITLE 3",
-                            ["ja"] = "DESCRIPTION TITLE 3"
+                            ["en"] = "Prive",
+                            ["ja"] = "Prive"
                         }
                     }
                 },
@@ -176,8 +187,8 @@ public class ModifiedDefaultGame : CloudStorageFile {
                         Key = "6026A926449F96ABDB4622AE0897B09B",
                         NativeString = "Help your team by laying down suppressing fire!",
                         LocalizedStrings = new() {
-                            ["en"] = "DESCRIPTION DETAIL 3",
-                            ["ja"] = "DESCRIPTION DETAIL 3"
+                            ["en"] = "https://fortnite.day",
+                            ["ja"] = "https://fortnite.day"
                         }
                     }
                 },
@@ -278,6 +289,11 @@ public class ModifiedDefaultGame : CloudStorageFile {
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;ClipSize;35") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;FiringRate;16.0") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;AmmoCostPerFire;1") { Option = IniElementOption.AddIfMissing },
+
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;ReloadTime;3") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;FiringRate;0.9;") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;EquipAnimRate;1.75") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;QuickBarSlotCooldownDuration;0.01") { Option = IniElementOption.AddIfMissing },
             }
         },
     };

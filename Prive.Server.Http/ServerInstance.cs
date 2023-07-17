@@ -67,3 +67,39 @@ public class ServerInstance {
         ShippingProcess?.WaitForExit();
     }
 }
+
+public class ServerInstanceCommunicator {
+    public HttpClient Client { get; }
+
+    public ServerInstanceCommunicator(string serverIP, int serverPort) {
+        Client = new HttpClient() {
+            BaseAddress = new Uri($"http://{serverIP}:{serverPort}/")
+        };
+    }
+
+    public Task SendOutfit(string id, string cid) => Client.GetAsync($"outfit?id={id}&cid={cid}");
+
+    public Task SetPort(int port) => Client.GetAsync($"setport?port={port}");
+
+    public Task Restart() => Client.GetAsync("restart");
+
+    public Task StartBus() => Client.GetAsync("startbus");
+
+    public async Task<bool> InfiniteAmmo(bool? value = null) => await (await Client.GetAsync($"infiniteammo{(value is bool b ? $"?value={(b ? "true" : "false")}" : "")}")).Content.ReadAsStringAsync() == "true";
+
+    public async Task<bool> InfiniteMaterials(bool? value = null) => await (await Client.GetAsync($"infinitematerials{(value is bool b ? $"?value={(b ? "true" : "false")}" : "")}")).Content.ReadAsStringAsync() == "true";
+
+    public Task StartSafeZone() => Client.GetAsync("startsafezone");
+
+    public Task StopSafeZone() => Client.GetAsync("stopsafezone");
+
+    public Task SkipSafeZone() => Client.GetAsync("skipsafezone");
+
+    public Task StartShrinkSafeZone() => Client.GetAsync("startshrinksafezone");
+
+    public Task SkipShrinkSafeZone() => Client.GetAsync("skipshrinksafezone");
+
+    public async Task<bool> IsListening() => await (await Client.GetAsync("islistening")).Content.ReadAsStringAsync() == "true";
+
+    public async Task<int> GetPlayersLeft() => int.Parse(await (await Client.GetAsync("playersleft")).Content.ReadAsStringAsync());
+}

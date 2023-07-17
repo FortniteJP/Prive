@@ -1,7 +1,6 @@
 global using K = System.Text.Json.Serialization.JsonPropertyNameAttribute;
 global using static Prive.Server.Http.Global;
 using MongoDB.Driver;
-using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 

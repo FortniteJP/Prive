@@ -1,4 +1,4 @@
-using SuperSimpleTcp;
+/* using SuperSimpleTcp;
 
 namespace Prive.Server.Http;
 
@@ -18,6 +18,10 @@ public class CommunicateClient {
         return Client.SendAsync(data);
     }
 
+    public void AddDataReceivedCallback(Action<object?, DataReceivedEventArgs> callback) {
+        Client.Events.DataReceived += (s, e) => callback(s, e);
+    }
+
     public Task Shutdown() => Send("shutdown");
 
     public Task SetPort(int port) => Send($"setport;{port}");
@@ -27,4 +31,4 @@ public class CommunicateClient {
     public Task StartBus() => Send("startbus;");
 
     public Task SendOutfit(string id, string cid) => Send($"outfit;{id};{cid};");
-}
+} */

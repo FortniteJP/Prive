@@ -9,14 +9,9 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("")]
 public class MatchMakingController : ControllerBase {
-    private static List<WebSocket> Connections { get; } = new();
-    private object ConnectionsLock { get; } = new();
-    public static bool TimeToGo { get; internal set; } = false;
-    public static bool AutoMatchMaking { get; internal set; } = true;
-    public static DateTime LastMatchTime { get; internal set; } = new();
-    public static DateTime MatchMakingStartTime { get; internal set; } = new();
-    public static bool MatchMakingStarted { get; internal set; } = false;
-    public static bool Starting { get; internal set; } = false;
+    public static MatchMakingManager MatchMakingManagerSolo { get; } = new("Playlist_DefaultSolo", TimeSpan.FromSeconds(10));
+    public static MatchMakingManager MatchMakingManagerLateGameSolo { get; } = new("Playlist_Auto_Solo", TimeSpan.FromSeconds(10));
+    public static Dictionary<string, string> SessionIds { get; } = new();
 
     [Route("matchmaking")] [NoAuth]
     public async Task<object?> MatchMaking() {
@@ -33,172 +28,27 @@ public class MatchMakingController : ControllerBase {
         var bucketId = obj["bucketId"].ToString()!;
         var playlistId = bucketId.Split(":")[5];
         Console.WriteLine($"MatchMaking: {playlistId} ({bucketId})");
-
-        #if DEBUG
-        var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
-        foreach (var user in users) {
-            if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
-                var splited = cid.Split(":");
-                Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
-                if (string.IsNullOrWhiteSpace(cid)) continue;
-                await Controllers.ServerApiController.CClient.SendOutfit(user.DisplayName, splited[1]);
-            }
-        }
-        #endif
         
-        using var client = await HttpContext.WebSockets.AcceptWebSocketAsync();
+        using var client = await HttpContext.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext() { KeepAliveInterval = TimeSpan.FromSeconds(5) });
 
-        try {
-            lock (ConnectionsLock) Connections.Add(client);
-            await client.SendAsync(JsonSerializer.Serialize(new {
-                payload = new {
-                    state = "Connecting"
-                },
-                name = "StatusUpdate"
-            }));
-            await Task.Delay(500);
-            await client.SendAsync(JsonSerializer.Serialize(new {
-                payload = new {
-                    state = "Waiting",
-                    totalPlayers = 1,
-                    connectedPlayers = 1
-                },
-                name = "StatusUpdate"
-            }));
-            await Task.Delay(500);
-            // var u = GenerateToken();
-            #if DEBUG
-            await client.SendAsync(JsonSerializer.Serialize(new {
-                    payload = new {
-                        state = "Queued",
-                        ticketId = "TEST_TICKET_ID",
-                        queuedPlayers = Connections.Count,
-                        estimatedWaitSec = 0,
-                        status = new {}
-                    },
-                    name = "StatusUpdate"
-                }));
-            #else
-            while (!TimeToGo) {
-                OnNewConnection();
-                // Console.WriteLine($"{u}, {client.State.ToString()}, {Connections}");
-                // if (client.State != System.Net.WebSockets.WebSocketState.Open) {
-                await client.SendAsync(JsonSerializer.Serialize(new {
-                    payload = new {
-                        state = "Queued",
-                        ticketId = "TEST_TICKET_ID",
-                        queuedPlayers = Connections.Count,
-                        estimatedWaitSec = 0,
-                        status = new {}
-                    },
-                    name = "StatusUpdate"
-                }));
-                if (await Disconnected(client)) {
-                    throw new Exception("Client disconnected");
-                }
-                await Task.Delay(5000);
-            }
-            #endif
-            await client.SendAsync(JsonSerializer.Serialize(new {
-                payload = new {
-                    state = "SessionAssignment",
-                    matchId = "TEST_MATCH_ID"
-                },
-                name = "StatusUpdate"
-            }));
-            await Task.Delay(500);
-            await client.SendAsync(JsonSerializer.Serialize(new {
-                payload = new {
-                    matchId = "TEST_MATCH_ID",
-                    sessionId = Guid.NewGuid().ToString().Replace("-", ""),
-                    joinDelaySec = 1
-                },
-                name = "Play"
-            }));
-            await Task.Delay(500);
-        } catch (Exception e) {
-            Console.WriteLine(e);
-        } finally {
-            lock (ConnectionsLock) Connections.Remove(client);
+        if (playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase)) {
+            await MatchMakingManagerSolo.HandleClient(client);
+        } else if (playlistId.Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase)) {
+            await MatchMakingManagerLateGameSolo.HandleClient(client);
+        } else {
+            await client.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "Invalid playlist!", CancellationToken.None);
+            return null;
         }
         return null;
-    }
-
-    public async void OnNewConnection() {
-        if (!AutoMatchMaking) return;
-        if (!MatchMakingStarted) {
-            MatchMakingStarted = true;
-            MatchMakingStartTime = DateTime.Now;
-        }
-        var waitTime = TimeSpan.FromMinutes(5);
-        Console.WriteLine($"Connections.Count < 10: {Connections.Count < 10}");
-        Console.WriteLine($"2: {DateTime.Now - MatchMakingStartTime < waitTime} => {(long)(DateTime.Now - MatchMakingStartTime).TotalSeconds} < {(long)waitTime.TotalSeconds}");
-        
-        // prevent if connections count is less than 10 and MatchMakingStartTime is less than 10 minutes
-        if (Connections.Count < 10 && DateTime.Now - MatchMakingStartTime < waitTime) return;
-        // prevent if match is started in 20 minutes
-        if (DateTime.Now - LastMatchTime < TimeSpan.FromMinutes(20)) return;
-        if (Starting) return;
-        Starting = true;
-        Program.Instance?.Kill();
-        Console.WriteLine("Deleting logs...");
-        Directory.GetFiles(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "Saved", "Logs")).ToList().ForEach(x => {try { System.IO.File.Delete(x); } catch { }});
-        Program.Instance = new ServerInstance(ServerApiController.ShippingLocation);
-        Console.WriteLine("Launching server...");
-        Program.Instance.Launch();
-        Console.WriteLine("Injecting dll...");
-        if (!Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation)) {
-            Console.WriteLine("Failed to inject dll!");
-            Program.Instance.Launch();
-            if (!Program.Instance.InjectDll(ServerApiController.ClientNativeDllLocation)) {
-                Console.WriteLine("Failed to inject dll TWICE!");
-                LastMatchTime = new();
-                Starting = false;
-                MatchMakingStarted = false;
-                return;
-            }
-        }
-        Console.WriteLine("Waiting for log...");
-        await Program.Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Verbose: Using default hotfix"), ServerApiController.ServerNativeDllLocation);
-        Console.WriteLine("Waiting for server to be ready...");
-        await Task.Delay(60 * 1000);
-        LastMatchTime = DateTime.Now;
-        Console.WriteLine("Sending Outfits...");
-        try {
-            var users = (await DB.Users.Find(Builders<User>.Filter.Empty).ToListAsync());
-            foreach (var user in users) {
-                if ((await DB.GetAthenaProfile(user.AccountId))?.CharacterId is var cid && cid is string) {
-                    var splited = cid.Split(":");
-                    // Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
-                    if (string.IsNullOrWhiteSpace(cid)) continue;
-                    await Controllers.ServerApiController.CClient.SendOutfit(user.DisplayName, splited[1]);
-                }
-            }
-        } catch {
-            Console.WriteLine("Sending outfits timed out!");
-        }
-        Console.WriteLine("Starting match...");
-        TimeToGo = true;
-        await Task.Delay(60 * 1000);
-        Console.WriteLine("Resetting...");
-        TimeToGo = false;
-        Console.WriteLine("Starting bus...");
-        try {
-            await ServerApiController.CClient.StartBus();
-        } catch (TimeoutException) {
-            Console.WriteLine("StartBus() timed out!");
-            Program.Instance?.Kill();
-        }
-        MatchMakingStarted = false;
-        Starting = false;
-        Console.WriteLine("Done");
     }
 
     [HttpGet("fortnite/api/matchmaking/session/{sessionId}")]
     public object MatchMakingSession() {
         var sessionId = Request.RouteValues["sessionId"]?.ToString() ?? "TEST_SESSION_ID";
+        var playlistId = SessionIds.ContainsKey(sessionId) ? SessionIds[sessionId] : "Playlist_DefaultSolo";
         var buildUniqueId = Request.Cookies["NetCL"];
-        
+        SessionIds.Remove(sessionId);
+
         var r = new {
             id = sessionId,
             ownerId = "Prive",
@@ -206,10 +56,10 @@ public class MatchMakingController : ControllerBase {
             serverName = "PriveAsia",
             #if DEBUG
             serverAddress = "127.0.0.1",
-            serverPort = Port,
+            serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #else
             serverAddress = "180.52.134.178",
-            serverPort = Port,
+            serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #endif
             totalPlayers = 45,
             maxPublicPlayers = 220,
@@ -226,7 +76,7 @@ public class MatchMakingController : ControllerBase {
                 ["MATCHMAKINGPOOL_s"] = "Any",
                 ["STORMSHIELDDEFENSETYPE_i"] = 0,
                 ["HOTFIXVERSION_i"] = 0,
-                ["PLAYLISTNAME_s"] = "Playlist_DefaultSolo",
+                ["PLAYLISTNAME_s"] = playlistId,
                 ["SESSIONKEY_s"] = new Guid().ToString().Replace("-", ""),
                 ["TENANT_s"] = "Fortnite",
                 ["BEACONPORT_i"] = 20000
@@ -269,12 +119,14 @@ public class MatchMakingController : ControllerBase {
         return NoContent();
     }
 
+    // this doesnt work well, im looking for the correct way
     public static async Task<bool> Disconnected(System.Net.WebSockets.WebSocket client) {
         using var timeoutCTS = new CancellationTokenSource();
         var result = client.ReceiveAsync(new byte[0], timeoutCTS.Token);
         var timeout = Task.Delay(5000, timeoutCTS.Token);
         var completed = await Task.WhenAny(result, timeout);
         if (completed == timeout) {
+            // timeoutCTS.Cancel(); // throws System.Net.WebSockets.WebSocketException `The WebSocket is in an invalid state ('Aborted') for this operation. Valid states are: 'Open, CloseReceived'`
             return false;
         } else return client.State != System.Net.WebSockets.WebSocketState.Open;
     }

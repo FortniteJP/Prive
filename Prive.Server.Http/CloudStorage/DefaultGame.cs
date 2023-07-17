@@ -63,6 +63,28 @@ public class DefaultGame : CloudStorageFile {
                         }
                     }
                 },
+                // new IniTextReplacements() {
+                //     TextReplacement = new() {
+                //         Namespace = "Fortnite.FortAthenaMatchmakingWidget",
+                //         Key = "Message.PlayersInQueue",
+                //         NativeString = "Queued players: {0}\nElapsed: {1}",
+                //         LocalizedStrings = new() {
+                //             ["en"] = "Message.PlayersInQueue - 0: {0}, 1: {1}",
+                //             ["ja"] = "Message.PlayersInQueue - 0: {0}, 1: {1}"
+                //         }
+                //     }
+                // },
+                // new IniTextReplacements() {
+                //     TextReplacement = new() {
+                //         Namespace = "Fortnite.FortAthenaMatchmakingWidget",
+                //         Key = "Message.FindingMatch",
+                //         NativeString = "Finding match...\nElapsed: {0}, ETA: {1}",
+                //         LocalizedStrings = new() {
+                //             ["en"] = "Finding match...\nElapsed: {0}, ETA: {1}",
+                //             ["ja"] = "Message.FindingMatch - 0: {0}, 1: {1}"
+                //         }
+                //     }
+                // },
                 new IniTextReplacements() {
                     TextReplacement = new() {
                         Namespace = "",
@@ -80,8 +102,8 @@ public class DefaultGame : CloudStorageFile {
                         Key = "4A664F244BA0F12E6641C2BF52158907",
                         NativeString = "The only weapons in the game are the automatic firing ones. Spray and pray!",
                         LocalizedStrings = new() {
-                            ["en"] = "TEST DESCRIPTION",
-                            ["ja"] = "準備中"
+                            ["en"] = "Maybe\r\nReleased: 2023-07-17",
+                            ["ja"] = "多分\r\nリリース: 2023-07-17"
                         }
                     }
                 },
@@ -113,8 +135,8 @@ public class DefaultGame : CloudStorageFile {
                         Key = "D73A8E6646FA6FC31B0943A53B8F44A2",
                         NativeString = "All weapons in this mode are ones that automatically fire.",
                         LocalizedStrings = new() {
-                            ["en"] = "As its name suggests",
-                            ["ja"] = "その名の通り"
+                            ["en"] = "Maybe",
+                            ["ja"] = "多分"
                         }
                     }
                 },
@@ -124,8 +146,8 @@ public class DefaultGame : CloudStorageFile {
                         Key = "5E74EA754670747F914C6CBAE14C40ED",
                         NativeString = "Metal is Good",
                         LocalizedStrings = new() {
-                            ["en"] = "...",
-                            ["ja"] = "..."
+                            ["en"] = "?",
+                            ["ja"] = "ﾌｫｰﾄﾅｲﾄ♡"
                         }
                     }
                 },
@@ -136,7 +158,7 @@ public class DefaultGame : CloudStorageFile {
                         NativeString = "Farm resources that build stronger walls to survive the steady stream of fire.",
                         LocalizedStrings = new() {
                             ["en"] = "...",
-                            ["ja"] = "..."
+                            ["ja"] = "?"
                         }
                     }
                 },

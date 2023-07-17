@@ -14,7 +14,7 @@ public class ServerApiController : ControllerBase {
     public static readonly string ShippingLocation = @"D:\Documents\Fortnite\10.4\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe" is var p && System.IO.File.Exists(p) ? p : @"C:\Users\User\Documents\Fortnite\v10.40\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe"; // Hardcoded
 
     public static ServerInstance? Instance { get => Program.Instance; set => Program.Instance = value; }
-    public static CommunicateClient CClient { get => Program.CClient; }
+    public static ServerInstanceCommunicator CClient { get => Program.CClient; }
 
     public string IP = Dns.GetHostEntry("xthe.org").AddressList.First().ToString();
     public bool IsFromAuthorized() => !Request.Headers.ContainsKey("X-Forwarded-For") || Request.Headers["X-Forwarded-For"].Select(x => x?.Split(", ")).Any(x => x?.Any(x => x == IP) ?? false);
@@ -44,7 +44,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult Shutdown() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("Shutdown posted");
-        CClient.Shutdown();
+        CClient.Client.GetAsync("shutdown");
         return NoContent();
     }
 
@@ -60,14 +60,12 @@ public class ServerApiController : ControllerBase {
                 await CClient.SendOutfit(user.DisplayName, splited[1]);
             }
         }
-        MatchMakingController.TimeToGo = true;
         return NoContent();
     }
 
     [HttpPost("timetogofalse")] [NoAuth]
     public IActionResult TimeToGoFalse() {
         if (!IsFromAuthorized()) return Unauthorized();
-        MatchMakingController.TimeToGo = false;
         return NoContent();
     }
 
@@ -122,7 +120,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult Restart() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("Restart posted");
-        CClient.Send("restart;");
+        CClient.Restart();
         return NoContent();
     }
 
@@ -138,7 +136,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult StartLateGame() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StartLateGame posted");
-        CClient.Send("startlategame;");
+        CClient.StartBus();
         return NoContent();
     }
 
@@ -146,7 +144,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult InfiniteAmmoTrue() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteAmmoTrue posted");
-        CClient.Send("infiniteammo;true");
+        CClient.InfiniteAmmo(true);
         return NoContent();
     }
 
@@ -154,7 +152,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult InfiniteAmmoFalse() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteAmmoFalse posted");
-        CClient.Send("infiniteammo;false");
+        CClient.InfiniteAmmo(false);
         return NoContent();
     }
 
@@ -162,7 +160,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult InfiniteMaterialsTrue() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteMaterialsTrue posted");
-        CClient.Send("infinitematerials;true");
+        CClient.InfiniteMaterials(true);
         return NoContent();
     }
 
@@ -170,7 +168,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult InfiniteMaterialsFalse() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("InfiniteMaterialsFalse posted");
-        CClient.Send("infinitematerials;false");
+        CClient.InfiniteMaterials(false);
         return NoContent();
     }
 
@@ -178,7 +176,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult StartSafeZone() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StartSafeZone posted");
-        CClient.Send("startsafezone;");
+        CClient.StartSafeZone();
         return NoContent();
     }
 
@@ -186,7 +184,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult StopSafeZone() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StopSafeZone posted");
-        CClient.Send("stopsafezone;");
+        CClient.StopSafeZone();
         return NoContent();
     }
 
@@ -194,7 +192,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult SkipSafeZone() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("SkipSafeZone posted");
-        CClient.Send("skipsafezone;");
+        CClient.SkipSafeZone();
         return NoContent();
     }
 
@@ -202,7 +200,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult StartShrinkSafeZone() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("StartShrinkSafeZone posted");
-        CClient.Send("startshrinksafezone;");
+        CClient.StartShrinkSafeZone();
         return NoContent();
     }
 
@@ -210,7 +208,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult SkipShrinkSafeZone() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("SkipShrinkSafeZone posted");
-        CClient.Send("skipshrinksafezone;");
+        CClient.SkipShrinkSafeZone();
         return NoContent();
     }
 
@@ -218,7 +216,7 @@ public class ServerApiController : ControllerBase {
     public IActionResult ExecuteTest() {
         if (!IsFromAuthorized()) return Unauthorized();
         Console.WriteLine("ExecuteTest posted");
-        CClient.Send("executetest;");
+        CClient.Client.GetAsync("executetest");
         return NoContent();
     }
 }
