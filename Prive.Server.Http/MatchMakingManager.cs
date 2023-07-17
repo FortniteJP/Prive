@@ -175,7 +175,12 @@ public class MatchMakingManager {
             }
         }
         await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), PlaylistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? Controllers.ServerApiController.ServerNativeDllLocation.Replace(".dll", ".lg.dll") : Controllers.ServerApiController.ServerNativeDllLocation);
-        while (!await Communicator.IsListening()) {
+        while (true) {
+            try {
+                if (await Communicator.IsListening()) break;
+            } catch (Exception e) {
+                Console.WriteLine($"MatchMakingManager[{PlaylistId}].LaunchGameServer: {e}");
+            }
             await Task.Delay(1000);
         }
         IsListening = true;

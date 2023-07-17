@@ -33,8 +33,10 @@ public class MatchMakingController : ControllerBase {
 
         if (playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase)) {
             await MatchMakingManagerSolo.HandleClient(client);
+            await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "Finished", CancellationToken.None);
         } else if (playlistId.Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase)) {
             await MatchMakingManagerLateGameSolo.HandleClient(client);
+            await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "Finished", CancellationToken.None);
         } else {
             await client.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "Invalid playlist!", CancellationToken.None);
             return null;
