@@ -71,7 +71,7 @@ public class MatchMakingManager {
 
     public async void Tick(object? state) {
         Console.WriteLine($"MatchMakingManager[{PlaylistId}].Tick: {Clients.Count}");
-        if (Clients.Count == 0 || IsListening) MatchMakingStartedAt = DateTime.Now;
+        if (Clients.Count < 2 || IsListening) MatchMakingStartedAt = DateTime.Now;
         if (DateTime.Now - MatchMakingStartedAt > MatchMakingTimeout) {
             TickTimer.Change(Timeout.Infinite, Timeout.Infinite);
             if (Clients.Count > 0) await Finish();
@@ -118,6 +118,7 @@ public class MatchMakingManager {
                     // Console.WriteLine($"Send outfit to {user.DisplayName} ({cid})");
                     if (string.IsNullOrWhiteSpace(cid)) continue;
                     await Communicator.SendOutfit(user.DisplayName, splited[1]);
+                    await Task.Delay(10);
                 }
             }
         } catch {
@@ -175,11 +176,17 @@ public class MatchMakingManager {
             }
         }
         await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), PlaylistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? Controllers.ServerApiController.ServerNativeDllLocation.Replace(".dll", ".lg.dll") : Controllers.ServerApiController.ServerNativeDllLocation);
+        await Task.Delay(1000 * 30);
         while (true) {
             try {
                 if (await Communicator.IsListening()) break;
             } catch (Exception e) {
                 Console.WriteLine($"MatchMakingManager[{PlaylistId}].LaunchGameServer: {e}");
+            }
+            if (Instance.ShippingProcess?.HasExited ?? false) {
+                Console.WriteLine("Game server exited! Restarting...");
+                await LaunchGameServer();
+                return;
             }
             await Task.Delay(1000);
         }
@@ -188,16 +195,27 @@ public class MatchMakingManager {
 
     public async void Watch(object? state) {
         Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch");
-        var playersLeft = await Communicator.GetPlayersLeft();
-        if (playersLeft == 0) {
-            WatchTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: No players left!");
-            IsListening = false;
-            await Task.Delay(1000 * 15);
-            await Communicator.Restart();
-            await Task.Delay(1000);
-            Instance.Kill();
-            return;
+        try {
+            if (Instance.ShippingProcess?.HasExited ?? false) {
+                Console.WriteLine("Game server exited!");
+                WatchTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                IsListening = false;
+                Instance.Kill();
+                return;
+            }
+            var playersLeft = await Communicator.GetPlayersLeft();
+            if (playersLeft == 0) {
+                WatchTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: No players left!");
+                IsListening = false;
+                await Task.Delay(1000 * 15);
+                await Communicator.Restart();
+                await Task.Delay(1000);
+                Instance.Kill();
+                return;
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: {e}");
         }
     }
 

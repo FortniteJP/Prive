@@ -290,10 +290,27 @@ public class ModifiedDefaultGame : CloudStorageFile {
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;FiringRate;16.0") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Pistol_Scavenger_Athena_UC_Ore_T03;AmmoCostPerFire;1") { Option = IniElementOption.AddIfMissing },
 
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;ReloadTime;3") { Option = IniElementOption.AddIfMissing },
-                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;FiringRate;0.9;") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;ReloadTime;3.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;FiringRate;0.9") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;EquipAnimRate;1.75") { Option = IniElementOption.AddIfMissing },
                 new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_SR_Ore_T03;QuickBarSlotCooldownDuration;0.01") { Option = IniElementOption.AddIfMissing },
+
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_R_Ore_T03;ReloadTime;3.5") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_R_Ore_T03;FiringRate;0.9") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_R_Ore_T03;EquipAnimRate;1.75") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaRangedWeapons;RowUpdate;Shotgun_Standard_Athena_R_Ore_T03;QuickBarSlotCooldownDuration;0.01") { Option = IniElementOption.AddIfMissing },
+                
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;SwingPlaySpeed;1.5") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;SwingTime;0.35") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;EquipAnimRate;1.75") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;DmgPB;25.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;DmgMid;25.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;DmgLong;25.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;DmgMaxRange;25.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;EnvPB;100.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;EnvMid;100.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;EnvLong;100.0") { Option = IniElementOption.AddIfMissing },
+                new IniElementKeyValue("DataTable", "/Game/Athena/Items/Weapons/AthenaMeleeWeapons;RowUpdate;Harvest_Pickaxe_Athena_C_T01;EnvMaxRange;100.0") { Option = IniElementOption.AddIfMissing },
             }
         },
     };
