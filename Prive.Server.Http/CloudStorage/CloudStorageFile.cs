@@ -30,6 +30,7 @@ public abstract class IniElement {
     public IniElementOption Option { get; init; } = IniElementOption.None;
     protected abstract string SerializeProperty();
     public virtual string Serialize() => $"{(GetOptionChar() is var c && c == ' ' ? "" : c)}{SerializeProperty()}";
+
     private char GetOptionChar() => Option switch {
         IniElementOption.AddIfMissing => '+',
         IniElementOption.RemoveExact => '-',
@@ -38,6 +39,7 @@ public abstract class IniElement {
         _ => ' '
     };
     public static string Escape(string str) => str.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
+    public static string ToLowerBool(bool b) => b ? "true" : "false";
 }
 
 public enum IniElementOption {
@@ -79,7 +81,7 @@ public class IniElementFunc : IniElement {
 
 public class IniTextReplacements : IniElement {
     public required IniTextReplacementArguments TextReplacement { get; init; }
-    protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacement.Category}\", bIsMinimalPatch={TextReplacement.bIsMinimalPatch}, Namespace=\"{TextReplacement.Namespace}\", Key=\"{TextReplacement.Key}\", NativeString=\"{Escape(TextReplacement.NativeString)}\", LocalizedStrings=({string.Join(",", TextReplacement.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{Escape(x.Value)}\")"))}))";
+    protected override string SerializeProperty() => $"TextReplacements=(Category=\"{TextReplacement.Category}\", bIsMinimalPatch={ToLowerBool(TextReplacement.bIsMinimalPatch)}, Namespace=\"{TextReplacement.Namespace}\", Key=\"{TextReplacement.Key}\", NativeString=\"{Escape(TextReplacement.NativeString)}\", LocalizedStrings=({string.Join(",", TextReplacement.LocalizedStrings.Select(x => $"(\"{x.Key}\",\"{Escape(x.Value)}\")"))}))";
 
     public IniTextReplacements() {
         Option = IniElementOption.AddIfMissing;
@@ -97,7 +99,10 @@ public class IniTextReplacements : IniElement {
 
 public class IniFrontEndPlaylistData : IniElement {
     public required IniFrontEndPlaylistDataArguments FrontEndPlaylistData { get; init; }
-    protected override string SerializeProperty() => $"FrontEndPlaylistData=(PlaylistName=\"{FrontEndPlaylistData.PlaylistName}\", PlaylistAccess=({string.Join(",", FrontEndPlaylistData.PlaylistAccess.GetType().GetProperties().Select(x => $"{x.Name}={x.GetValue(FrontEndPlaylistData.PlaylistAccess)}"))}))";
+    public static bool bUseS10Style { get; set; } = true;
+    protected override string SerializeProperty() => bUseS10Style
+        ? $"FrontEndPlaylistData=(PlaylistName=\"{FrontEndPlaylistData.PlaylistName}\", PlaylistAccess=(bIsDefaultPlaylist={ToLowerBool(FrontEndPlaylistData.PlaylistAccess.bIsDefaultPlaylist)}, bDisplayAsLimitedTime={ToLowerBool(FrontEndPlaylistData.PlaylistAccess.bDisplayAsLimitedTime)}, AdvertiseType={(FrontEndPlaylistData.PlaylistAccess.bDisplayAsNew ? "EPlaylistAdvertisementType::New" : FrontEndPlaylistData.PlaylistAccess.bDisplayAsLimitedTime ? "EPlaylistAdvertisementType::Updated" : "EPlaylistAdvertisementType::None")}, bForcePlaylistOff=false, bEnabled={ToLowerBool(FrontEndPlaylistData.PlaylistAccess.bEnabled)}, bVisibleWhenDisabled={ToLowerBool(FrontEndPlaylistData.PlaylistAccess.bVisibleWhenDisabled)}, CategoryIndex={FrontEndPlaylistData.PlaylistAccess.CategoryIndex}, DisplayPriority={FrontEndPlaylistData.PlaylistAccess.DisplayPriority}))"
+        : $"FrontEndPlaylistData=(PlaylistName=\"{FrontEndPlaylistData.PlaylistName}\", PlaylistAccess=({string.Join(",", FrontEndPlaylistData.PlaylistAccess.GetType().GetProperties().Select(x => $"{x.Name}={x.GetValue(FrontEndPlaylistData.PlaylistAccess)}"))}))";
 
     public class IniFrontEndPlaylistDataArguments {
         public required string PlaylistName { get; init; }
@@ -106,7 +111,7 @@ public class IniFrontEndPlaylistData : IniElement {
         public class IniPlaylistAccessArguments {
             public bool bEnabled { get; init; } = true;
             public bool bIsDefaultPlaylist { get; init; } = false;
-            public bool bVisibleWhenDisabled { get; init; } = false;
+            public bool bVisibleWhenDisabled { get; init; } = true;
             public bool bDisplayAsNew { get; init; } = false;
             public int CategoryIndex { get; init; } = 0;
             public bool bDisplayAsLimitedTime { get; init; } = false;
