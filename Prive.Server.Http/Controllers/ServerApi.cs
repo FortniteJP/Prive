@@ -21,6 +21,10 @@ public class ServerApiController : ControllerBase {
     
     [HttpGet("ip")] [NoAuth]
     public string GetIP() => IP;
+
+    [HttpGet("activeplayers")] [NoAuth]
+    public async Task<int> GetActivePlayers() => (MatchMakingController.MatchMakingManagerLateGameSolo.IsListening ? await MatchMakingController.MatchMakingManagerLateGameSolo.Communicator.GetPlayersLeft() : MatchMakingController.MatchMakingManagerLateGameSolo.Clients.Count)
+                                                + (MatchMakingController.MatchMakingManagerSolo.IsListening ? await MatchMakingController.MatchMakingManagerSolo.Communicator.GetPlayersLeft() : MatchMakingController.MatchMakingManagerSolo.Clients.Count);
     
     [HttpPost("start")] [NoAuth]
     public IActionResult Start() {

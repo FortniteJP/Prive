@@ -140,6 +140,7 @@ public class AccountController : ControllerBase {
         var clientToken = ClientTokens.FirstOrDefault(x => x.TokenString == accessTokenString);
 
         if (authToken is null || clientToken is null) {
+            Console.WriteLine($"AuthToken: {(authToken?.TokenString ?? "NULL")}, ClientToken: {(clientToken?.TokenString ?? "NULL")}");
             Response.StatusCode = 404;
             return EpicError.Create(
                 "errors.com.epicgames.account.auth_token.unknown_oauth_session", 18051,

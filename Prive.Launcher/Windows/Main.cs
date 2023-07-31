@@ -1,10 +1,16 @@
 using System.IO.Compression;
 
+namespace Prive.Launcher;
+
 public class MainWindow : Window {
     public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Client.Native.dll");
     public static readonly string FortniteConsoleDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/FortniteConsole.dll");
     public static CancellationTokenSource? DownloadCTS { get; set; }
 
+    public static HttpClient Http { get; } = new();
+    public Timer ActivePlayersTimer { get; }
+
+    public Label ActivePlayersLabel { get; set; } = default!;
     public Button LaunchButton { get; set; } = default!;
     public Button DownloadButton { get; set; } = default!;
     
@@ -17,6 +23,14 @@ public class MainWindow : Window {
                 X = 1
             }
         );
+        
+        ActivePlayersLabel = new Label() {
+            Text = "Active players: Loading...",
+            X = 1,
+            Y = 1
+        };
+        ActivePlayersTimer = new(new(UpdateActivePlayers), null, TimeSpan.Zero, TimeSpan.FromSeconds(15));
+        Add(ActivePlayersLabel);
 
         DownloadClientNativeDll();
         DownloadFortniteConsoleDll();
@@ -69,6 +83,7 @@ public class MainWindow : Window {
             LaunchButton.Text = "Running...";
             LaunchButton.Enabled = false;
             DownloadButton.Enabled = false;
+            ActivePlayersTimer.Change(TimeSpan.Zero, TimeSpan.FromMinutes(2));
 
             Task.Run(() => {
                 Instance.InjectDll(ClientNativeDllLocation);
@@ -77,6 +92,7 @@ public class MainWindow : Window {
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
                 DownloadButton.Enabled = true;
+                ActivePlayersTimer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(15));
             });
         };
         Add(LaunchButton);
@@ -126,7 +142,6 @@ public class MainWindow : Window {
             }
         };
         Add(DownloadButton);
-        // Make a download server before implementing this...
 
         #if DEBUG
         var dumpSDKButton = new Button() {
@@ -144,24 +159,33 @@ public class MainWindow : Window {
 
     private static async void DownloadClientNativeDll() {
         if (Path.GetDirectoryName(ClientNativeDllLocation)! is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-        
-        var zipBin = await (new HttpClient()).GetByteArrayAsync("https://nightly.link/FortniteJP/Prive/workflows/Prive.Client.Native/main/Prive.Client.Native.zip?h=6080f158f6a0765a5f4f2619c808f5fddfc58ee8");
-        
-        using (var ms = new MemoryStream(zipBin))
-        using (var archive = new ZipArchive(ms, ZipArchiveMode.Read)) {
-            var entry = archive.GetEntry("Prive.Client.Native.dll");
-            if (entry is null) throw new FileNotFoundException("Failed to get Prive.Client.Native.dll from zip archive.");
-            using (var stream = entry.Open())
-            using (var fs = new FileStream(ClientNativeDllLocation, FileMode.Create)) {
-                await stream.CopyToAsync(fs);
-            }
-        }
+
+        var zipBin = await Http.GetByteArrayAsync("https://fortnite.day/client");
+
+        using var ms = new MemoryStream(zipBin);
+        using var archive = new ZipArchive(ms, ZipArchiveMode.Read);
+        var entry = archive.GetEntry("Prive.Client.Native.dll") ?? throw new FileNotFoundException("Failed to get Prive.Client.Native.dll from zip archive.");
+        using var stream = entry.Open();
+        using var fs = new FileStream(ClientNativeDllLocation, FileMode.Create);
+        await stream.CopyToAsync(fs);
     }
 
     private static async void DownloadFortniteConsoleDll() {
         if (Path.GetDirectoryName(FortniteConsoleDllLocation)! is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
         using var fs = new FileStream(FortniteConsoleDllLocation, FileMode.Create);
-        await (await (new HttpClient()).GetStreamAsync("https://fortnite.day/console")).CopyToAsync(fs);
+        await (await Http.GetStreamAsync("https://fortnite.day/console")).CopyToAsync(fs);
     }
+
+    public async void UpdateActivePlayers(object? state) {
+        var playersLeft = -1;
+        try {
+            playersLeft = await GetActivePlayers();
+        } catch (Exception) {
+            // Utils.MessageBox(e.ToString());
+        }
+        ActivePlayersLabel.Text = $"Active players: {playersLeft}";
+    }
+
+    public static async Task<int> GetActivePlayers() => int.Parse(await Http.GetStringAsync("https://api.fortnite.day/serverapi/activeplayers"));
 }

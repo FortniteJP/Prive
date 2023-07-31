@@ -8,7 +8,7 @@ using Microsoft.Win32;
 
 namespace Prive.Launcher;
 
-public static class Utils {
+public static partial class Utils {
     public const string ShippingExecutableName = "FortniteClient-Win64-Shipping.exe";
 
     // https://stackoverflow.com/questions/281640/how-do-i-get-a-human-readable-file-size-in-bytes-abbreviation-using-net, https://stackoverflow.com/a/4975942
@@ -32,8 +32,7 @@ public static class Utils {
 
     public static bool EnableConsoleMode(uint m) {
         var consoleHandle = GetStdHandle(-10);
-        var mode = 0u;
-        if (!GetConsoleMode(consoleHandle, out mode)) {
+        if (!GetConsoleMode(consoleHandle, out uint mode)) {
             return false;
         }
         mode |= m;
@@ -42,8 +41,7 @@ public static class Utils {
 
     public static bool DisableConsoleMode(uint m) {
         var consoleHandle = GetStdHandle(-10);
-        var mode = 0u;
-        if (!GetConsoleMode(consoleHandle, out mode)) {
+        if (!GetConsoleMode(consoleHandle, out var mode)) {
             return false;
         }
         mode &= ~m;
@@ -59,7 +57,7 @@ public static class Utils {
         var loadLibrary = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
         var size = (uint)((filePath.Length + 1) * Marshal.SizeOf(typeof(char)));
         var address = VirtualAllocEx(handle, IntPtr.Zero, size, 0x1000 | 0x2000, 4);
-        
+
         WriteProcessMemory(handle, address, Encoding.Default.GetBytes(filePath), size, out _);
         CreateRemoteThread(handle, IntPtr.Zero, 0, loadLibrary, address, 0, IntPtr.Zero);
     }
@@ -73,8 +71,8 @@ public static class Utils {
         if (handle == IntPtr.Zero) return false;
         if (IsIconic(handle)) ShowWindowAsync(handle, 9); // SW_RESTORE
 
-        var foregroundId = GetWindowThreadProcessId(GetForegroundWindow(), out var processId);
-        var targetId = GetWindowThreadProcessId(handle, out processId);
+        var foregroundId = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+        var targetId = GetWindowThreadProcessId(handle, out _);
 
         AttachThreadInput((uint)targetId, (uint)foregroundId, true);
         var ret = SetForegroundWindow(handle);
@@ -112,87 +110,99 @@ public static class Utils {
     public const uint ENABLE_QUICK_EDIT = 0x0040;
     public const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
 
-    [DllImport("user32.dll")]
-    private static extern bool IsZoomed(IntPtr hWnd);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsZoomed(IntPtr hWnd);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetConsoleWindow();
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr GetConsoleWindow();
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetStdHandle(int nStdHandle);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr GetStdHandle(int nStdHandle);
 
-    [DllImport("kernel32.dll")]
-    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
 
-    [DllImport("kernel32.dll")]
-    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
-    [DllImport("user32.dll")]
-    private static extern bool DeleteMenu(IntPtr hMenu, int nPosition, int wFlags);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DeleteMenu(IntPtr hMenu, int nPosition, int wFlags);
 
-    [DllImport("user32.dll")]
-    private static extern bool DrawMenuBar(IntPtr hWnd);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DrawMenuBar(IntPtr hWnd);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetSystemMenu(IntPtr hWnd, bool bRevert);
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetSystemMenu(IntPtr hWnd, [MarshalAs(UnmanagedType.Bool)] bool bRevert);
 
-    [DllImport("kernel32.dll")]
-    private static extern Int32 SuspendThread(IntPtr hThread);
+    [LibraryImport("kernel32.dll")]
+    private static partial Int32 SuspendThread(IntPtr hThread);
 
-    [DllImport("kernel32.dll")]
-    private static extern int ResumeThread(IntPtr hThread);
+    [LibraryImport("kernel32.dll")]
+    private static partial int ResumeThread(IntPtr hThread);
 
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, int dwThreadId);
+    [LibraryImport("kernel32.dll")]
+    private static partial IntPtr OpenThread(int dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, int dwThreadId);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hHandle);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(IntPtr hHandle);
 
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+    [LibraryImport("kernel32.dll")]
+    private static partial IntPtr OpenProcess(int dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, int dwProcessId);
 
-    [DllImport("kernel32", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)]
-    private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+    [LibraryImport("kernel32", SetLastError = true, StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(System.Runtime.InteropServices.Marshalling.AnsiStringMarshaller))]
+    private static partial IntPtr GetProcAddress(IntPtr hModule, string procName);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr GetModuleHandle(string lpModuleName);
+    [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial IntPtr GetModuleHandle(string lpModuleName);
 
-    [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
-    private static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out UIntPtr lpNumberOfBytesWritten);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out UIntPtr lpNumberOfBytesWritten);
 
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+    [LibraryImport("kernel32.dll")]
+    private static partial IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
 
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetForegroundWindow(IntPtr hWnd);
 
-    [DllImport("user32.dll")]
-    private static extern bool IsIconic(IntPtr hWnd);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsIconic(IntPtr hWnd);
 
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetForegroundWindow();
 
-    [DllImport("user32.dll")]
-    private static extern int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+    [LibraryImport("user32.dll")]
+    private static partial int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
 
-    [DllImport("user32.dll")]
-    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
 
-    [DllImport("user32.dll")]
-    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
-    [DllImport("user32.dll")]
-    private static extern int MessageBox(IntPtr hWnd, string text, string caption, int options);
+    [LibraryImport("user32.dll", EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int MessageBox(IntPtr hWnd, string text, string caption, int options);
 
     [DllImport("Comdlg32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     public static extern bool GetOpenFileName([In, Out] ref OpenFileName ofn);
-    
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     public struct OpenFileName {
         public int lStructSize;

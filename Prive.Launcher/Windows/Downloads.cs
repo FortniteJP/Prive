@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SharpCompress.Archives.Rar;
 
+namespace Prive.Launcher;
+
 public class DownloadsWindow : Window {
     public const string SevenZipUrl = "https://www.7-zip.org/a/7zr.exe";
     public static string SevenZipPath { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/7zr.exe");
@@ -16,6 +18,8 @@ public class DownloadsWindow : Window {
         #endif
     };
 
+    public static HttpClient Http { get; } = new();
+
     public DownloadsWindow() : base("Prive") {
         Console.Title = "Prive Download";
         ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
@@ -24,7 +28,7 @@ public class DownloadsWindow : Window {
         // USING THIS IS FASTER
         // if (!File.Exists(SevenZipPath)) Task.Run(async () => {
         //     using var file = File.Create(SevenZipPath);
-        //     await file.WriteAsync(await new HttpClient().GetByteArrayAsync(SevenZipUrl));
+        //     await file.WriteAsync(await Http.GetByteArrayAsync(SevenZipUrl));
         // });
 
         var cancelButton = new Button() {
@@ -58,9 +62,8 @@ public class DownloadsWindow : Window {
     }
 
     public static long GetContentLength(string url) {
-        using var client = new HttpClient();
         var request = new HttpRequestMessage(HttpMethod.Head, url);
-        var response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).Result;
+        var response = Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).Result;
         return response.Content.Headers.ContentLength ?? throw new NullReferenceException();
     }
 
@@ -74,10 +77,9 @@ public class DownloadsWindow : Window {
         if (!File.Exists(info.Path)) await File.WriteAllBytesAsync(info.Path, new byte[0]);
         var downloaded = new FileInfo(info.Path).Length;
 
-        var client = new HttpClient();
         var request = new HttpRequestMessage(HttpMethod.Get, info.Url);
         request.Headers.Range = new(downloaded, null);
-        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable) {
             progressCallback?.Invoke(info.Length, info.Length, true);
             return;

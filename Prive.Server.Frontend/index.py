@@ -19,6 +19,7 @@ oauth2 = Oauth2(
 
 DISCORD_URL = "https://discord.gg/uxRmrFngaa"
 LAUNCHER_URL = "https://nightly.link/FortniteJP/Prive/workflows/Prive.Launcher/main/Prive.Launcher.zip"
+CLIENT_URL = "https://nightly.link/FortniteJP/Prive/workflows/Prive.Client.Native/main/Prive.Client.Native.zip"
 DISPLAYNAME_PATTERN = re.compile(r"^[a-zA-Z0-9]{3,16}$")
 
 @server.listener("before_server_start")
@@ -41,6 +42,10 @@ async def Rdiscord(request: sanic.Request):
 @server.get("/launcher")
 async def Rlauncher(request: sanic.Request):
     return sanic.response.redirect(LAUNCHER_URL)
+
+@server.get("/client")
+async def Rclient(request: sanic.Request):
+    return sanic.response.redirect(CLIENT_URL)
 
 @server.get("/console")
 async def Rconsole(request: sanic.Request):
