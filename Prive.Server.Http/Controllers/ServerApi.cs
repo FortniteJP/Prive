@@ -16,8 +16,11 @@ public class ServerApiController : ControllerBase {
     public static ServerInstance? Instance { get => Program.Instance; set => Program.Instance = value; }
     public static ServerInstanceCommunicator CClient { get => Program.CClient; }
 
-    public string IP = Dns.GetHostEntry("xthe.org").AddressList.First().ToString();
+    public static string IP = Dns.GetHostEntry("xthe.org").AddressList.First().ToString();
     public bool IsFromAuthorized() => !Request.Headers.ContainsKey("X-Forwarded-For") || Request.Headers["X-Forwarded-For"].Select(x => x?.Split(", ")).Any(x => x?.Any(x => x == IP) ?? false);
+    
+    [HttpGet("ip")] [NoAuth]
+    public string GetIP() => IP;
     
     [HttpPost("start")] [NoAuth]
     public IActionResult Start() {

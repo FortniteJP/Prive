@@ -60,7 +60,7 @@ public class MatchMakingController : ControllerBase {
             serverAddress = "127.0.0.1",
             serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #else
-            serverAddress = "180.52.134.178",
+            serverAddress = Controllers.ServerApiController.IP,
             serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #endif
             totalPlayers = 45,
