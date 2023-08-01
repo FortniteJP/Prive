@@ -29,7 +29,7 @@ public class MainWindow : Window {
             X = 1,
             Y = 1
         };
-        ActivePlayersTimer = new(new(UpdateActivePlayers), null, TimeSpan.Zero, TimeSpan.FromSeconds(15));
+        ActivePlayersTimer = new(new(UpdateActivePlayers), null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
         Add(ActivePlayersLabel);
 
         DownloadClientNativeDll();
@@ -83,7 +83,8 @@ public class MainWindow : Window {
             LaunchButton.Text = "Running...";
             LaunchButton.Enabled = false;
             DownloadButton.Enabled = false;
-            ActivePlayersTimer.Change(TimeSpan.Zero, TimeSpan.FromMinutes(2));
+            ActivePlayersTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            ActivePlayersLabel.Text = $"Active players: -1";
 
             Task.Run(() => {
                 Instance.InjectDll(ClientNativeDllLocation);
@@ -92,7 +93,7 @@ public class MainWindow : Window {
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
                 DownloadButton.Enabled = true;
-                ActivePlayersTimer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(15));
+                ActivePlayersTimer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(30));
             });
         };
         Add(LaunchButton);
