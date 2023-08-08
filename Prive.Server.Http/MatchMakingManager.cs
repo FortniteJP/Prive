@@ -35,6 +35,7 @@ public class MatchMakingManager {
         await SendInitialThings(client);
         var tcs = new TaskCompletionSource<object?>();
         Clients.Add(client, (tcs, DateTime.Now));
+        await Global.Discord.UpdateEmbedAsync(this);
         await tcs.Task;
         Clients.Remove(client);
     }
@@ -158,6 +159,7 @@ public class MatchMakingManager {
         }
         await Task.Delay(1000 * 50);
         await Communicator.StartBus();
+        await Global.Discord.UpdateEmbedAsync(this);
         WatchTimer.Change(0, 1000);
         await Communicator.InfiniteAmmo(false);
         await Communicator.InfiniteMaterials(false);
@@ -193,6 +195,7 @@ public class MatchMakingManager {
         IsListening = true;
     }
 
+    private int _LastPlayersLeft = 0;
     public async void Watch(object? state) {
         Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch");
         try {
@@ -204,6 +207,10 @@ public class MatchMakingManager {
                 return;
             }
             var playersLeft = await Communicator.GetPlayersLeft();
+            if (playersLeft != _LastPlayersLeft) {
+                await Global.Discord.UpdateEmbedAsync(this);
+            }
+            _LastPlayersLeft = playersLeft;
             if (playersLeft == 0) {
                 WatchTimer.Change(Timeout.Infinite, Timeout.Infinite);
                 Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: No players left!");

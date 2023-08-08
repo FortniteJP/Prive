@@ -89,6 +89,8 @@ public class Program {
 
         // new Thread(RunTcpListener).Start();
 
+        Task.Run(async () => await Global.Discord.StartAsync());
+
         app.Run();
 
         // XMPPServer.Stop();
