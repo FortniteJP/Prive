@@ -64,7 +64,7 @@ public static partial class Utils {
 
     public static bool IsMaximized() => IsZoomed(GetConsoleWindow());
 
-    public static bool SetForegroundWindow(Process process) {
+    /* public static bool OSetForegroundWindow(Process process) {
         var handle = process.MainWindowHandle;
         // if (SetTopMostWindow(handle, true)) SetTopMostWindow(handle, false);
         SetTopMostWindow(handle, true);
@@ -79,7 +79,16 @@ public static partial class Utils {
         AttachThreadInput((uint)targetId, (uint)foregroundId, false);
         SetTopMostWindow(handle, false);
         return ret;
-    }
+    } */
+
+    public static bool SetForegroundWindow(Process process) => EnumWindows(new((hwnd, _) => {
+        GetWindowThreadProcessId(hwnd, out var pid);
+        if (pid == process.Id) {
+            SetForegroundWindow(hwnd);
+            BringWindowToTop(hwnd);
+        }
+        return true;
+    }), IntPtr.Zero);
 
     public static bool SetTopMostWindow(IntPtr handle, bool isTopMost) => SetWindowPos(handle, isTopMost ? -1 : -2, 0, 0, 0, 0, (uint)(isTopMost ? 0x0001 | 0x0002 : 0x0001 | 0x0002 | 0x0040));
 
@@ -100,6 +109,8 @@ public static partial class Utils {
             SuspendThread(pOpenThread);
         }
     }
+
+    public static void SwitchWindow(Process process, bool fUnknown = false) => SwitchToThisWindow(process.MainWindowHandle, fUnknown);
 
     public const int MF_BYCOMMAND = 0x00000000;
     public const int SC_CLOSE = 0xF060;
@@ -199,6 +210,19 @@ public static partial class Utils {
 
     [LibraryImport("user32.dll", EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
     private static partial int MessageBox(IntPtr hWnd, string text, string caption, int options);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial void SwitchToThisWindow(IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool fUnknown);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool BringWindowToTop(IntPtr hWnd);
+
+    public delegate bool EnumWindowsDelegate(IntPtr hWnd, IntPtr lParam);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool EnumWindows(EnumWindowsDelegate lpEnumFunc, IntPtr lParam);
 
     [DllImport("Comdlg32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     public static extern bool GetOpenFileName([In, Out] ref OpenFileName ofn);

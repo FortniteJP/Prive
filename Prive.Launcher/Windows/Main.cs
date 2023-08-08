@@ -41,13 +41,7 @@ public class MainWindow : Window {
         };
         settingsButton.Clicked += () => {
             if (SettingsProcess is not null && !SettingsProcess.HasExited) {
-                // if (!Utils.SetForegroundWindow(SettingsProcess)) { // Doesn't work...
-                //     #if DEBUG
-                //     Utils.MessageBox("Failed to set foreground window!", "Prive Debug", 0x00000000 | 0x00000010);
-                //     #endif
-                // }
-                SettingsProcess.Kill();
-                SettingsProcess = CreateNewWindow<SettingsWindow>();
+                Utils.SetForegroundWindow(SettingsProcess);
             } else {
                 SettingsProcess = CreateNewWindow<SettingsWindow>();
             }
@@ -141,8 +135,26 @@ public class MainWindow : Window {
                 LaunchButton.Text = "Loading...";
                 LaunchButton.Enabled = false;
             }
+            Console.Title = "Prive";
         };
         Add(DownloadButton);
+
+        var serverButton = new Button() {
+            Text = "Server",
+            X = 1,
+            Y = Pos.Bottom(this) - 3,
+        };
+        serverButton.Clicked += () => {
+            ServerProcess?.Refresh();
+            if (ServerProcess is not null && !ServerProcess.HasExited) {
+                Utils.SetForegroundWindow(ServerProcess);
+            } else {
+                ServerProcess = CreateNewWindow<ServerWindow>();
+            }
+        };
+        #if DEBUG
+        Add(serverButton);
+        #endif
 
         #if DEBUG
         var dumpSDKButton = new Button() {

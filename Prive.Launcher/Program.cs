@@ -17,9 +17,10 @@ public class Program {
     public static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
     public static readonly bool IsServer = !IsWindows; // Run server on Linux
 
-    public static ClientInstance? Instance; // TODO: Support multiple instances
+    public static ClientInstance? Instance { get; set; }
 
-    public static Process? SettingsProcess = null;
+    public static Process? SettingsProcess { get; set; }
+    public static Process? ServerProcess { get; set; }
 
     public static void Main(string[] args) {
         if (IsWindows && !args.Contains("/conhost")) {
@@ -54,6 +55,7 @@ public class Program {
         
         var cls = typeof(MainWindow);
         if (args.Contains("/w:settings")) cls = typeof(SettingsWindow);
+        if (args.Contains("/w:server")) cls = typeof(ServerWindow);
         var errorHistory = new Dictionary<Type, int>();
         try {
             Application.Run((Toplevel)Activator.CreateInstance(cls)!, (e) => {
