@@ -89,7 +89,7 @@ public class Program {
 
         // new Thread(RunTcpListener).Start();
 
-        Task.Run(async () => await Global.Discord.StartAsync());
+        Task.Run(async () => await DiscordRest.StartAsync());
 
         app.Run();
 

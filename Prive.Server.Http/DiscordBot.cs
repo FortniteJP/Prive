@@ -3,7 +3,7 @@ using Discord.Rest;
 
 namespace Prive.Server.Http;
 
-public class DiscordBot {
+public class MyDiscordRestClient {
     public const ulong GuildId = 1008378981109731388;
     public const ulong ChannelId = 1138395634974588938;
 
@@ -13,7 +13,7 @@ public class DiscordBot {
     private DiscordRestClient Bot { get; }
     private readonly SemaphoreSlim UpdateEmbedLock = new(1, 1);
 
-    public DiscordBot() {
+    public MyDiscordRestClient() {
         Bot = new();
         Bot.LoggedIn += OnLogin;
         Bot.Log += x => {

@@ -23,7 +23,7 @@ public static class Global {
     public static List<Party> Parties { get; } = new();
     public static List<XMPPClient> XMPPClients { get; } = new();
 
-    public static DiscordBot Discord { get; } = new();
+    public static MyDiscordRestClient DiscordRest { get; } = new();
 
     public static int Port { get; set; } = 20000;
 
