@@ -11,6 +11,7 @@ public class MatchMakingManager {
     public DateTime MatchMakingStartedAt { get; internal set; } = DateTime.Now;
     public DateTime LastMatchStartedAt { get; internal set; } = new();
     public bool IsListening { get; internal set; } = false;
+    public int PlayersLeft { get; internal set; } = 0;
     public int TickInterval { get; init; }
 
     public Dictionary<WebSocket, (TaskCompletionSource<object?>, DateTime)> Clients { get; } = new();
@@ -29,6 +30,7 @@ public class MatchMakingManager {
         // CheckConnectionTimer = new(new(CheckConnection), null, 0, 1000);
         Instance = new(Controllers.ServerApiController.ShippingLocation);
         Communicator = new("[::1]", 12345 + (playlistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? 1 : 0));
+        Task.Run(async () => { await Task.Delay(5000); await Global.Discord.UpdateEmbedAsync(this); });
     }
 
     public async Task HandleClient(WebSocket client) {
@@ -195,7 +197,6 @@ public class MatchMakingManager {
         IsListening = true;
     }
 
-    private int _LastPlayersLeft = 0;
     public async void Watch(object? state) {
         Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch");
         try {
@@ -207,10 +208,11 @@ public class MatchMakingManager {
                 return;
             }
             var playersLeft = await Communicator.GetPlayersLeft();
-            if (playersLeft != _LastPlayersLeft) {
+            if (playersLeft != PlayersLeft) {
+                Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: Players left changed from {PlayersLeft} to {playersLeft}");
                 await Global.Discord.UpdateEmbedAsync(this);
             }
-            _LastPlayersLeft = playersLeft;
+            PlayersLeft = playersLeft;
             if (playersLeft == 0) {
                 WatchTimer.Change(Timeout.Infinite, Timeout.Infinite);
                 Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: No players left!");

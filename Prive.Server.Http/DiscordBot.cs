@@ -11,10 +11,15 @@ public class DiscordBot {
     public readonly string TokenLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/discordtoken.txt");
 
     private DiscordRestClient Bot { get; }
+    private readonly SemaphoreSlim UpdateEmbedLock = new(1, 1);
 
     public DiscordBot() {
         Bot = new();
         Bot.LoggedIn += OnLogin;
+        Bot.Log += x => {
+            Console.WriteLine($"Discord: {x.Message}");
+            return Task.CompletedTask;
+        };
     }
 
     public async Task StartAsync(string? token = null) {
@@ -27,33 +32,45 @@ public class DiscordBot {
     }
 
     public async Task UpdateEmbedAsync(MatchMakingManager manager) {
-        await EmbedMessage.ModifyAsync(x => {
-            var isDefaultSolo = manager.PlaylistId == "Playlist_DefaultSolo";
-            x.Embeds.Value[isDefaultSolo ? 0 : 1] = new EmbedBuilder() {
-                Color = Color.Purple,
-                Author = new() {
-                    Name = isDefaultSolo ? "Default Solo" : "LateGame Solo"
-                },
-                Title = isDefaultSolo ? "ソロ" : "レイトゲーム ソロ",
-                Fields = new() {
-                    new() {
-                        Name = "ステータス",
-                        Value = manager.IsListening ? $"マッチ中" : "マッチメイキング中",
-                        IsInline = true
+        Console.WriteLine("Updating embed");
+        try {
+            await UpdateEmbedLock.WaitAsync();
+            await EmbedMessage.ModifyAsync(async x => {
+                var isDefaultSolo = manager.PlaylistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase);
+                var embeds = EmbedMessage.Embeds.ToArray();
+                embeds[isDefaultSolo ? 0 : 1] = new EmbedBuilder() {
+                    Color = Color.Purple,
+                    Author = new() {
+                        Name = isDefaultSolo ? "Default Solo" : "LateGame Solo"
                     },
-                    new() {
-                        Name = "プレイ人数",
-                        Value = manager.Communicator.GetPlayersLeft().ToString(),
-                        IsInline = true
-                    },
-                    new() {
-                        Name = "待機人数",
-                        Value = manager.Clients.Count.ToString(),
-                        IsInline = true
-                    },
-                }
-            }.Build();
-        });
+                    Title = isDefaultSolo ? "ソロ" : "レイトゲーム ソロ",
+                    Fields = new() {
+                        new() {
+                            Name = "ステータス",
+                            Value = manager.IsListening ? "マッチ中" : "マッチメイキング中",
+                            IsInline = true
+                        },
+                        new() {
+                            Name = "プレイ人数",
+                            Value = manager.IsListening ? manager.PlayersLeft.ToString() : "N/A",
+                            IsInline = true
+                        },
+                        new() {
+                            Name = "待機人数",
+                            Value = manager.Clients.Count.ToString(),
+                            IsInline = true
+                        },
+                    }
+                }.Build();
+                x.Embeds = embeds;
+            });
+            await EmbedMessage.UpdateAsync();
+        } catch (Exception e) {
+            Console.WriteLine($"An exception thrown while updating embed {manager.PlaylistId}");
+            Console.WriteLine(e);
+        }
+        UpdateEmbedLock.Release();
+        Console.WriteLine("Embed updated");
     }
 
     private Task OnLogin() {

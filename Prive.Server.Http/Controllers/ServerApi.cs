@@ -23,9 +23,19 @@ public class ServerApiController : ControllerBase {
     public string GetIP() => IP;
 
     [HttpGet("activeplayers")] [NoAuth]
-    public async Task<int> GetActivePlayers() => (MatchMakingController.MatchMakingManagerLateGameSolo.IsListening ? await MatchMakingController.MatchMakingManagerLateGameSolo.Communicator.GetPlayersLeft() : MatchMakingController.MatchMakingManagerLateGameSolo.Clients.Count)
-                                                + (MatchMakingController.MatchMakingManagerSolo.IsListening ? await MatchMakingController.MatchMakingManagerSolo.Communicator.GetPlayersLeft() : MatchMakingController.MatchMakingManagerSolo.Clients.Count);
-    
+    public async Task<int> GetActivePlayers() {
+        var activePlayers = 0;
+        activePlayers += MatchMakingController.MatchMakingManagerLateGameSolo.Clients.Count;
+        activePlayers += MatchMakingController.MatchMakingManagerSolo.Clients.Count;
+        try {
+            activePlayers += await MatchMakingController.MatchMakingManagerLateGameSolo.Communicator.GetPlayersLeft();
+        } catch {}
+        try {
+            activePlayers += await MatchMakingController.MatchMakingManagerSolo.Communicator.GetPlayersLeft();
+        } catch {}
+        return activePlayers;
+    }
+
     [HttpPost("start")] [NoAuth]
     public IActionResult Start() {
         if (!IsFromAuthorized()) return Unauthorized();
