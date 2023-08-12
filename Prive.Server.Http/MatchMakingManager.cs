@@ -159,6 +159,7 @@ public class MatchMakingManager {
                 i--;
             }
         }
+        await DiscordRest.UpdateEmbedAsync(this);
         await Task.Delay(1000 * 50);
         await Communicator.StartBus();
         await DiscordRest.UpdateEmbedAsync(this);
@@ -210,9 +211,9 @@ public class MatchMakingManager {
             var playersLeft = await Communicator.GetPlayersLeft();
             if (playersLeft != PlayersLeft) {
                 Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: Players left changed from {PlayersLeft} to {playersLeft}");
+                PlayersLeft = playersLeft;
                 await DiscordRest.UpdateEmbedAsync(this);
             }
-            PlayersLeft = playersLeft;
             if (playersLeft == 0) {
                 WatchTimer.Change(Timeout.Infinite, Timeout.Infinite);
                 Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: No players left!");
@@ -221,6 +222,7 @@ public class MatchMakingManager {
                 await Communicator.Restart();
                 await Task.Delay(1000);
                 Instance.Kill();
+                await DiscordRest.UpdateEmbedAsync(this);
                 return;
             }
         } catch (Exception e) {

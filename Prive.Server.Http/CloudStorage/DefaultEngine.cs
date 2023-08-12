@@ -166,6 +166,7 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("LogProcess", "All"),
                 new IniElementKeyValue("LogScript", "All"),
                 new IniElementKeyValue("LogExec", "All"),
+                new IniElementKeyValue("LogWindows", "All"),
             }
         },
         #endif
