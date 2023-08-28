@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 
 namespace Prive.Launcher;
 
-public class Program {
+public static class Program {
     public static readonly string ExecutingPath = Process.GetCurrentProcess().MainModule!.FileName;
     public static readonly string ExecutingAssemblyPath = Assembly.GetExecutingAssembly().Location.Replace(".dll", ".exe");
     public static string ExecutablePath { get => ExecutingPath.EndsWith("dotnet.exe") ? ExecutingAssemblyPath : ExecutingPath; }

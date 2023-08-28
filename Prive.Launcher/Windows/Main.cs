@@ -5,6 +5,7 @@ namespace Prive.Launcher;
 public class MainWindow : Window {
     public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Client.Native.dll");
     public static readonly string FortniteConsoleDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/FortniteConsole.dll");
+    public static readonly string Dll1Location = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Dll1.dll");
     public static CancellationTokenSource? DownloadCTS { get; set; }
 
     public static HttpClient Http { get; } = new();
@@ -34,6 +35,10 @@ public class MainWindow : Window {
 
         DownloadClientNativeDll();
         DownloadFortniteConsoleDll();
+
+        try {
+            DownloadDll1();
+        } catch {}
 
         var settingsButton = new Button() {
             Text = "Settings",
@@ -82,7 +87,8 @@ public class MainWindow : Window {
 
             Task.Run(() => {
                 Instance.InjectDll(ClientNativeDllLocation);
-                Task.Run(async() => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), FortniteConsoleDllLocation));
+                var dllPath = config.GamePath.Equals($@"C:\Program Files\Epic Games\Fortnite\FortniteGame\Binaries\{Utils.ShippingExecutableName}", StringComparison.InvariantCultureIgnoreCase) ? Dll1Location : FortniteConsoleDllLocation;
+                Task.Run(async () => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), dllPath));
                 Instance.WaitForExit();
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
@@ -171,7 +177,7 @@ public class MainWindow : Window {
     }
 
     private static async void DownloadClientNativeDll() {
-        if (Path.GetDirectoryName(ClientNativeDllLocation)! is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        if (Path.GetDirectoryName(ClientNativeDllLocation) is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir!);
 
         var zipBin = await Http.GetByteArrayAsync("https://fortnite.day/client");
 
@@ -184,10 +190,17 @@ public class MainWindow : Window {
     }
 
     private static async void DownloadFortniteConsoleDll() {
-        if (Path.GetDirectoryName(FortniteConsoleDllLocation)! is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        if (Path.GetDirectoryName(FortniteConsoleDllLocation) is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir!);
 
         using var fs = new FileStream(FortniteConsoleDllLocation, FileMode.Create);
         await (await Http.GetStreamAsync("https://fortnite.day/console")).CopyToAsync(fs);
+    }
+
+    private static async void DownloadDll1() {
+        if (Path.GetDirectoryName(Dll1Location) is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir!);
+
+        using var fs = new FileStream(Dll1Location, FileMode.Create);
+        await (await Http.GetStreamAsync("https://fortnite.day/dll1")).CopyToAsync(fs);
     }
 
     public async void UpdateActivePlayers(object? state) {

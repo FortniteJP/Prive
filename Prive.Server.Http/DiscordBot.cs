@@ -35,7 +35,7 @@ public class MyDiscordRestClient {
         Console.WriteLine("Updating embed");
         try {
             await UpdateEmbedLock.WaitAsync();
-            await EmbedMessage.ModifyAsync(async x => {
+            await EmbedMessage.ModifyAsync(x => {
                 var isDefaultSolo = manager.PlaylistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase);
                 var embeds = EmbedMessage.Embeds.ToArray();
                 embeds[isDefaultSolo ? 0 : 1] = new EmbedBuilder() {
