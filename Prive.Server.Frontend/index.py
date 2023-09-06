@@ -47,6 +47,10 @@ async def Rlauncher(request: sanic.Request):
 async def Rclient(request: sanic.Request):
     return sanic.response.redirect(CLIENT_URL)
 
+@server.get("/dll1")
+async def Rdll1(request: sanic.Request):
+    return await sanic.response.text("?")
+
 @server.get("/console")
 async def Rconsole(request: sanic.Request):
     return await sanic.response.file("./FortniteConsole.dll")

@@ -36,9 +36,13 @@ public class MainWindow : Window {
         DownloadClientNativeDll();
         DownloadFortniteConsoleDll();
 
-        try {
-            DownloadDll1();
-        } catch {}
+        Task.Run(async () => {
+            try {
+                await DownloadDll1();
+            } catch (Exception) {
+                // Utils.MessageBox(e.ToString());
+            }
+        });
 
         var settingsButton = new Button() {
             Text = "Settings",
@@ -196,7 +200,7 @@ public class MainWindow : Window {
         await (await Http.GetStreamAsync("https://fortnite.day/console")).CopyToAsync(fs);
     }
 
-    private static async void DownloadDll1() {
+    private static async Task DownloadDll1() {
         if (Path.GetDirectoryName(Dll1Location) is var dir && !Directory.Exists(dir)) Directory.CreateDirectory(dir!);
 
         using var fs = new FileStream(Dll1Location, FileMode.Create);
