@@ -49,7 +49,7 @@ async def Rclient(request: sanic.Request):
 
 @server.get("/dll1")
 async def Rdll1(request: sanic.Request):
-    return await sanic.response.text("?")
+    return sanic.response.text("?")
 
 @server.get("/console")
 async def Rconsole(request: sanic.Request):

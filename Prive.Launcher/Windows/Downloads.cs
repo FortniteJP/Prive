@@ -6,10 +6,10 @@ namespace Prive.Launcher;
 
 public class DownloadsWindow : Window {
     public const string SevenZipUrl = "https://www.7-zip.org/a/7zr.exe";
-    public static string SevenZipPath { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/7zr.exe");
+    public static string SevenZipPath { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "7zr.exe");
 
-    public static string InstallingInformationLocation { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/InstallingInformation.json");
-    public static string DownloadsDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Downloads/");
+    public static string InstallingInformationLocation { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "InstallingInformation.json");
+    public static string DownloadsDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "Downloads");
     public static Dictionary<string, string> AvailableInstalls { get; set; } = new() {
         #if DEBUG
         ["v10.40"] = "http://localhost:9080/10.40.rar"
@@ -149,7 +149,7 @@ public class DownloadsWindow : Window {
         File.Delete(info.Path);
         File.Delete(InstallingInformationLocation);
         var config = Configurations.GetConfiguration();
-        config.GamePath = Path.Combine(extractPath, $"FortniteGame/Binaries/Win64/{Utils.ShippingExecutableName}");
+        config.GamePath = Path.Combine(extractPath, "FortniteGame", "Binaries", "Win64", Utils.ShippingExecutableName);
         Configurations.SaveConfiguration(config);
         progressCallback?.Invoke(p, fileCount, 0, true);
     }

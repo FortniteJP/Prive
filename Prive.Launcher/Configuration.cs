@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Prive.Launcher;
 
 public static class Configurations {
-    public static readonly string ConfigurationsLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/configurations/");
+    public static readonly string ConfigurationsLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "configurations");
 
     public static List<string> GetConfigurations() => Directory.GetFiles(ConfigurationsLocation, "*.json").ToList();
 

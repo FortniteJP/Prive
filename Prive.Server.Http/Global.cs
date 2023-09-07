@@ -9,10 +9,10 @@ namespace Prive.Server.Http;
 public static class Global {
     public const string DateTimeFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
 
-    public static readonly string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/CloudStorage/");
-    public static readonly string KeyChainLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/keychain.json");
-    public static readonly string BulkStatusLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/bulkstatus.json");
-    public static readonly string ItemShopLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/itemshop.json");
+    public static readonly string CloudStorageLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server", "CloudStorage");
+    public static readonly string KeyChainLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server", "keychain.json");
+    public static readonly string BulkStatusLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server", "bulkstatus.json");
+    public static readonly string ItemShopLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server", "itemshop.json");
     
     public static string[] KeyChain { get; private set; } = new string[0];
     public static object[] BulkStatus { get; private set; } = new object[0];

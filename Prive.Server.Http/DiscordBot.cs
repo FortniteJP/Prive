@@ -8,7 +8,7 @@ public class MyDiscordRestClient {
     public const ulong ChannelId = 1138395634974588938;
 
     public RestUserMessage EmbedMessage { get; set; } = default!;
-    public readonly string TokenLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server/discordtoken.txt");
+    public readonly string TokenLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Server", "discordtoken.txt");
 
     private DiscordRestClient Bot { get; }
     private readonly SemaphoreSlim UpdateEmbedLock = new(1, 1);

@@ -3,9 +3,9 @@ using System.IO.Compression;
 namespace Prive.Launcher;
 
 public class MainWindow : Window {
-    public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Prive.Client.Native.dll");
-    public static readonly string FortniteConsoleDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/FortniteConsole.dll");
-    public static readonly string Dll1Location = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/Dll1.dll");
+    public static readonly string ClientNativeDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "Prive.Client.Native.dll");
+    public static readonly string FortniteConsoleDllLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "FortniteConsole.dll");
+    public static readonly string Dll1Location = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "Dll1.dll");
     public static CancellationTokenSource? DownloadCTS { get; set; }
 
     public static HttpClient Http { get; } = new();
@@ -173,7 +173,7 @@ public class MainWindow : Window {
             Y = Pos.Bottom(this) - 3,
         };
         dumpSDKButton.Clicked += () => {
-            if (!(Instance?.ShippingProcess?.HasExited ?? true)) Instance?.InjectDll(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher/UEDumper.dll"));
+            if (!(Instance?.ShippingProcess?.HasExited ?? true)) Instance?.InjectDll(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "UEDumper.dll"));
             else Utils.MessageBox("Game is not running!", "Prive", 0x00000000 | 0x00000010);
         };
         Add(dumpSDKButton);

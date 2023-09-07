@@ -41,7 +41,7 @@ public class ServerInstance {
     public async Task<bool> WaitForLogAndInjectDll(Func<string, bool> logFunc, string dllPath) {
         if (ShippingProcess?.HasExited ?? true) return false;
         ShippingProcess.WaitForInputIdle();
-        using var reader = new StreamReader(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame/Saved/Logs/FortniteGame.log"), new FileStreamOptions {
+        using var reader = new StreamReader(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "aved", "Logs", "FortniteGame.log"), new FileStreamOptions {
             Access = FileAccess.Read,
             Mode = FileMode.Open,
             Share = FileShare.ReadWrite

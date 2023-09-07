@@ -12,26 +12,35 @@ public class ClientInstance {
     public Process? EACProcess { get; private set; }
 
     // What to pass
-    private string Arguments = "-epicapp=Fortnite -epicenv=Prod -EpicPortal -noeac -nobe -fromfl=eac -fltoken=h1cdhchd10150221h130eB56";
-    
-    public ClientInstance(string shippingPath) {
-        ShippingPath = shippingPath;
-    }
+    private string[] Arguments = new[] {
+        "-epicapp=Fortnite",
+        "-epicenv=Prod",
+        "-EpicPortal",
+        "-noeac",
+        "-nobe",
+        "-fromfl=eac",
+        "-fltoken=h1cdhchd10150221h130eB56"
+    };
+    private string ArgumentsString { get => string.Join(" ", Arguments); }
 
     public ClientInstance(string shippingPath, string? username = null, string? password = null) {
         ShippingPath = shippingPath;
         if (!string.IsNullOrWhiteSpace(username) || !string.IsNullOrWhiteSpace(password)) {
-            Arguments += $" -AUTH_LOGIN={username} -AUTH_PASSWORD={password} -AUTH_TYPE=epic";
+            Arguments.Concat(new[] {
+                $"-AUTH_LOGIN={username}",
+                $"-AUTH_PASSWORD={password}",
+                "-AUTH_TYPE=epic"
+            });
         }
     }
 
     public void Launch() {
-        LauncherProcess = Process.Start(new ProcessStartInfo(LauncherPath, Arguments))!;
+        LauncherProcess = Process.Start(new ProcessStartInfo(LauncherPath, ArgumentsString))!;
         Utils.SuspendThreads(LauncherProcess);
-        EACProcess = Process.Start(new ProcessStartInfo(EACPath, Arguments))!;
+        EACProcess = Process.Start(new ProcessStartInfo(EACPath, ArgumentsString))!;
         Utils.SuspendThreads(EACProcess);
 
-        ShippingProcess = Process.Start(new ProcessStartInfo(ShippingPath, Arguments) {
+        ShippingProcess = Process.Start(new ProcessStartInfo(ShippingPath, ArgumentsString) {
             UseShellExecute = false,
             CreateNoWindow = true
         })!;
@@ -47,7 +56,7 @@ public class ClientInstance {
     public async Task<bool> WaitForLogAndInjectDll(Func<string, bool> logFunc, string dllPath) {
         if (ShippingProcess?.HasExited ?? true) return false;
         ShippingProcess.WaitForInputIdle();
-        using var reader = new StreamReader(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame/Saved/Logs/FortniteGame.log"), new FileStreamOptions {
+        using var reader = new StreamReader(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "Saved", "Logs", "FortniteGame.log"), new FileStreamOptions {
             Access = FileAccess.Read,
             Mode = FileMode.Open,
             Share = FileShare.ReadWrite
