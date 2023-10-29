@@ -35,6 +35,8 @@ public class ClientInstance {
     }
 
     public void Launch() {
+        if (Directory.Exists(Utils.FortniteSavedPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedOriginalPath);
+        if (Directory.Exists(Utils.FortniteSavedPrivePath)) Directory.Move(Utils.FortniteSavedPrivePath, Utils.FortniteSavedPath);
         LauncherProcess = Process.Start(new ProcessStartInfo(LauncherPath, ArgumentsString))!;
         Utils.SuspendThreads(LauncherProcess);
         EACProcess = Process.Start(new ProcessStartInfo(EACPath, ArgumentsString))!;
@@ -80,5 +82,7 @@ public class ClientInstance {
 
     public void WaitForExit() {
         ShippingProcess?.WaitForExit();
+        if (Directory.Exists(Utils.FortniteSavedPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedPrivePath);
+        if (Directory.Exists(Utils.FortniteSavedOriginalPath)) Directory.Move(Utils.FortniteSavedOriginalPath, Utils.FortniteSavedPath);
     }
 }

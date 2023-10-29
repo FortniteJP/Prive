@@ -10,6 +10,9 @@ namespace Prive.Launcher;
 
 public static partial class Utils {
     public const string ShippingExecutableName = "FortniteClient-Win64-Shipping.exe";
+    public static readonly string FortniteSavedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortniteGame", "Saved");
+    public static readonly string FortniteSavedOriginalPath = $"{FortniteSavedPath}.Original";
+    public static readonly string FortniteSavedPrivePath = $"{FortniteSavedPath}.Prive";
 
     // https://stackoverflow.com/questions/281640/how-do-i-get-a-human-readable-file-size-in-bytes-abbreviation-using-net, https://stackoverflow.com/a/4975942
     public static string BytesToString(long byteCount) {
