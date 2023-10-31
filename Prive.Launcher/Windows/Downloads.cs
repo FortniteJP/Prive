@@ -14,7 +14,7 @@ public class DownloadsWindow : Window {
         #if DEBUG
         ["v10.40"] = "http://localhost:9080/10.40.rar"
         #else
-        ["v10.40"] = "https://cdn.fnbuilds.services/10.40.rar"
+        ["v10.40"] = "https://cdn.blksservers.com/10.40.rar"
         #endif
     };
 
