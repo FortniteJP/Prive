@@ -60,6 +60,7 @@ public class CloudStorageController : ControllerBase {
     [HttpGet("api/cloudstorage/system/{filename}")]
     public object CloudStorageSystemFile() {
         var filename = Request.RouteValues["filename"] as string;
+        if (filename == "config") return new object();
         // var filepath = Path.Combine(CloudStorageLocation, filename ?? "");
         // Console.WriteLine($"{System.Text.Json.JsonSerializer.Serialize(CloudStorageFiles.Select(x => x.Filename))} {filename} {CloudStorageFiles.Any(x => x.Filename == filename)}");
         if (string.IsNullOrEmpty(filename) || !CloudStorageFiles.Any(x => x.Filename == filename)) {

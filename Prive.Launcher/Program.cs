@@ -29,6 +29,14 @@ public static class Program {
             Environment.Exit(0);
         }
 
+        if (Directory.Exists(Utils.FortniteSavedOriginalPath) && Directory.Exists(Utils.FortniteSavedPath)) {
+            foreach (var proc in Process.GetProcessesByName("FortniteClient-Win64-Shipping")) proc.Kill();
+            foreach (var proc in Process.GetProcessesByName("FortniteClient-Win64-Shipping_EAC")) proc.Kill();
+            foreach (var proc in Process.GetProcessesByName("FortniteLauncher")) proc.Kill();
+            Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedPrivePath);
+            Directory.Move(Utils.FortniteSavedOriginalPath, Utils.FortniteSavedPath);
+        }
+
         Application.Init();
         Console.Title = "Prive";
         if (IsWindows) {

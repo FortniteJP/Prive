@@ -94,6 +94,7 @@ public class MainWindow : Window {
                 var dllPath = config.GamePath.Equals($@"C:\Program Files\Epic Games\Fortnite\FortniteGame\Binaries\{Utils.ShippingExecutableName}", StringComparison.InvariantCultureIgnoreCase) ? Dll1Location : FortniteConsoleDllLocation;
                 Task.Run(async () => await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), dllPath));
                 Instance.WaitForExit();
+                Instance.Kill();
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
                 DownloadButton.Enabled = true;

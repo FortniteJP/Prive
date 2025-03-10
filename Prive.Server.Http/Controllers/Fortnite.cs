@@ -5,7 +5,7 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("fortnite")]
 public class FortniteController : ControllerBase {
-    [HttpGet("api/v2/versioncheck/Windows")]
+    [HttpGet("api/v2/versioncheck/Windows")] [NoAuth]
     public object VersionCheckWindows() => new {
         type = "NO_UPDATE"
     };
