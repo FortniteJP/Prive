@@ -1,5 +1,6 @@
 #include "Curl/curl.h"
 #include "Url.h"
+#include "HostConfig.h"
 
 CURLcode (*OCurlSetOpt)(struct Curl_easy*, CURLoption, va_list) = nullptr;
 CURLcode (*OCurlEasySetOpt)(struct Curl_easy*, CURLoption, ...) = nullptr;
@@ -27,8 +28,8 @@ CURLcode CurlEasySetOptDetour(struct Curl_easy* data, CURLoption tag, ...) {
         size_t length = url.length();
 
         Url parsed = Url::Parse(url);
-        if (parsed.Host.ends_with(".ol.epicgames.com")) {
-            url = Url::CreateUrl("https", "api.fortnite.day", "443", parsed.Path, parsed.QueryString);
+        if (parsed.Host.ends_with(".epicgames.com")) {
+            url = Url::CreateUrl(HostConfig::GetScheme(), HostConfig::GetHost(), HostConfig::GetPort(), parsed.Path, parsed.QueryString);
         }
         if (url.length() < length) {
             url.append(length - url.length(), ' ');

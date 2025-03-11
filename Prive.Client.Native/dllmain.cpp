@@ -1,10 +1,10 @@
 #include <iostream>
 #include "Main.h"
-#include "CommunicateServer.h"
+// #include "CommunicateServer.h"
 #include <thread>
 
-CommunicateServer server;
-bool RunServer = false;
+// CommunicateServer server;
+// bool RunServer = false;
 
 void Main() {
     if (true) {
@@ -13,7 +13,7 @@ void Main() {
         freopen_s(&pFile, "CONOUT$", "w", stdout);
         // printf("Prive.Client.Native injected\n");
     }
-    WSADATA wsaData;
+    /* WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cout << "Failed to initialize Winsock" << std::endl;
         return;
@@ -22,7 +22,7 @@ void Main() {
         std::cout << "Failed to start server" << std::endl;
         WSACleanup();
         return;
-    }
+    } */
 
     auto easyFind = FindPattern(
         "\x89\x54\x24\x10\x4C\x89\x44\x24\x18\x4C\x89\x4C\x24\x20\x48\x83\xEC\x28\x48\x85\xC9\x75\x08\x8D\x41\x2B\x48\x83\xC4\x28\xC3\x4C",
@@ -45,8 +45,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
             Main();
             break;
         case DLL_PROCESS_DETACH:
-            if (RunServer) server.Stop();
-            WSACleanup();
+            // if (RunServer) server.Stop();
+            // WSACleanup();
         case DLL_THREAD_ATTACH:
         case DLL_THREAD_DETACH:
             break;
