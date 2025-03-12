@@ -6,13 +6,15 @@ public static class Configurations {
     public static readonly string ConfigurationsLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "configurations");
 
     public static List<string> GetConfigurations() => Directory.GetFiles(ConfigurationsLocation, "*.json").ToList();
-
-    public static Configuration GetConfiguration() => GetConfiguration("Default.json");
     
-    public static Configuration GetConfiguration(string fileName) {
+    public static Configuration GetConfiguration(string fileName = "Default.json") {
         var path = Path.Combine(ConfigurationsLocation, fileName);
         if (!Directory.Exists(ConfigurationsLocation)) Directory.CreateDirectory(ConfigurationsLocation);
-        if (!File.Exists(path)) SaveConfiguration(new());
+        if (!File.Exists(path)) {
+            var config = new Configuration();
+            SaveConfiguration(config);
+            return config;
+        }
         return JsonSerializer.Deserialize<Configuration>(File.ReadAllText(path)) ?? throw new NullReferenceException();
     }
 

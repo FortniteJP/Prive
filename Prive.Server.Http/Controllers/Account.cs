@@ -297,3 +297,5 @@ public class OAuthPasswordRequest : OAuthTokenRequest {
     public override required string username { get; set; }
     public override required string password { get; set; }
 }
+
+#pragma warning restore CS8765

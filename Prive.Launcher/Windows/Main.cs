@@ -17,7 +17,7 @@ public class MainWindow : Window {
     
     public MainWindow() : base("Prive") {
         Console.Title = "Prive Launcher";
-        ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
+        ColorScheme = Utils.DefaultColorScheme;
         Add(
             new Label() {
                 Text = "Hello!",

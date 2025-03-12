@@ -47,4 +47,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Prive.Client.Native
-        path: ./Prive.Client.Native/Out/
+        path: ./Prive.Client.Native/Out/Prive.Client.Native.dll

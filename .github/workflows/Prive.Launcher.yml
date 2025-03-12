@@ -47,4 +47,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Prive.Launcher
-        path: ./Prive.Launcher/Publish/
+        path: ./Prive.Launcher/Publish/Prive.Launcher.exe

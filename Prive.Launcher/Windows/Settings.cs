@@ -5,11 +5,11 @@ using System.Text.RegularExpressions;
 namespace Prive.Launcher;
 
 public class SettingsWindow : Window {
-    private string GamePathLabelText(Configuration config) => $"Current Game Path:\n{string.Join('\n', Regex.Matches(Path.GetDirectoryName(config.GamePath) ?? "", @$".{{1,{Console.WindowWidth - 2}}}").Cast<Match>().Select(m => m.Value).ToArray())}";
+    private static string GamePathLabelText(Configuration config) => $"Current Game Path:\n{string.Join('\n', Regex.Matches(Path.GetDirectoryName(config.GamePath) ?? "", @$".{{1,{Console.WindowWidth - 2}}}").Cast<Match>().Select(m => m.Value).ToArray())}";
 
     public SettingsWindow() : base("Prive") {
         Console.Title = "Prive Settings";
-        ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
+        ColorScheme = Utils.DefaultColorScheme;
         var config = Configurations.GetConfiguration();
 
         var usernameLabel = new Label() {

@@ -14,6 +14,13 @@ public static partial class Utils {
     public static readonly string FortniteSavedOriginalPath = $"{FortniteSavedPath}.Original";
     public static readonly string FortniteSavedPrivePath = $"{FortniteSavedPath}.Prive";
 
+    public static readonly ColorScheme DefaultColorScheme = new() {
+        Focus = new(Color.BrightMagenta, background: Color.Black),
+        HotFocus = new(Color.BrightMagenta, background: Color.Black),
+        HotNormal = new(Color.BrightMagenta, background: Color.Black),
+        Normal = new(Color.BrightMagenta, background: Color.Black)
+    };
+
     // https://stackoverflow.com/questions/281640/how-do-i-get-a-human-readable-file-size-in-bytes-abbreviation-using-net, https://stackoverflow.com/a/4975942
     public static string BytesToString(long byteCount) {
         string[] suf = { "B", "KB", "MB", "GB", "TB", "PB", "EB" }; // Longs run out around EB
@@ -58,7 +65,7 @@ public static partial class Utils {
 
         var handle = OpenProcess(0x1F0FFF, false, processId);
         var loadLibrary = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
-        var size = (uint)((filePath.Length + 1) * Marshal.SizeOf(typeof(char)));
+        var size = (uint)((filePath.Length + 1) * Marshal.SizeOf<char>());
         var address = VirtualAllocEx(handle, IntPtr.Zero, size, 0x1000 | 0x2000, 4);
 
         WriteProcessMemory(handle, address, Encoding.Default.GetBytes(filePath), size, out _);
@@ -109,7 +116,9 @@ public static partial class Utils {
         foreach (ProcessThread thread in proc.Threads) {
             var pOpenThread = OpenThread(0x0002, false, thread.Id);
             if (pOpenThread == IntPtr.Zero) continue;
+            #pragma warning disable CA1806
             SuspendThread(pOpenThread);
+            #pragma warning restore CA1806
         }
     }
 
@@ -227,6 +236,7 @@ public static partial class Utils {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool EnumWindows(EnumWindowsDelegate lpEnumFunc, IntPtr lParam);
 
+    #pragma warning disable CA1401, SYSLIB1054 // Converting to LibraryImport causes Compiler Error SYSLIB1054
     [DllImport("Comdlg32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     public static extern bool GetOpenFileName([In, Out] ref OpenFileName ofn);
 
@@ -256,4 +266,5 @@ public static partial class Utils {
         public int dwReserved;
         public int flagsEx;
     }
+    #pragma warning restore CA1401, SYSLIB1054
 }

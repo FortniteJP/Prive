@@ -22,7 +22,7 @@ public class DownloadsWindow : Window {
 
     public DownloadsWindow() : base("Prive") {
         Console.Title = "Prive Download";
-        ColorScheme.Normal = new(Color.BrightMagenta, Color.Black);
+        ColorScheme = Utils.DefaultColorScheme;
         if (!Directory.Exists(DownloadsDirectory)) Directory.CreateDirectory(DownloadsDirectory);
 
         // USING THIS IS FASTER

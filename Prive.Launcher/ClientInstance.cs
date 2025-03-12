@@ -12,25 +12,25 @@ public class ClientInstance {
     public Process? EACProcess { get; private set; }
 
     // What to pass
-    private string[] Arguments = new[] {
+    private List<string> Arguments { get; set; } = [
         "-epicapp=Fortnite",
         "-epicenv=Prod",
         "-EpicPortal",
         "-noeac",
         "-nobe",
-        "-fromfl=eac",
-        "-fltoken=h1cdhchd10150221h130eB56"
-    };
+        "-fromfl=eac"
+    ];
     private string ArgumentsString { get => string.Join(" ", Arguments); }
 
     public ClientInstance(string shippingPath, string? username = null, string? password = null) {
+        Arguments.Add("-fltoken=h1cdhchd10150221h130eB56");
         ShippingPath = shippingPath;
         if (!string.IsNullOrWhiteSpace(username) || !string.IsNullOrWhiteSpace(password)) {
-            Arguments.Concat(new[] {
+            Arguments.AddRange([
                 $"-AUTH_LOGIN={username}",
                 $"-AUTH_PASSWORD={password}",
                 "-AUTH_TYPE=epic"
-            });
+            ]);
         }
     }
 
@@ -82,7 +82,7 @@ public class ClientInstance {
 
     public void WaitForExit() {
         ShippingProcess?.WaitForExit();
-        if (Directory.Exists(Utils.FortniteSavedPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedPrivePath);
+        if (Directory.Exists(Utils.FortniteSavedPath) && Directory.Exists(Utils.FortniteSavedOriginalPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedPrivePath);
         if (Directory.Exists(Utils.FortniteSavedOriginalPath)) Directory.Move(Utils.FortniteSavedOriginalPath, Utils.FortniteSavedPath);
     }
 }
