@@ -39,6 +39,7 @@ private:
         Scheme = contents[0];
         Host = contents[1];
         Port = contents[2];
+        std::cout << "HostConfig loaded: " << Scheme << "://" << Host << ":" << Port << std::endl;
         return true;
     }
 

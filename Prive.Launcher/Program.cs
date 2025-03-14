@@ -60,7 +60,7 @@ public static class Program {
             Console.SetWindowSize(55, 15);
             // Set Icon? https://stackoverflow.com/a/59897483
         }
-        
+
         var cls = typeof(MainWindow);
         if (args.Contains("/w:settings")) cls = typeof(SettingsWindow);
         if (args.Contains("/w:server")) cls = typeof(ServerWindow);
@@ -95,6 +95,6 @@ public static class Program {
     }
 
     public static Process CreateNewWindow<T>() where T : Window => CreateNewWindow(typeof(T).Name.ToLower().Replace("window", ""));
-    
+
     public static Process CreateNewWindow(string windowType) => Process.Start(new ProcessStartInfo("conhost.exe", $"\"{ExecutablePath}\" /conhost /w:{windowType}") { UseShellExecute = true })!;
 }

@@ -54,7 +54,7 @@ public class SettingsWindow : Window {
         };
         selectGamePathButton.Clicked += () => {
             var openFile = new Utils.OpenFileName() {
-                lStructSize = Marshal.SizeOf(typeof(Utils.OpenFileName)),
+                lStructSize = Marshal.SizeOf<Utils.OpenFileName>(),
                 lpstrFilter = "Shipping Executable(*.exe)\0*.exe\0",
                 lpstrFile = Utils.ShippingExecutableName,
                 nMaxFile = 260,

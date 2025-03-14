@@ -10,7 +10,7 @@ struct Url {
         static constexpr std::string_view MakeStringView(const std::string_view& base, iterator_t first, iterator_t last) {
             return base.substr(std::distance(base.begin(), first), std::distance(first, last));
         }
-    
+
     public:
         std::string_view Protocol, Host, Port, Path, QueryString;
 

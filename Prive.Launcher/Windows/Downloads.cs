@@ -14,7 +14,7 @@ public class DownloadsWindow : Window {
         #if DEBUG
         ["v10.40"] = "http://localhost:9080/10.40.rar"
         #else
-        ["v10.40"] = "https://cdn.blksservers.com/10.40.rar"
+        ["v10.40"] = "https://public.simplyblk.xyz/10.40.rar"
         #endif
     };
 
@@ -69,12 +69,12 @@ public class DownloadsWindow : Window {
 
     public static InstallingInformation GetInstallingInformation() => JsonSerializer.Deserialize<InstallingInformation>(File.ReadAllText(InstallingInformationLocation)) ?? throw new NullReferenceException();
 
-    public static void ContinueDownload(Action<long, long, bool>? progressCallback = null, CancellationToken cancellationToken = default) => ContinueDownload(progressCallback, cancellationToken, 0);
-    
-    private static async void ContinueDownload(Action<long, long, bool>? progressCallback = null, CancellationToken cancellationToken = default, int r = 0) {
+    public static void ContinueDownload(Action<long, long, bool>? progressCallback = null, CancellationToken cancellationToken = default) => ContinueDownload(progressCallback, 0, cancellationToken);
+
+    private static async void ContinueDownload(Action<long, long, bool>? progressCallback = null, int r = 0, CancellationToken cancellationToken = default) {
         if (!File.Exists(InstallingInformationLocation)) return;
         var info = GetInstallingInformation();
-        if (!File.Exists(info.Path)) await File.WriteAllBytesAsync(info.Path, new byte[0]);
+        if (!File.Exists(info.Path)) await File.WriteAllBytesAsync(info.Path, []);
         var downloaded = new FileInfo(info.Path).Length;
 
         var request = new HttpRequestMessage(HttpMethod.Get, info.Url);
@@ -88,7 +88,7 @@ public class DownloadsWindow : Window {
         // var length = response.Content.Headers.ContentLength ?? throw new NullReferenceException();
         var length = info.Length;
         using var stream = await response.Content.ReadAsStreamAsync();
-        
+
         using var file = new FileStream(info.Path, FileMode.Append);
         var buffer = new byte[1024 * 64];
         try {
@@ -104,7 +104,7 @@ public class DownloadsWindow : Window {
             if (r > 5) throw;
             file.Close();
             await file.DisposeAsync();
-            ContinueDownload(progressCallback, cancellationToken, e.Message.StartsWith("The response ended prematurely") ? r : r + 1);
+            ContinueDownload(progressCallback, e.Message.StartsWith("The response ended prematurely") ? r : r + 1, cancellationToken);
             return;
         }
         if (cancellationToken.IsCancellationRequested) return;
@@ -134,7 +134,6 @@ public class DownloadsWindow : Window {
                     await file.WriteAsync(buffer.AsMemory(0, read));
                     await file.FlushAsync();
                     wrote += read;
-                    // if (wrote < 0 || length < 0) Utils.MessageBox($"something being minus wtf {wrote}, {read}, {length}"); // because of overflow, use long instead of int
                     progressCallback?.Invoke((int)(((float)wrote/length)*100), p, fileCount, false);
                 }
             }

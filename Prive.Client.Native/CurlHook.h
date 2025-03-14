@@ -30,6 +30,8 @@ CURLcode CurlEasySetOptDetour(struct Curl_easy* data, CURLoption tag, ...) {
         Url parsed = Url::Parse(url);
         if (parsed.Host.ends_with(".epicgames.com")) {
             url = Url::CreateUrl(HostConfig::GetScheme(), HostConfig::GetHost(), HostConfig::GetPort(), parsed.Path, parsed.QueryString);
+        } else {
+            printf("URL: %s\n", url.c_str());
         }
         if (url.length() < length) {
             url.append(length - url.length(), ' ');

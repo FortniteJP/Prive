@@ -6,7 +6,7 @@ public static class Configurations {
     public static readonly string ConfigurationsLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "configurations");
 
     public static List<string> GetConfigurations() => Directory.GetFiles(ConfigurationsLocation, "*.json").ToList();
-    
+
     public static Configuration GetConfiguration(string fileName = "Default.json") {
         var path = Path.Combine(ConfigurationsLocation, fileName);
         if (!Directory.Exists(ConfigurationsLocation)) Directory.CreateDirectory(ConfigurationsLocation);
