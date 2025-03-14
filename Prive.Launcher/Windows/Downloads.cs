@@ -8,6 +8,7 @@ public class DownloadsWindow : Window {
     public const string SevenZipUrl = "https://www.7-zip.org/a/7zr.exe";
     public static string SevenZipPath { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "7zr.exe");
 
+    public static bool LastCanceled { get; set; } = false;
     public static string InstallingInformationLocation { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "InstallingInformation.json");
     public static string DownloadsDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Prive.Launcher", "Downloads");
     public static Dictionary<string, string> AvailableInstalls { get; set; } = new() {
@@ -35,6 +36,7 @@ public class DownloadsWindow : Window {
             Text = "Cancel",
         };
         cancelButton.Clicked += () => {
+            LastCanceled = true;
             Application.RequestStop();
         };
         Add(cancelButton);
@@ -44,7 +46,7 @@ public class DownloadsWindow : Window {
 
         foreach (var kv in AvailableInstalls) {
             var installButton = new Button() {
-                Text = $"Install {kv.Key} {(info?.Url == kv.Value ? $"(paused {Utils.BytesToString(new FileInfo(info.Path).Length)})" : "")}",
+                Text = $"Install {kv.Key} {(info?.Url == kv.Value ? $"(paused {Utils.BytesToString(new FileInfo(info.Path).Length)} / {Utils.BytesToString(info.Length)})" : "")}",
                 Y = Pos.Top(this) + 1 + AvailableInstalls.Keys.ToList().IndexOf(kv.Key),
             };
             installButton.Clicked += () => {
@@ -55,6 +57,7 @@ public class DownloadsWindow : Window {
                     Length = GetContentLength(kv.Value)
                 };
                 File.WriteAllText(InstallingInformationLocation, JsonSerializer.Serialize(installingInformation));
+                LastCanceled = false;
                 Application.RequestStop();
             };
             Add(installButton);
@@ -74,12 +77,12 @@ public class DownloadsWindow : Window {
     private static async void ContinueDownload(Action<long, long, bool>? progressCallback = null, int r = 0, CancellationToken cancellationToken = default) {
         if (!File.Exists(InstallingInformationLocation)) return;
         var info = GetInstallingInformation();
-        if (!File.Exists(info.Path)) await File.WriteAllBytesAsync(info.Path, []);
+        if (!File.Exists(info.Path)) await File.WriteAllBytesAsync(info.Path, [], cancellationToken);
         var downloaded = new FileInfo(info.Path).Length;
 
         var request = new HttpRequestMessage(HttpMethod.Get, info.Url);
         request.Headers.Range = new(downloaded, null);
-        var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable) {
             progressCallback?.Invoke(info.Length, info.Length, true);
             return;
@@ -87,14 +90,14 @@ public class DownloadsWindow : Window {
         // response.EnsureSuccessStatusCode();
         // var length = response.Content.Headers.ContentLength ?? throw new NullReferenceException();
         var length = info.Length;
-        using var stream = await response.Content.ReadAsStreamAsync();
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
         using var file = new FileStream(info.Path, FileMode.Append);
         var buffer = new byte[1024 * 64];
         try {
-            while (!cancellationToken.IsCancellationRequested && await stream.ReadAsync(buffer) is int read && read > 0) {
-                await file.WriteAsync(buffer.AsMemory(0, read));
-                await file.FlushAsync();
+            while (!cancellationToken.IsCancellationRequested && await stream.ReadAsync(buffer, cancellationToken) is int read && read > 0) {
+                await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                await file.FlushAsync(cancellationToken);
                 downloaded += read;
                 progressCallback?.Invoke(downloaded, length, false);
             }
@@ -106,7 +109,7 @@ public class DownloadsWindow : Window {
             await file.DisposeAsync();
             ContinueDownload(progressCallback, e.Message.StartsWith("The response ended prematurely") ? r : r + 1, cancellationToken);
             return;
-        }
+        } catch (Exception e) { if (e is not TaskCanceledException || e is not OperationCanceledException) Utils.MessageBox(e.ToString());}
         if (cancellationToken.IsCancellationRequested) return;
         progressCallback?.Invoke(downloaded, length, true);
     }

@@ -126,17 +126,18 @@ public class MainWindow : Window {
         };
         DownloadButton.Clicked += async () => {
             if (DownloadButton.Text == "Cancel download") { // Cancel decompress too
-                DownloadCTS?.Cancel();
-                await Task.Delay(10); // ???
+                if (DownloadCTS is not null) await DownloadCTS.CancelAsync();
                 LaunchButton.Text = "Launch";
                 LaunchButton.Enabled = true;
                 DownloadButton.Text = "Downloads";
                 return;
             }
             Application.Run<DownloadsWindow>();
-            if (File.Exists(DownloadsWindow.InstallingInformationLocation)) {
+            if (!DownloadsWindow.LastCanceled && File.Exists(DownloadsWindow.InstallingInformationLocation)) {
                 DownloadCTS = new();
-                DownloadsWindow.ContinueDownload(progressHandler, DownloadCTS.Token);
+                try {
+                    DownloadsWindow.ContinueDownload(progressHandler, DownloadCTS.Token);
+                } catch (Exception e) { if (e is not TaskCanceledException || e is not OperationCanceledException) Utils.MessageBox(e.ToString()); }
                 DownloadButton.Text = "Cancel download";
                 LaunchButton.Text = "Loading...";
                 LaunchButton.Enabled = false;

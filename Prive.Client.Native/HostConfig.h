@@ -60,7 +60,7 @@ public:
     }
 
     static std::string GetHost() {
-        if (Host.empty() && !readHostConfig(Path)) return "prive.xthe.org";
+        if (Host.empty() && !readHostConfig(Path)) return "api-prive.xthe.org";
         return Host;
     }
 
