@@ -87,12 +87,28 @@ public class DownloadsWindow : Window {
             progressCallback?.Invoke(info.Length, info.Length, true);
             return;
         }
-        // response.EnsureSuccessStatusCode();
-        // var length = response.Content.Headers.ContentLength ?? throw new NullReferenceException();
+        response.EnsureSuccessStatusCode();
         var length = info.Length;
+        if (response.Content.Headers.ContentLength.ToString() == length.ToString()) {
+            progressCallback?.Invoke(length, length, true);
+            return;
+        }
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
         using var file = new FileStream(info.Path, FileMode.Append);
+        if (response.StatusCode != System.Net.HttpStatusCode.PartialContent) {
+            // To save your storage life <3
+            long toSkip = downloaded;
+            var discardBuffer = new byte[1024 * 64];
+            try {
+                while (toSkip > 0) {
+                    int read = await stream.ReadAsync(discardBuffer, 0, (int)Math.Min(discardBuffer.Length, toSkip), cancellationToken);
+                    if (read <= 0) break;
+                    progressCallback?.Invoke(toSkip, downloaded, false);
+                    toSkip -= read;
+                }
+            } catch (Exception e) { if (e is not TaskCanceledException || e is not OperationCanceledException) Utils.MessageBox(e.ToString()); }
+        }
         var buffer = new byte[1024 * 64];
         try {
             while (!cancellationToken.IsCancellationRequested && await stream.ReadAsync(buffer, cancellationToken) is int read && read > 0) {
@@ -109,7 +125,7 @@ public class DownloadsWindow : Window {
             await file.DisposeAsync();
             ContinueDownload(progressCallback, e.Message.StartsWith("The response ended prematurely") ? r : r + 1, cancellationToken);
             return;
-        } catch (Exception e) { if (e is not TaskCanceledException || e is not OperationCanceledException) Utils.MessageBox(e.ToString());}
+        } catch (Exception e) { if (e is not TaskCanceledException || e is not OperationCanceledException) Utils.MessageBox(e.ToString()); }
         if (cancellationToken.IsCancellationRequested) return;
         progressCallback?.Invoke(downloaded, length, true);
     }
@@ -126,8 +142,13 @@ public class DownloadsWindow : Window {
             // Utils.MessageBox($"{p}/{fileCount}, {file.Key}");
             p += 1;
             if (!reader.Entry.IsDirectory) {
+                // TODO: Blocking happens around here, someone please fix
                 var path = Path.Combine(extractPath, reader.Entry.Key);
                 if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                if (File.Exists(path) && new FileInfo(path).Length == reader.Entry.Size) {
+                    progressCallback?.Invoke((int)(((float)reader.Entry.Size/reader.Entry.Size)*100), p, fileCount, false);
+                    continue;
+                }
                 using var file = File.OpenWrite(path);
                 using var stream = reader.OpenEntryStream();
                 var length = reader.Entry.Size;

@@ -17,8 +17,8 @@ public static partial class Utils {
     public static readonly ColorScheme DefaultColorScheme = new() {
         Focus = new(Color.BrightMagenta, background: Color.Black),
         HotFocus = new(Color.BrightMagenta, background: Color.Black),
-        HotNormal = new(Color.BrightMagenta, background: Color.Black),
-        Normal = new(Color.BrightMagenta, background: Color.Black)
+        HotNormal = new(Color.Magenta, background: Color.Black),
+        Normal = new(Color.Magenta, background: Color.Black)
     };
 
     // https://stackoverflow.com/questions/281640/how-do-i-get-a-human-readable-file-size-in-bytes-abbreviation-using-net, https://stackoverflow.com/a/4975942
