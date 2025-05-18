@@ -9,8 +9,13 @@ namespace Prive.Server.Http.Controllers;
 [ApiController]
 [Route("")]
 public class MatchMakingController : ControllerBase {
+    #if DEBUG
+    public static MatchMakingManager MatchMakingManagerSolo { get; } = new("Playlist_DefaultSolo", TimeSpan.FromMinutes(1));
+    public static MatchMakingManager MatchMakingManagerLateGameSolo { get; } = new("Playlist_Auto_Solo", TimeSpan.FromMinutes(1));
+    #else
     public static MatchMakingManager MatchMakingManagerSolo { get; } = new("Playlist_DefaultSolo", TimeSpan.FromMinutes(5));
     public static MatchMakingManager MatchMakingManagerLateGameSolo { get; } = new("Playlist_Auto_Solo", TimeSpan.FromMinutes(3));
+    #endif
     public static Dictionary<string, string> SessionIds { get; } = new();
 
     [Route("matchmaking")] [NoAuth]
@@ -28,8 +33,8 @@ public class MatchMakingController : ControllerBase {
         var bucketId = obj["bucketId"].ToString()!;
         var playlistId = bucketId.Split(":")[5];
         Console.WriteLine($"MatchMaking: {playlistId} ({bucketId})");
-        
-        using var client = await HttpContext.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext() { KeepAliveInterval = TimeSpan.FromSeconds(5) });
+
+        using var client = await HttpContext.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext() { KeepAliveInterval = TimeSpan.FromSeconds(5), KeepAliveTimeout = TimeSpan.FromHours(1) });
 
         if (playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase)) {
             await MatchMakingManagerSolo.HandleClient(client);
@@ -57,7 +62,7 @@ public class MatchMakingController : ControllerBase {
             ownerName = "Prive",
             serverName = "PriveAsia",
             #if DEBUG
-            serverAddress = "127.0.0.1",
+            serverAddress = "192.168.11.10",
             serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #else
             serverAddress = Controllers.ServerApiController.IP,

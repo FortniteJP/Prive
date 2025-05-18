@@ -85,6 +85,13 @@ public class MatchMakingManager {
         for (int i = 0; i < Clients.Count; i++) {
             var client = Clients.Keys.ElementAt(i);
             var tcs = Clients.Values.ElementAt(i).Item1;
+            // Not working as expected
+            if (client.State != WebSocketState.Open) {
+                tcs.SetResult(null);
+                Clients.Remove(client);
+                i--;
+                continue;
+            }
             var startTime = Clients.Values.ElementAt(i).Item2;
             var estimatedWaitSec = IsListening ? 0 : (int)(MatchMakingTimeout + TimeSpan.FromMinutes(1) - (startTime - MatchMakingStartedAt)).TotalSeconds;
             if (estimatedWaitSec % 60 == 0) estimatedWaitSec += 1; // because if moduled by 60 is 0, it will shown as Message.ETANotAvailable (N/A)
