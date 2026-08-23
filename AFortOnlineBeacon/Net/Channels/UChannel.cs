@@ -366,7 +366,7 @@ public abstract class UChannel {
         // Add any export bunches
         // Replay connections will manage export bunches separately.
         if (!Connection.IsInternalAck()) {
-            // TODO: AppendExportBunches
+            ((UPackageMapClient) Connection.PackageMap!).AppendExportBunches(outgoingBunches);
         }
 
         if (outgoingBunches.Count != 0) {
@@ -470,7 +470,7 @@ public abstract class UChannel {
                 nextBunch.bClose = (bunch.bClose && (outgoingBunches.Count - 1 == partialNum)); // Only last bunch should have bClose bit set
             }
 
-            var thisOutBunch = PrepBunch(nextBunch, ref outBunch, merge);
+            var thisOutBunch = PrepBunch(nextBunch, outBunch, merge);
 
             // Update Packet Range
             var packetId = SendRawBunch(thisOutBunch, merge);
@@ -508,9 +508,17 @@ public abstract class UChannel {
         return packetId;
     }
 
-    private FOutBunch PrepBunch(FOutBunch bunch, ref FOutBunch? outBunch, bool merge) {
+    // NOTE: `outBunch` is intentionally passed by value, not by ref. In real UE, UChannel::PrepBunch
+    // takes OutBunch as a plain pointer that the caller's SendBunch loop never writes back to between
+    // iterations - it only ever holds Connection->LastOutBunch from a *merge* with a previous SendBunch
+    // call (merging isn't implemented here, so it's always null). Passing it by ref here previously
+    // made every bunch after the first in a single SendBunch call (e.g. a GUID-export bunch followed by
+    // the actor's content bunch) skip ChSequence assignment entirely, leaving it at the default 0 -
+    // the client then rejected that bunch as "outdated" since the channel's sequence had already moved
+    // past 0 from the first bunch, silently dropping the actor's real spawn data.
+    private FOutBunch PrepBunch(FOutBunch bunch, FOutBunch? outBunch, bool merge) {
         if (Connection!.ResendAllDataState != EResendAllDataState.None) return bunch;
-        
+
         // Find outgoing bunch index.
         if (bunch.bReliable) {
             // Find spot, which was guaranteed available by FOutBunch constructor.
@@ -518,14 +526,14 @@ public abstract class UChannel {
                 if (!(NumOutRec < UNetConnection.ReliableBuffer - 1 + (bunch.bClose ? 1 : 0))) {
                     // Logger.Warning("PrepBunch: Reliable buffer overflow! {Channel}", this);
                 }
-                
+
                 bunch.Next = null;
                 bunch.ChSequence = ++Connection.OutReliable[ChIndex];
                 NumOutRec++;
                 // TODO: Verify below works as expected
                 outBunch = new FOutBunch(bunch);
                 var outLink = OutRec;
-                
+
                 while (outLink != null) outLink = outLink.Next;
 
                 if (outLink == null) OutRec = outBunch;
@@ -546,7 +554,21 @@ public abstract class UChannel {
 
     private void SetClosingFlag() => Closing = true;
 
-    public void ConditionalCleanUp(bool bForDestroy, EChannelCloseReason closeReason) => throw new NotImplementedException();
+    public bool IsPendingKill { get; private set; }
+
+    public void ConditionalCleanUp(bool bForDestroy, EChannelCloseReason closeReason) {
+        if (IsPendingKill) return;
+
+        if (Connection!.Channels[ChIndex] == this) {
+            IsPendingKill = true;
+            Connection.Channels[ChIndex] = null;
+            Connection.OpenChannels.Remove(this);
+
+            CleanUp(bForDestroy, closeReason);
+        }
+    }
+
+    protected virtual void CleanUp(bool bForDestroy, EChannelCloseReason closeReason) {}
 
     private static bool IsBunchTooLarge(UNetConnection connection, FInBunch? bunch) => !connection.IsInternalAck() && bunch != null && bunch.GetNumBytes() > NetMaxConstructedPartialBunchSizeBytes;
 

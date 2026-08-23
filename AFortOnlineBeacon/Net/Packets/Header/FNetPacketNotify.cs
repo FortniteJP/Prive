@@ -83,9 +83,10 @@ public class FNetPacketNotify {
         data.Seq = FPackedHeader.GetSeq(packedHeader);
         data.AckedSeq = FPackedHeader.GetAckedSeq(packedHeader);
         data.HistoryWordCount = FPackedHeader.GetHistoryWordCount(packedHeader) + 1;
+        Console.WriteLine($"FNetPacketNotify.ReadHeader: packedHeader={packedHeader:X8} Seq={data.Seq.Value} AckedSeq={data.AckedSeq.Value} HistoryWordCount={data.HistoryWordCount} posAfterHeader={reader.GetPosBits()} numBits={reader.GetNumBits()}");
         data.History = new SequenceHistory();
         data.History.Read(reader, data.HistoryWordCount);
-        
+
         return !reader.IsError();
     }
 

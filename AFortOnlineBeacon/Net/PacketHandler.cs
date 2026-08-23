@@ -138,7 +138,10 @@ public class PacketHandler {
             
             if (_State == HandlerState.Uninitialized) UpdateInitialState();
             
-            foreach (var component in _HandlerComponents) {
+            // Components unwrap in the reverse of the order they wrap on Outgoing (last-added is outermost on the wire).
+            for (var i = _HandlerComponents.Count - 1; i >= 0; i--) {
+                var component = _HandlerComponents[i];
+
                 if (processPacketReader.GetPosBits() != 0 && !component.CanReadUnaligned()) RealignPacket(processPacketReader);
 
                 if (packetView.Traits.ConnectionlessPacket) component.IncomingConnectionless(packetRef);
@@ -148,7 +151,7 @@ public class PacketHandler {
             if (!processPacketReader.IsError()) {
                 ReplaceIncomingPacket(processPacketReader);
 
-                // packetView.DataView = new FPacketDataView(_IncomingPacket.GetBuffer(), _IncomingPacket.GetBitsLeft(), ECountUnits.Bits);
+                packetView.DataView = new FPacketDataView(_IncomingPacket.GetBuffer(), _IncomingPacket.GetBitsLeft(), ECountUnits.Bits);
             }
             else returnVal = false;
         }
@@ -232,9 +235,8 @@ public class PacketHandler {
             var newPacketSizeBits = replacementPacket.GetBitsLeft();
             
             replacementPacket.SerializeBits(tempPacketData, newPacketSizeBits);
-            
-            // new FBitReader(tempPacketData, newPacketSizeBits); // this causes error
-            _IncomingPacket = new FBitReader(null, newPacketSizeBits); // temporary fix 💀
+
+            _IncomingPacket = new FBitReader(tempPacketData, newPacketSizeBits);
         }
     }
 

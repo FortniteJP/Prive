@@ -81,7 +81,11 @@ public class MyDiscordRestClient {
     private async Task Initialize() {
         var guild = await Bot.GetGuildAsync(GuildId);
         var channel = await guild.GetTextChannelAsync(ChannelId);
-        var messages = (await channel.GetMessagesAsync().ToListAsync()).First();
+        var messagePages = new List<IReadOnlyCollection<RestMessage>>();
+        await foreach (var page in channel.GetMessagesAsync()) {
+            messagePages.Add(page);
+        }
+        var messages = messagePages.First();
 
         if (messages.Count <= 0) {
             Console.WriteLine("No messages found, creating new one");

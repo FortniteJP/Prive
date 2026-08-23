@@ -56,6 +56,7 @@ public class UIpNetDriver : UNetDriver {
         while (ReceiveThread.TryReceive(out var packet)) {
             // Logger.Information("Received from {Adress} data {Buffer}", packet.Address, packet.DataView.GetData());
             Console.WriteLine($"Recv {packet.DataView.NumBytes()} {packet.Address}, {BitConverter.ToString(packet.DataView.GetData())}");
+            PacketCapture.Raise(EPacketDirection.Incoming, packet.Address, packet.DataView.GetData());
 
             UNetConnection? connection = ServerConnection;
 
@@ -180,6 +181,7 @@ public class UIpNetDriver : UNetDriver {
 
         if (countBits > 0) Socket.Send(data, FMath.DivideAndRoundUp(countBits, 8), address);
         Console.WriteLine($"Sent {FMath.DivideAndRoundUp(countBits, 8)} {address.ToString()}, {BitConverter.ToString(data)}");
+        PacketCapture.Raise(EPacketDirection.Outgoing, address, data);
     }
 
     public override bool IsNetResourceValid() => !_IsDisposed;

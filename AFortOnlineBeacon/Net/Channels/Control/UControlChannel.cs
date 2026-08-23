@@ -30,8 +30,13 @@ public class UControlChannel : UChannel {
             var pos = bunch.GetPosBits();
 
             if (messageType == NMT.ActorChannelFailure) {
-                throw new NotImplementedException();   
-            } 
+                // Client failed to spawn/resolve the actor on a channel we opened. Real UE stops
+                // resending that actor and may close the connection for repeated failures; we don't
+                // have per-actor resend logic yet, so just consume the message rather than crash.
+                if (NMT_ActorChannelFailure.Receive(bunch, out var failedChIndex)) {
+                    Console.WriteLine($"NMT_ActorChannelFailure: client failed to resolve actor on ChIndex={failedChIndex}");
+                }
+            }
             else if (messageType == NMT.GameSpecific) {
                 // the most common Notify handlers do not support subclasses by default and
                 // so we redirect the game specific messaging to the GameInstance instead

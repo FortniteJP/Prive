@@ -157,7 +157,7 @@ public abstract class FArchive : IDisposable {
         return value;
     }
 
-    public unsafe void WriteFloat(float value) => ByteOrderSerialize((ulong*)&value, sizeof(ulong)); // is this correct ?
+    public unsafe void WriteFloat(float value) => ByteOrderSerialize((uint*)&value, sizeof(uint));
 
     public unsafe void WriteDouble(double value) => ByteOrderSerialize((ulong*)&value, sizeof(ulong));
 

@@ -35,23 +35,38 @@ public class FUniqueNetIdRepl {
                     if ((encodingFlags & EUniqueIdEncodingFlags.IsEmpty) == 0) {
                         // Non empty and hex encoded
                         var typeHash = GetTypeHashFromEncoding(encodingFlags);
-                        if (typeHash == 0) {
-                            // If no type was encoded, assume default
-                            throw new NotImplementedException();
-                            // TypeHash = UOnlineEngineInterface::Get()->GetReplicationHashForSubsystem(UOnlineEngineInterface::Get()->GetDefaultOnlineSubsystemName());
-                        }
 
-                        var bValidTypeHash = typeHash != 0;
-                        
+                        var bValidTypeHash = true;
+                        FName type;
+
                         if (typeHash == TypeHashOther) {
                             var typeString = ar.ReadString();
-                            var type = new FName(typeString);
-                            throw new NotImplementedException();
+                            type = new FName(typeString);
+                            if (ar.IsError() || type == EName.None) bValidTypeHash = false;
                         } else {
-                            // Type = UOnlineEngineInterface::Get()->GetSubsystemFromReplicationHash(TypeHash);
+                            // No online subsystem registry to resolve TypeHash -> subsystem name against, so this
+                            // just records "some hardcoded subsystem type" rather than the real one.
+                            type = new FName(EName.None);
                         }
 
-                        throw new NotImplementedException();
+                        if (bValidTypeHash) {
+                            var encodedSize = ar.ReadByte();
+
+                            if (!ar.IsError()) {
+                                if (encodedSize > 0) {
+                                    var encodedBytes = new byte[encodedSize];
+                                    ar.Serialize(encodedBytes, encodedSize);
+
+                                    if (!ar.IsError()) {
+                                        var contents = Convert.ToHexStringLower(encodedBytes);
+
+                                        if (contents.Length > 0 && type != EName.None) UniqueNetId = new FUniqueNetId(type, contents);
+                                    }
+                                }
+
+                                bOutSuccess = encodedSize == 0 || IsValid();
+                            }
+                        }
                     } else bOutSuccess = true;
                 } else {
                     // Original FString serialization goes here

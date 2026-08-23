@@ -57,7 +57,18 @@ public class UObjectBase {
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void SetFlagsTo(EObjectFlags newFlags) => _ObjectFlags = newFlags;
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public EObjectFlags GetFlags() => _ObjectFlags;
+
+    /// <summary>
+    ///     Sets the outer/name (and optionally class) of a freshly constructed object. There is no
+    ///     equivalent of UE's StaticAllocateObject in this port, so NewObject/CDO construction call
+    ///     this by hand right after `Activator.CreateInstance`.
+    /// </summary>
+    internal void InitializeObjectProperties(UObject? outer, FName name, UClass? objectClass = null) {
+        _OuterPrivate = outer;
+        _NamePrivate = name;
+        if (objectClass != null) _ClassPrivate = objectClass;
+    }
 }

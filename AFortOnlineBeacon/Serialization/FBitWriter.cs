@@ -3,6 +3,11 @@ using System.Collections;
 
 namespace AFortOnlineBeacon.Serialization;
 
+// Real UE's FBitWriter backs onto a zero-initialized TArray (Buffer.AddZeroed), so its bit-write
+// helpers only ever OR in 1 bits and rely on 0 bits already being there. This port rents from
+// ArrayPool<byte> instead - Rent() does NOT zero the array, so every single-bit write below must
+// explicitly clear as well as set, or stale bits from a previous rental of the same backing array
+// leak through as garbage.
 public class FBitWriter : FArchive {
     private static readonly ArrayPool<byte> Pool = ArrayPool<byte>.Create();
 
@@ -90,6 +95,7 @@ public class FBitWriter : FArchive {
         if (AllowAppend(lengthBits)) {
             if (lengthBits == 1) {
                 if ((((byte*)value)[0] & 0x01) != 0) Data[Num >> 3] |= FBitUtil.GShift[Num & 7];
+                else Data[Num >> 3] &= (byte) ~FBitUtil.GShift[Num & 7];
 
                 Num++;
             } else {
@@ -124,8 +130,10 @@ public class FBitWriter : FArchive {
 
             for (uint mask = 1; (newValue + mask) < valueMax && (mask != 0); mask *= 2, localNum++) {
                 if ((writeValue & mask) != 0) {
-                    Data[localNum >> 3] += FBitUtil.GShift[localNum & 7];
+                    Data[localNum >> 3] |= FBitUtil.GShift[localNum & 7];
                     newValue += mask;
+                } else {
+                    Data[localNum >> 3] &= (byte) ~FBitUtil.GShift[localNum & 7];
                 }
             }
 
@@ -177,8 +185,10 @@ public class FBitWriter : FArchive {
 
             for (uint mask = 1; newValue + mask < valueMax && (mask != 0); mask *= 2, Num++) {
                 if ((value & mask) != 0) {
-                    Data[Num >> 3] += FBitUtil.GShift[Num & 7];
+                    Data[Num >> 3] |= FBitUtil.GShift[Num & 7];
                     newValue += mask;
+                } else {
+                    Data[Num >> 3] &= (byte) ~FBitUtil.GShift[Num & 7];
                 }
             }
         } else SetOverflowed(lengthBits);
@@ -192,6 +202,7 @@ public class FBitWriter : FArchive {
     public void WriteBit(byte value) {
         if (AllowAppend(1)) {
             if (value != 0) Data[Num >> 3] |= FBitUtil.GShift[Num & 7];
+            else Data[Num >> 3] &= (byte) ~FBitUtil.GShift[Num & 7];
 
             Num++;
         } else SetOverflowed(1);

@@ -18,9 +18,10 @@ public class ULevel : UObject {
     ///     This is not the same as GetOuter(), because GetOuter() for a streaming level is a vestigial world that is not used. 
     ///     It should not be accessed during BeginDestroy(), just like any other UObject references, since GC may occur in any order.
     /// </summary>
-    public UWorld OwningWorld { get; private set; }
-    
+    public UWorld OwningWorld { get; internal set; }
+
     public void InitializeNetworkActors() {
-        throw new NotImplementedException();
+        // No per-level startup-actor bootstrap yet - actors are only ever spawned dynamically
+        // (GameMode/GameSession/PlayerController/Pawn), so there's nothing to initialize here yet.
     }
 }

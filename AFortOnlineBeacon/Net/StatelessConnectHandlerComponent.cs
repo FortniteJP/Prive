@@ -116,6 +116,7 @@ public class StatelessConnectHandlerComponent : HandlerComponent {
     public void GetChallengeSequences(out int serverSequence, out int clientSequence) {
         serverSequence = _LastServerSequence;
         clientSequence = _LastClientSequence;
+        Console.WriteLine($"GetChallengeSequences: serverSequence={serverSequence} clientSequence={clientSequence}");
     }
 
     public void ResetChallengeData() {
@@ -367,7 +368,8 @@ public class StatelessConnectHandlerComponent : HandlerComponent {
 
                                     _LastServerSequence = seqA & (UNetConnection.MaxPacketId - 1);
                                     _LastClientSequence = seqB & (UNetConnection.MaxPacketId - 1);
-                                    
+                                    Console.WriteLine($"Cookie hex={Convert.ToHexString(cookie)} seqA(raw)={seqA} seqB(raw)={seqB} LastServerSequence={_LastServerSequence} LastClientSequence={_LastClientSequence}");
+
                                     cookie.CopyTo(_AuthorisedCookie);
                                 }
 
@@ -401,7 +403,7 @@ public class StatelessConnectHandlerComponent : HandlerComponent {
         var bValidPacket = false;
         var bitsLeft = packet.GetBitsLeft();
         var bHandshakePacketSize = bitsLeft == (HandshakePacketSizeBits - 1);
-        var bRestartResponsePacketSize = bitsLeft == (RestartHandshakePacketSizeBits - 1);
+        var bRestartResponsePacketSize = bitsLeft == (RestartResponseSizeBits - 1);
 
         if (bHandshakePacketSize || bRestartResponsePacketSize) {
             bOutRestartHandshake = packet.ReadBit();
@@ -426,7 +428,7 @@ public class StatelessConnectHandlerComponent : HandlerComponent {
         writer.WriteFloat(timestamp);
         writer.WriteString(clientAddress.ToString());
 
-        HMACSHA1.HashData(_HandshakeSecret[secretId], writer.GetData().AsSpan((int)writer.GetNumBytes()), outCookie);
+        HMACSHA1.HashData(_HandshakeSecret[secretId], writer.GetData().AsSpan(0, (int)writer.GetNumBytes()), outCookie);
     }
 
     public override void NotifyHandshakeBegin() {

@@ -83,8 +83,7 @@ public static class Program {
 
     public static void Restart() {
         Application.RequestStop();
-        var path = string.Join('\\', ExecutablePath.Replace('/', '\\').Split('\\')[..^4]);
-        Process.Start("conhost.exe", $"dotnet run \"{path}\" -- /conhost");
+        Process.Start(new ProcessStartInfo("conhost.exe", $"\"{ExecutablePath}\" /conhost") { UseShellExecute = true });
         Exit();
     }
 

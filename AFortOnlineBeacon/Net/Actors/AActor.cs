@@ -1,8 +1,14 @@
+using AFortOnlineBeacon.Core;
+
 namespace AFortOnlineBeacon.Net.Actors;
 
 public class AActor : UObject {
     private bool bActorInitialized;
     private bool bActorIsBeingDestroyed;
+
+    public ENetRole Role { get; private set; } = ENetRole.ROLE_Authority;
+    public ENetRole RemoteRole { get; private set; } = ENetRole.ROLE_None;
+    public bool bReplicates { get; private set; }
     
     // TODO: UPROPERTY(BlueprintReadWrite, ReplicatedUsing=OnRep_Instigator, meta=(ExposeOnSpawn=true, AllowPrivateAccess=true), Category=Actor)
     /// <summary>
@@ -19,10 +25,10 @@ public class AActor : UObject {
     /// <summary>
     ///     Sets the value of Role without causing other side effects to this instance.
     /// </summary>
-    public void SetRole(ENetRole inRole) {
-        // TODO: Implement
-        throw new NotImplementedException();
-    }
+    public void SetRole(ENetRole inRole) => Role = inRole;
+
+    /// <summary>Actors are always network-supported, even though they're never name-stable - the server assigns them a dynamic NetGUID and tells the client to spawn one.</summary>
+    public override bool IsSupportedForNetworking() => true;
 
     /// <summary>
     ///     Set whether this actor replicates to network clients. When this actor is spawned on the server it will be sent to clients as well.
@@ -30,16 +36,19 @@ public class AActor : UObject {
     ///     Internally changes the RemoteRole property and handles the cases where the actor needs to be added to the network actor list.
     /// </summary>
     public void SetReplicates(bool bInReplicates) {
-        // TODO: Implement
-        throw new NotImplementedException();
+        if (bReplicates == bInReplicates) return;
+
+        bReplicates = bInReplicates;
+        RemoteRole = bInReplicates ? ENetRole.ROLE_SimulatedProxy : ENetRole.ROLE_None;
     }
 
     /// <summary>
     ///     Sets whether or not this Actor is an autonomous proxy, which is an actor on a network client that is controlled by a user on that client.
     /// </summary>
     public void SetAutonomousProxy(bool bInAutonomousProxy, bool bAllowForcePropertyCompare = true) {
-        // TODO: Implement
-        throw new NotImplementedException();
+        if (!bReplicates) return;
+
+        RemoteRole = bInAutonomousProxy ? ENetRole.ROLE_AutonomousProxy : ENetRole.ROLE_SimulatedProxy;
     }
 
     public UWorld? GetWorld() {
@@ -63,6 +72,13 @@ public class AActor : UObject {
     public bool IsActorInitialized() => bActorInitialized;
 
     public bool IsPendingKillPending() => bActorIsBeingDestroyed || IsPendingKill();
+
+    /// <summary>
+    ///     Called right after PackageMap->SerializeNewActor writes this actor's spawn header, letting a
+    ///     subclass append its own extra bytes to that same bunch (e.g. APlayerController writes
+    ///     NetPlayerIndex here so the client can match it to a local viewport). No-op by default.
+    /// </summary>
+    public virtual void OnSerializeNewActor(FOutBunch bunch) {}
 
     public void PostSpawnInitialize(FTransform userSpawnTransform, AActor? inOwner, AActor? inInstigator, bool bRemoteOwned, bool bNoFail, bool bDeferConstruction) {
         // General flow here is like so

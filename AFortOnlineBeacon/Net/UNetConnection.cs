@@ -11,17 +11,19 @@ public abstract class UNetConnection : UPlayer {
     public const int MaxBunchHeaderBits = 256;
     public const int MaxPacketSize = 1024;
     public const int MaxPacketReliableSequenceHeaderBits = 32 + FNetPacketNotify.MaxSequenceHistoryLength;
-    public const int MaxPacketInfoHeaderBits = 1 /* bHasPacketInfo */ + NumBitsForJitterClockTimeInHeader  + 1 /* bHasServerFrameTime */ + 8 /* ServerFrameTime */;
+    // Matches real UE 4.23.0's WritePacketInfo: bHasServerFrameTime(1) + optional FrameTimeByte(8) + InKBytesPerSecondByte(8).
+    // This engine version has no bHasPacketInfoPayload wrapping bit and no JitterClockTime field (added in later UE versions).
+    public const int MaxPacketInfoHeaderBits = 1 /* bHasServerFrameTime */ + 8 /* FrameTimeByte */ + 8 /* InKBytesPerSecondByte */;
     public const int MaxPacketHeaderBits = MaxPacketReliableSequenceHeaderBits + MaxPacketInfoHeaderBits;
     public const int MaxPacketTrailerBits = 1;
 
     public const int DefaultMaxChannelSize = 32767;
 
-    public const int NumBitsForJitterClockTimeInHeader = 10;
-    public const int MaxJitterClockTimeValue = (1 << NumBitsForJitterClockTimeInHeader) - 1;
-    public const int MaxJitterPrecisionInMS = 1000;
-
-    public const EEngineNetworkVersionHistory DefaultEngineNetworkProtocolVersion = EEngineNetworkVersionHistory.HISTORY_ENGINENETVERSION_LATEST;
+    // Must match the real FortniteClient-Win64-Shipping.exe's negotiated EngineNetVer/GameNetVer
+    // (seen in its LogNetVersion line), not the engine's own HISTORY_ENGINENETVERSION_LATEST -
+    // using LATEST makes ReceivedPacket's version-gated reads (e.g. jitter header bits) diverge
+    // from what this specific client build actually sends, desyncing the bit reader.
+    public const EEngineNetworkVersionHistory DefaultEngineNetworkProtocolVersion = EEngineNetworkVersionHistory.HISTORY_FAST_ARRAY_DELTA_STRUCT; // 11, matches EngineNetVer: 11 (Fortnite Release-10.40)
     public const uint DefaultGameNetworkProtocolVersion = 0;
 
     /// <summary>
@@ -53,21 +55,6 @@ public abstract class UNetConnection : UPlayer {
     private float _LastTime;
     private float _LastSendTime;
     private float _LastTickTime;
-
-    /// <summary>
-    ///     Did we write the dummy PacketInfo in the current SendBuffer
-    /// </summary>
-    private bool _bSendBufferHasDummyPacketInfo;
-    
-    /// <summary>
-    ///     Stores the bit number where we wrote the dummy packet info in the packet header
-    /// </summary>
-    private FBitWriterMark _HeaderMarkForPacketInfo;
-
-    /// <summary>
-    ///     Timestamp of the last packet sent
-    /// </summary>
-    private double _PreviousPacketSendTimeInS;
 
     private bool _bFlushedNetThisFrame;
     private bool _bAutoFlush;
@@ -441,8 +428,9 @@ public abstract class UNetConnection : UPlayer {
         if (packetView.DataView.NumBytes() > 0) {
             var data = packetView.DataView.GetData();
             var count = packetView.DataView.NumBytes();
-            
+
             var lastByte = data[count - 1];
+            Console.WriteLine($"ReceivedRawPacket post-handler: count={count} NumBits={packetView.DataView.NumBits()} lastByte={lastByte:X2} data={Convert.ToHexString(data)}");
             if (lastByte != 0) {
                 var bitSize = (count * 8) - 1;
 
@@ -469,6 +457,7 @@ public abstract class UNetConnection : UPlayer {
     }
 
     private void ReceivedPacket(FBitReader reader, bool bIsReinjectedPacket = false) {
+        Console.WriteLine($"ReceivedPacket: IsError={reader.IsError()} NumBits={reader.GetNumBits()} PosBits={reader.GetPosBits()}");
         if (reader.IsError()) {
             // Logger.Error("Packet too small");
             return;
@@ -482,31 +471,16 @@ public abstract class UNetConnection : UPlayer {
             // Read packet header.
             var header = new FNotificationHeader();
 
-            if (!PacketNotify.ReadHeader(ref header, reader)) {
+            var bReadHeaderOk = PacketNotify.ReadHeader(ref header, reader);
+            Console.WriteLine($"PacketNotify.ReadHeader: ok={bReadHeaderOk} readerError={reader.IsError()} posAfter={reader.GetPosBits()}");
+            if (!bReadHeaderOk) {
                 // Logger.Fatal("Failed to read PacketHeader");
                 Close();
                 return;
             }
 
-            var bHasPacketInfoPayload = true;
-            
-            if (reader.EngineNetVer() > EEngineNetworkVersionHistory.HISTORY_JITTER_IN_HEADER) {
-                bHasPacketInfoPayload = reader.ReadBit();
-                
-                if (bHasPacketInfoPayload) {
-                    var bitsReadPreJitterClock = reader.GetPosBits();
-                
-                    var packetJitterClockTimeMs = reader.ReadInt(MaxJitterClockTimeValue + 1);
-
-                    if (reader.GetPosBits() - bitsReadPreJitterClock != NumBitsForJitterClockTimeInHeader) {
-                        throw new UnrealNetException("JitterClockTime did not read the expected amount of bits");
-                    }
-                
-                    if (!bIsReinjectedPacket) ProcessJitter(packetJitterClockTimeMs);
-                }
-            }
-
             var packetSequenceDelta = PacketNotify.GetSequenceDelta(header);
+            Console.WriteLine($"GetSequenceDelta: delta={packetSequenceDelta} header.Seq={header.Seq.Value} header.AckedSeq={header.AckedSeq.Value} InSeq={PacketNotify.GetInSeq().Value} OutSeq={PacketNotify.GetOutSeq().Value} OutAckSeq={PacketNotify.GetOutAckSeq().Value} InAckSeq={PacketNotify.GetInAckSeq().Value}");
             if (packetSequenceDelta > 0) {
                 var bPacketOrderCacheActive = !_bFlushingPacketOrderCache && _PacketOrderCache != null;
                 var bCheckForMissingSequence = bPacketOrderCacheActive && _PacketOrderCacheCount == 0;
@@ -538,7 +512,7 @@ public abstract class UNetConnection : UPlayer {
             PacketNotify.Update(header, new PacketNotifyUpdateContext(_PacketNotifyUpdateDelegate, channelsToClose));
             
             // Extra information associated with the header (read only after acks have been processed)
-            if (packetSequenceDelta > 0 && !ReadPacketInfo(reader, bHasPacketInfoPayload)) {
+            if (packetSequenceDelta > 0 && !ReadPacketInfo(reader)) {
                 // Logger.Fatal("Failed to read PacketHeader");
                 Close();
                 return;
@@ -916,12 +890,10 @@ public abstract class UNetConnection : UPlayer {
         // TODO: Invoke NakChannelFunc on all channels written for this PacketId
     }
 
-    private bool ReadPacketInfo(FBitReader reader, bool bHasPacketInfoPayload) {
-        if (!bHasPacketInfoPayload) {
-            var bCanContinueReading = reader.IsError() == false;
-            return bCanContinueReading;
-        }
-
+    // Matches real UE 4.23.0's UNetConnection::ReadPacketInfo exactly - this engine version has no
+    // bHasPacketInfoPayload wrapping bit and no JitterClockTime field (those were added in later UE
+    // versions); PacketInfo here is just: bHasServerFrameTime(1) + optional FrameTimeByte(8) + InKBytesPerSecondByte(8).
+    private bool ReadPacketInfo(FBitReader reader) {
         var bHasServerFrameTime = reader.ReadBit();
         var serverFrameTime = 0.0d;
 
@@ -929,22 +901,13 @@ public abstract class UNetConnection : UPlayer {
             throw new NotImplementedException("Client code");
         } else LastHasServerFrameTime = bHasServerFrameTime;
 
-        if (reader.EngineNetVer() < EEngineNetworkVersionHistory.HISTORY_JITTER_IN_HEADER) {
-            // RemoteInKBytesPerSecondByte
-            reader.ReadByte();
-        }
+        reader.ReadByte(); // RemoteInKBytesPerSecondByte - always present, unconditionally.
 
         if (reader.IsError()) return false;
-        
+
         // TODO: Update ping, lag measuring
 
         return true;
-    }
-
-    private void ProcessJitter(uint packetJitterClockTimeMs) {
-        if (packetJitterClockTimeMs >= MaxJitterClockTimeValue) return;
-        
-        // Logger.Verbose("Jitter calculations missing");
     }
 
     public abstract float GetTimeoutValue();
@@ -980,7 +943,12 @@ public abstract class UNetConnection : UPlayer {
         Handler = new PacketHandler();
         var mode = Driver.ServerConnection != null ? HandlerMode.Client : HandlerMode.Server;
         Handler.Initialize(mode, UNetConnection.MaxPacketSize * 8 ,false);
-        
+
+        // Registration order matters: real client chain is [Oodle, AES, StatelessConnect] and Incoming()
+        // unwraps last-added first, so StatelessConnect (the outermost wire framing) must be added last.
+        Handler.AddHandler<OodleHandlerComponent>();
+        Handler.AddHandler<AESHandlerComponent>();
+
         StatelessConnectComponent = (StatelessConnectHandlerComponent) Handler.AddHandler<StatelessConnectHandlerComponent>();
         StatelessConnectComponent.SetDriver(Driver);
 
@@ -1049,28 +1017,36 @@ public abstract class UNetConnection : UPlayer {
 
         var bIsOpenOrClose = bunch.bOpen || bunch.bClose;
         var bIsOpenOrReliable = bunch.bOpen || bunch.bReliable;
-        
+
+        Console.WriteLine($"SendRawBunch fields: bIsOpenOrClose={bIsOpenOrClose} bIsReplicationPaused={bunch.bIsReplicationPaused} bReliable={bunch.bReliable} ChIndex={bunch.ChIndex} bHasPackageMapExports={bunch.bHasPackageMapExports} bHasMustBeMappedGUIDs={bunch.bHasMustBeMappedGUIDs} bPartial={bunch.bPartial} ChSequence={bunch.ChSequence} bIsOpenOrReliable={bIsOpenOrReliable} ChName={bunch.ChName} IsInternalAck={IsInternalAck()}");
+
         sendBunchHeader.WriteBit(bIsOpenOrClose);
+        Console.WriteLine($"  after bIsOpenOrClose: {sendBunchHeader.GetNumBits()}");
 
         if (bIsOpenOrClose) {
             sendBunchHeader.WriteBit(bunch.bOpen);
             sendBunchHeader.WriteBit(bunch.bClose);
-            
+
             if (bunch.bClose) sendBunchHeader.SerializeInt((uint)bunch.CloseReason, (uint)EChannelCloseReason.MAX);
         }
-        
+
         sendBunchHeader.WriteBit(bunch.bIsReplicationPaused);
+        Console.WriteLine($"  after bIsReplicationPaused: {sendBunchHeader.GetNumBits()}");
         sendBunchHeader.WriteBit(bunch.bReliable);
+        Console.WriteLine($"  after bReliable: {sendBunchHeader.GetNumBits()}");
 
         sendBunchHeader.SerializeIntPacked((uint)bunch.ChIndex);
-        
+        Console.WriteLine($"  after ChIndex: {sendBunchHeader.GetNumBits()}");
+
         sendBunchHeader.WriteBit(bunch.bHasPackageMapExports);
         sendBunchHeader.WriteBit(bunch.bHasMustBeMappedGUIDs);
         sendBunchHeader.WriteBit(bunch.bPartial);
+        Console.WriteLine($"  after exports/guids/partial: {sendBunchHeader.GetNumBits()}");
 
         if (bunch.bReliable && !IsInternalAck()) {
             // 14 > 24
             sendBunchHeader.WriteIntWrapped((uint)bunch.ChSequence, MaxChSequence);
+            Console.WriteLine($"  after ChSequence: {sendBunchHeader.GetNumBits()}");
         }
 
         if (bunch.bPartial) {
@@ -1081,9 +1057,11 @@ public abstract class UNetConnection : UPlayer {
         if (bIsOpenOrReliable) {
             var name = (FName?) bunch.ChName;
             UPackageMap.StaticSerializeName(sendBunchHeader, ref name);
+            Console.WriteLine($"  after ChName: {sendBunchHeader.GetNumBits()}");
         }
-        
+
         sendBunchHeader.WriteIntWrapped((uint)bunch.GetNumBits(), (uint)(MaxPacket * 8));
+        Console.WriteLine($"SendRawBunch: ChIndex={bunch.ChIndex} ChName={bunch.ChName} bOpen={bunch.bOpen} bClose={bunch.bClose} bReliable={bunch.bReliable} bPartial={bunch.bPartial} bunch.GetNumBits()={bunch.GetNumBits()} headerBitsSoFar={sendBunchHeader.GetNumBits()} bunchDataHex={Convert.ToHexString(bunch.GetData())}");
 
         if (sendBunchHeader.IsError()) {
             // Logger.Fatal("SendBunchHeader Error: Bunch = {Bunch}", bunch);
@@ -1095,13 +1073,17 @@ public abstract class UNetConnection : UPlayer {
 
         var bunchHeaderBits = sendBunchHeader.GetNumBits();
         var bunchBits = bunch.GetNumBits();
-        
-        // If the bunch does not fit in the current packet, 
+
+        // If the bunch does not fit in the current packet,
         // flush packet now so that we can report collected stats in the correct scope
         PrepareWriteBitsToSendBuffer(bunchHeaderBits, bunchBits);
-        
+
+        Console.WriteLine($"  SendBuffer.GetNumBits() before appending bunch: {SendBuffer.GetNumBits()} (bunchHeaderBits={bunchHeaderBits} bunchBits={bunchBits})");
+
         // Write the bits to the buffer and remember the packet id used
         bunch.PacketId = WriteBitsToSendBufferInternal(sendBunchHeader.GetData(), (int)bunchHeaderBits, bunch.GetData(), (int)bunchBits, EWriteBitsDataType.Bunch);
+
+        Console.WriteLine($"  SendBuffer.GetNumBits() after appending bunch: {SendBuffer.GetNumBits()}");
 
         if (PackageMap != null && bunch.bHasPackageMapExports) {
             PackageMap.NotifyBunchCommit(bunch.PacketId, bunch);
@@ -1130,9 +1112,9 @@ public abstract class UNetConnection : UPlayer {
         if (SendBuffer.GetNumBits() == 0 && !IsInternalAck()) {
             // Write Packet Header, before sending the packet we will go back and rewrite the data
             WritePacketHeader(SendBuffer);
-            
-            // Pre-write the bits for the packet info
-            WriteDummyPacketInfo(SendBuffer);
+
+            // Also write server RTT and received rate
+            WritePacketInfo(SendBuffer);
             
             // We do not allow the first bunch to merge with the ack data as this will "revert" the ack data.
             AllowMerge = false;
@@ -1168,80 +1150,26 @@ public abstract class UNetConnection : UPlayer {
         }
     }
 
-    private void WriteFinalPacketInfo(FBitWriter writer, double packetSentTimeInS) {
-        if (!_bSendBufferHasDummyPacketInfo) {
-            // PacketInfo payload is not included in this SendBuffer; nothing to rewrite
-            return;
+    // Matches real UE 4.23.0's UNetConnection::WritePacketInfo exactly - this engine version has no
+    // bHasPacketInfoPayload wrapping bit and no JitterClockTime field (those were added in later UE
+    // versions), and there is no deferred dummy/final rewrite: PacketInfo is written directly, once,
+    // right after the packet header. Fields: bHasServerFrameTime(1) + optional FrameTimeByte(8) + InKBytesPerSecondByte(8).
+    private void WritePacketInfo(FBitWriter writer) {
+        var bHasServerFrameTime = LastHasServerFrameTime;
+        writer.WriteBit(bHasServerFrameTime);
+
+        if (bHasServerFrameTime && Driver!.IsServer()) {
+            // Write data used to calculate link latency
+            // TODO: Proper
+            const int FrameTime = 123;
+            var frameTimeByte = (byte) Math.Min(Math.Floor((double)(FrameTime * 1000)), 255);
+            writer.WriteByte(frameTimeByte);
         }
 
-        var currentMark = new FBitWriterMark(writer);
-        
-        // Go back to write over the dummy bits
-        _HeaderMarkForPacketInfo.PopWithoutClear(writer);
-        
-        // Write Jitter clock time
-        {
-            var deltaSendTimeInMS = (packetSentTimeInS - _PreviousPacketSendTimeInS) * 1000.0;
-            var clockTimeMilliseconds = 0;
-            
-            // If the delta is over our max precision, we send MAX value and jitter will be ignored by the receiver.
-            if (deltaSendTimeInMS >= MaxJitterPrecisionInMS) clockTimeMilliseconds = MaxJitterClockTimeValue;
-            else {
-                // TODO: Proper
-                // Get the fractional part (milliseconds) of the clock time
-                clockTimeMilliseconds = 0;
-
-                // Ensure we don't overflow
-                clockTimeMilliseconds &= MaxJitterClockTimeValue;
-            }
-            
-            writer.SerializeInt((uint)clockTimeMilliseconds, MaxJitterClockTimeValue + 1);
-
-            _PreviousPacketSendTimeInS = packetSentTimeInS;
-        }
-        
-        // Write server frame time
-        {
-            var bHasServerFrameTime = LastHasServerFrameTime;
-            writer.WriteBit(bHasServerFrameTime);
-
-            if (bHasServerFrameTime && Driver!.IsServer()) {
-                // Write data used to calculate link latency
-                // TODO: Proper
-                const int FrameTime = 123;
-                var frameTimeByte = (byte) Math.Min(Math.Floor((double)(FrameTime * 1000)), 255);
-                writer.WriteByte(frameTimeByte);
-            }
-        }
-        
-        _HeaderMarkForPacketInfo.Reset();
-        
-        // Revert to the correct bit writing place
-        currentMark.PopWithoutClear(writer);
-    }
-
-    private void WriteDummyPacketInfo(FBitWriter writer) {
-        var bHasPacketInfoPayload = _bFlushedNetThisFrame == false;
-        
-        writer.WriteBit(bHasPacketInfoPayload);
-
-        if (bHasPacketInfoPayload) {
-            // Pre-insert the bits since the final time values will be calculated and inserted right before LowLevelSend
-            _HeaderMarkForPacketInfo.Init(writer);
-
-            Span<byte> dummyJitterClockTime = stackalloc byte[4];
-            writer.SerializeBits(dummyJitterClockTime, NumBitsForJitterClockTimeInHeader);
-
-            var bHasServerFrameTime = LastHasServerFrameTime;
-            writer.WriteBit(bHasServerFrameTime);
-
-            if (bHasServerFrameTime && Driver!.IsServer()) { // false
-                const byte dummyFrameTimeByte = 0;
-                writer.WriteByte(dummyFrameTimeByte);
-            }
-        }
-
-        _bSendBufferHasDummyPacketInfo = bHasPacketInfoPayload;
+        // Notify the remote side of our current outbound rate - always written, unconditionally.
+        // TODO: Track actual outbound bytes/sec; report 0 for now.
+        const byte inKBytesPerSecondByte = 0;
+        writer.WriteByte(inKBytesPerSecondByte);
     }
 
     private int WriteBitsToSendBufferInternal(byte[]? bits, int sizeInBits, byte[]? extraBits, int extraSizeInBits, EWriteBitsDataType dataType) {
@@ -1311,8 +1239,6 @@ public abstract class UNetConnection : UPlayer {
         if (finalBufferSize == SendBuffer.GetMaxBits()) SendBuffer.Reset();
         else SendBuffer = new FBitWriter(finalBufferSize);
 
-        // _HeaderMarkForPacketInfo.Reset();
-        
         ResetPacketBitCounts();
         
         ValidateSendBuffer();
@@ -1359,18 +1285,14 @@ public abstract class UNetConnection : UPlayer {
 
             if (Handler != null) Handler.OutgoingHigh(SendBuffer);
 
-            // var packetSentTimeInS = FPlatformTime.Seconds();
-            
             // Write the UNetConnection-level termination bit
             SendBuffer.WriteBit(true);
-            
+
             // Refresh outgoing header with latest data
             if (!IsInternalAck()) {
                 // if we update ack, we also update received ack associated with outgoing seq
                 // so we know how many ack bits we need to write (which is updated in received packet)
                 WritePacketHeader(SendBuffer);
-
-                // WriteFinalPacketInfo(SendBuffer, packetSentTimeInS);
             }
             
             ValidateSendBuffer();

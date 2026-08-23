@@ -125,5 +125,5 @@ async def Rapi_account_post(request: sanic.Request):
 # }
 
 if __name__ == "__main__":
-    freeze_support()
+    #freeze_support()
     server.run("0.0.0.0", 8010)

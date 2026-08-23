@@ -74,6 +74,9 @@ public class UIpConnection : UNetConnection {
             // can't send remote addr if client is already set. receive is called before now too, so need to establish socket before then.
             if (RemoteAddr.Address.GetAddressBytes().All(a => a == 0xff)) Socket.Send(dataToSend, countBytes);
             else Socket.Send(dataToSend, countBytes, RemoteAddr);
+
+            Console.WriteLine($"Sent {countBytes} {RemoteAddr}, {BitConverter.ToString(dataToSend)}");
+            PacketCapture.Raise(EPacketDirection.Outgoing, RemoteAddr, dataToSend);
         }
     }
 

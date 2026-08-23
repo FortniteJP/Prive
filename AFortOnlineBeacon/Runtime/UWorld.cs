@@ -21,6 +21,16 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         _Levels = new List<ULevel>();
 
         Url = new FUrl();
+
+        // We don't stream/load levels from disk - a single persistent level is created up front and
+        // used for the lifetime of this world, which is enough for actors to have a valid Outer/Level
+        // chain (required for GetWorld()/GetLevel() and for network-actor registration to work).
+        PersistentLevel = new ULevel();
+        PersistentLevel.InitializeObjectProperties(null, new FName(EName.PersistentLevel), GUClassArray.StaticClass<ULevel>());
+        PersistentLevel.OwningWorld = this;
+
+        _Levels.Add(PersistentLevel);
+        _CurrentLevel = PersistentLevel;
     }
     
     /// <summary>
@@ -316,11 +326,13 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     }
 
     private void WelcomePlayer(UNetConnection connection) {
-        // TODO: Properly fetch level name from CurrentLevel
-        var levelName = "/Game/ThirdPersonCPP/Maps/ThirdPersonExampleMap";
-        
-        // TODO: Properly fetch from AuthorityGameMode
-        var gameName = "/Script/ThirdPersonMP.ThirdPersonMPGameMode";
+        var levelName = Url.Map;
+
+        // We don't have Fortnite's real GameMode class path yet (needs SDK dumps to identify) - send
+        // it if the spawned GameMode's class has a known native path, otherwise omit it. This matches
+        // real UE's own client-side handling of NMT_Welcome, which only adds the "?game=" URL option
+        // when GameName is non-empty, so sending nothing here is honest rather than a guess.
+        var gameName = GetAuthGameMode()?.GetClass().NativePackagePath ?? string.Empty;
         var redirectUrl = string.Empty;
         
         NMT_Welcome.Send(connection, levelName, gameName, redirectUrl);
@@ -348,6 +360,12 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         }
 
         if (NetDriver != null) NetDriver.AddNetworkActor(actor);
+    }
+
+    private void OpenActorChannelFor(UNetConnection connection, AActor actor) {
+        var channel = (UActorChannel) connection.CreateChannelByName(EName.Actor, EChannelCreateFlags.OpenedLocally, UnrealConstants.IndexNone);
+        channel.SetChannelActor(actor);
+        channel.ReplicateActor();
     }
 
     private void RemoveNetworkActor(AActor? actor) {
@@ -391,6 +409,16 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
             if (remoteRole == ENetRole.ROLE_AutonomousProxy) newPlayerController.SetAutonomousProxy(true);
             newPlayerController.SetPlayer(newPlayer);
             gameMode.PostLogin(newPlayerController);
+
+            // Real UE does this from ServerReplicateActors' per-connection relevancy pass, which
+            // isn't implemented yet - this is a one-shot stand-in that just opens a channel for the
+            // connection's own PlayerController (and Pawn, once PostLogin possesses one). No ongoing
+            // per-tick property replication happens yet - see AFortOnlineBeacon.Net.UPackageMapClient.
+            if (newPlayer is UNetConnection ownerConnection) {
+                OpenActorChannelFor(ownerConnection, newPlayerController);
+                if (newPlayerController.Pawn != null) OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);
+            }
+
             return newPlayerController;
         }
         

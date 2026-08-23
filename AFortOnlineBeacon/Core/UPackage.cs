@@ -1,3 +1,3 @@
 namespace AFortOnlineBeacon.Core;
 
-public class UPackage {}
+public class UPackage : UObject {}

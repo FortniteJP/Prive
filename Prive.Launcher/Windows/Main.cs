@@ -94,6 +94,8 @@ public class MainWindow : Window {
                 LaunchButton.Enabled = true;
                 DownloadButton.Enabled = true;
                 // ActivePlayersTimer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(30));
+
+                Application.MainLoop.Invoke(() => SetNeedsDisplay());
             });
         };
         Add(LaunchButton);

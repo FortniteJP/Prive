@@ -52,7 +52,27 @@ public class UObjectBaseUtility : UObjectBase {
     public bool IsA(UClass someBase) {
         var someBaseClass = someBase;
         var thisClass = GetClass();
-        
+
         return IsChildOfWorkaround(thisClass, someBaseClass);
+    }
+
+    /*
+     * Networking - simplified port of UObject::IsNameStableForNetworking / IsFullNameStableForNetworking.
+     * True for objects the client can resolve by path (CDOs, classes, packages); false for anything
+     * spawned at runtime (actors, etc), which get dynamic GUIDs instead.
+     */
+    public virtual bool IsNameStableForNetworking() => HasAnyFlags(EObjectFlags.RF_ClassDefaultObject | EObjectFlags.RF_ArchetypeObject) || this is UPackage || this is UClass;
+
+    /// <summary>
+    ///     True for objects the server can hand a fresh (dynamic) NetGUID to and have the client spawn
+    ///     on demand - i.e. actors. False by default; only overridden where UE itself overrides it.
+    /// </summary>
+    public virtual bool IsSupportedForNetworking() => false;
+
+    public bool IsFullNameStableForNetworking() {
+        if (!IsNameStableForNetworking()) return false;
+
+        var outer = GetOuter();
+        return outer == null || outer.IsFullNameStableForNetworking();
     }
 }

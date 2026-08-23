@@ -139,8 +139,8 @@ public class FBitReader : FArchive {
             var num = (int) Num;
             
             Buffer[num >> 3] &= mask;
-            
-            for (int i = 0; i <= 7; i++) BufferBits[num - i] &= ((mask >> 7 - i) & 0x1) == 1;
+
+            for (int i = 0; i <= 7 && num - i >= 0; i++) BufferBits[num - i] &= ((mask >> 7 - i) & 0x1) == 1;
         }
     }
     

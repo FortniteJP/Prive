@@ -15,6 +15,7 @@ global using AFortOnlineBeacon.Net.Packets.Bunch;
 global using AFortOnlineBeacon.Net.Packets.Control;
 global using AFortOnlineBeacon.Net.Packets.Header;
 global using AFortOnlineBeacon.Net.Packets.Header.Sequence;
+global using AFortOnlineBeacon.Net.Replication;
 global using AFortOnlineBeacon.Serialization;
 
 global using static Global;

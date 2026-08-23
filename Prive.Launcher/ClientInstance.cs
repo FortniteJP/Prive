@@ -35,8 +35,16 @@ public class ClientInstance {
     }
 
     public void Launch() {
-        if (Directory.Exists(Utils.FortniteSavedPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedOriginalPath);
-        if (Directory.Exists(Utils.FortniteSavedPrivePath)) Directory.Move(Utils.FortniteSavedPrivePath, Utils.FortniteSavedPath);
+        try {
+            if (Directory.Exists(Utils.FortniteSavedPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedOriginalPath);
+            if (Directory.Exists(Utils.FortniteSavedPrivePath)) Directory.Move(Utils.FortniteSavedPrivePath, Utils.FortniteSavedPath);
+        } catch (Exception ex) {
+            #if DEBUG
+            var result = Utils.MessageBox($"Failed to move saved folder: {ex.Message}\n\nDo you want to continue anyway?", "Prive", 0x00000000 | 0x00000004 | 0x00000020);
+            if (result == 7)
+            #endif
+            throw;
+        }
         LauncherProcess = Process.Start(new ProcessStartInfo(LauncherPath, ArgumentsString))!;
         Utils.SuspendThreads(LauncherProcess);
         EACProcess = Process.Start(new ProcessStartInfo(EACPath, ArgumentsString))!;

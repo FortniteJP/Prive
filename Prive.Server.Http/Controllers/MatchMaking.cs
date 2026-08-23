@@ -24,6 +24,8 @@ public class MatchMakingController : ControllerBase {
             Response.StatusCode = 400;
             return null;
         }
+        Response.StatusCode = 503; // just for now
+        return null;
 
         // Console.WriteLine(Request.Headers.Authorization.ToString());
         // Console.WriteLine(Request.Headers.Authorization.ToString().Split(" ")[2]);

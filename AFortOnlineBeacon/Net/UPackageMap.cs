@@ -42,7 +42,10 @@ public class UPackageMap {
 
     private static bool ShouldReplicateAsInteger(EName name) => (int)name <= UnrealNames.MaxNetworkedHardcodedName;
 
-    public void NotifyBunchCommit(int bunchPacketId, FOutBunch bunch) => throw new NotImplementedException();
+    public virtual void NotifyBunchCommit(int bunchPacketId, FOutBunch bunch) {
+        // Real UE tracks packet->exported-GUID associations here to re-export on NAK. We don't
+        // retry GUID exports on packet loss yet, so there's nothing to record.
+    }
 
     public void ReceivedAck(int ackPacketId) {
         // TODO: Implement

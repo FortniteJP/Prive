@@ -155,7 +155,7 @@ public class AccountController : ControllerBase {
         }
 
         if (clientToken is not null) ClientTokens.Remove(clientToken);
-        
+
         Response.StatusCode = 204;
         return null;
     }
