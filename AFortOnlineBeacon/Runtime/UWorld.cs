@@ -397,6 +397,16 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         if (NetDriver != null) await NetDriver.DisposeAsync();
     }
 
+    /// <summary>
+    ///     Parameterless server-&gt;client PlayerController RPCs to fire once the connection's own
+    ///     PlayerController channel is open. Overridable via CLIENT_INIT_RPCS (comma-separated; set it
+    ///     to an empty string to send none) so candidates can be swapped without a rebuild - see the
+    ///     call site in SpawnPlayActor for why this list exists at all.
+    /// </summary>
+    private static readonly string[] ClientInitRpcs =
+        (Environment.GetEnvironmentVariable("CLIENT_INIT_RPCS") ?? "ClientOnGenericPlayerInitialization")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     private APlayerController? SpawnPlayActor(UPlayer newPlayer, ENetRole remoteRole, FUrl inURL, FUniqueNetIdRepl uniqueId, out string error, byte inNetPlayerIndex = 0) {
         error = string.Empty;
         
@@ -433,6 +443,28 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // push (WorldInventory, an ObjectRef Cmd) references it, matching PlayerState's order.
                 if (newPlayerController.WorldInventory != null) OpenActorChannelFor(ownerConnection, newPlayerController.WorldInventory);
                 var pcChannel = OpenActorChannelFor(ownerConnection, newPlayerController);
+
+                // AFortPlayerController::ClientOnGenericPlayerInitialization - a parameterless client
+                // RPC Fortnite hangs off AGameModeBase::GenericPlayerInitialization, which real UE
+                // calls from PostLogin. It is sent here rather than from AGameModeBase.PostLogin
+                // because the channel only exists once the actor channel above is open.
+                //
+                // Why it matters: on 10.40 AFortPlayerController::ClientQuickBars is
+                // "ZeroConstructor, IsPlainOldData, NoDestructor, Protected" - NO Net flag - and it
+                // is the only AFortQuickBars* field in the entire SDK. So the quickbars that
+                // ClientRestart_Implementation refuses to continue without ("Quickbars are invalid")
+                // can never be handed over from the server the way WorldInventory is; the client has
+                // to spawn AFortQuickBars itself, and something has to tell it to. (Erbium and
+                // Project-Reboot-3.0 do assign PlayerController->QuickBars server-side, but PR3.0
+                // guards that with `Fortnite_Version <= 2.5` - on those builds the field really was
+                // replicated. It is not on this one.)
+                //
+                // CLIENT_INIT_RPCS overrides the list (comma-separated, empty string sends none), so
+                // the next candidate can be tried without a rebuild. The obvious other lever is
+                // ClientForceWorldInventoryUpdate, also parameterless, which drives
+                // HandleWorldInventoryLocalUpdate.
+                foreach (var rpcName in ClientInitRpcs) pcChannel.SendParameterlessRpc(rpcName);
+
                 if (newPlayerController.Pawn != null) {
                     OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);
                     // See UActorChannel.SendClientRestart's doc comment - without this, a real client

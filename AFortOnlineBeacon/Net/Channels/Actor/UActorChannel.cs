@@ -429,27 +429,82 @@ public class UActorChannel : UChannel {
         SendClientRetryClientRestart(pc.Pawn);
     }
 
-    private unsafe void SendPawnRpc(string fieldName, APawn pawn) {
+    /// <summary>UCharacterMovementComponent::NetworkMinTimeBetweenClientAckGoodMoves.</summary>
+    private const float NetworkMinTimeBetweenClientAckGoodMoves = 0.10f;
+
+    private bool _LoggedFirstGoodMoveAck;
+
+    /// <summary>
+    ///     Port of the bAckGoodMove branch of UCharacterMovementComponent::SendClientAdjustment.
+    ///     Real UE drives this once per ServerReplicateActors pass ("we do this here so that we send
+    ///     a maximum of one per packet to that client"); this project has no such pass, so it runs
+    ///     off the receive path instead - with the same 0.10s throttle, which dominates either way.
+    ///
+    ///     ACharacter::ClientAckGoodMove is declared UFUNCTION(unreliable, client), hence reliable:
+    ///     false. One ack frees every client saved move up to its timestamp, so 10Hz is plenty for a
+    ///     client moving at 60Hz.
+    /// </summary>
+    private void SendClientAckGoodMove() {
+        if (Actor is not APawn pawn) return;
+        if (pawn.PendingAckGoodMoveTimeStamp <= 0f) return;
+
+        var now = Actor.GetWorld()?.TimeSeconds ?? (Environment.TickCount64 / 1000f);
+        if (now - pawn.ServerLastClientGoodMoveAckTime <= NetworkMinTimeBetweenClientAckGoodMoves) return;
+        pawn.ServerLastClientGoodMoveAckTime = now;
+
+        var timeStamp = pawn.PendingAckGoodMoveTimeStamp;
+        pawn.PendingAckGoodMoveTimeStamp = 0f;
+
+        if (!_LoggedFirstGoodMoveAck) {
+            _LoggedFirstGoodMoveAck = true;
+            Console.WriteLine($"UActorChannel.SendClientAckGoodMove: ChIndex={ChIndex} acknowledging the client's first move (TimeStamp={timeStamp}). " +
+                "Client saved moves should stop piling up now - watch for 'Hit limit of 96 saved moves' to disappear.");
+        }
+
+        SendRpc("ClientAckGoodMove", writer => {
+            writer.WriteBit(true); // TimeStamp is present (non-bool RPC param protocol - see FRpcReader)
+            writer.WriteFloat(timeStamp);
+        }, reliable: false);
+    }
+
+    private void SendPawnRpc(string fieldName, APawn pawn) =>
+        SendRpc(fieldName, writer => {
+            writer.WriteBit(true); // NewPawn is present (non-bool RPC param protocol - see FRpcReader)
+            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, pawn);
+        });
+
+    /// <summary>
+    ///     A server-&gt;client RPC whose UFunction takes no parameters, so its field payload is simply
+    ///     zero bits long. WriteFieldHeaderAndPayload still writes the RepIndex and a packed length
+    ///     of 0, which is all the client's ReadFieldHeaderAndPayload needs to dispatch the call.
+    /// </summary>
+    public void SendParameterlessRpc(string fieldName) => SendRpc(fieldName, static _ => {});
+
+    /// <param name="reliable">
+    ///     Must match the UFUNCTION's own declaration. Getting this wrong is not cosmetic: an
+    ///     unreliable-in-UE RPC sent reliably at gameplay frequency (ClientAckGoodMove fires at the
+    ///     client's move rate) fills the 256-entry reliable buffer and kills the connection.
+    /// </param>
+    private unsafe void SendRpc(string fieldName, Action<FNetBitWriter> writeParams, bool reliable = true) {
         if (Actor == null || Connection == null) return;
 
         var classCache = NativeClassNetCache.Get(Actor);
         var field = classCache.GetFromName(fieldName);
         if (field == null) {
-            Console.WriteLine($"SendPawnRpc: '{fieldName}' not found in {Actor.GetFName()}'s ClassNetCache, not sending");
+            Console.WriteLine($"SendRpc: '{fieldName}' not found in {Actor.GetFName()}'s ClassNetCache, not sending");
             return;
         }
 
         using var bunch = new FOutBunch(this, false);
-        bunch.bReliable = true;
+        bunch.bReliable = reliable;
 
         var payload = new FNetBitWriter(Connection.PackageMap, 64);
         payload.WriteBit(false); // bDoChecksum
         uint terminator = 0;
         payload.SerializeIntPacked(&terminator); // empty RepLayout property section
 
-        var fieldPayload = new FNetBitWriter(Connection.PackageMap, 64);
-        fieldPayload.WriteBit(true); // NewPawn is present (non-bool RPC param protocol - see FRpcReader)
-        ((UPackageMapClient) fieldPayload.PackageMap!).SerializeObject(fieldPayload, pawn);
+        var fieldPayload = new FNetBitWriter(Connection.PackageMap!, 64);
+        writeParams(fieldPayload);
 
         var fieldIndex = (uint) field.FieldNetIndex;
         payload.SerializeInt(&fieldIndex, (uint) (classCache.GetMaxIndex() + 1));
@@ -464,7 +519,9 @@ public class UActorChannel : UChannel {
         var numPayloadBits = (uint) payload.GetNumBits();
         bunch.SerializeIntPacked(&numPayloadBits);
         var payloadData = payload.GetData();
-        Console.WriteLine($"SendPawnRpc: {fieldName} fieldIndex={fieldIndex} numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+        // Reliable RPCs here are one-shot handshake steps worth always seeing; unreliable ones
+        // (ClientAckGoodMove) repeat at gameplay rate and would bury everything else.
+        if (reliable || NetDebugLog.VerboseEnabled) Console.WriteLine($"SendRpc: {fieldName} fieldIndex={fieldIndex} numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
         fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
 
         SendBunch(bunch, false);
@@ -572,6 +629,10 @@ public class UActorChannel : UChannel {
             }
 
             HandlePossessionRpc(fieldName);
+
+            // Any accepted client move leaves a timestamp owed back to the client; this is the only
+            // place we learn one arrived. Throttled inside - see SendClientAckGoodMove.
+            if (fieldName.StartsWith("ServerMove", StringComparison.Ordinal)) SendClientAckGoodMove();
 
             bunch.Pos = fieldEnd;
         }

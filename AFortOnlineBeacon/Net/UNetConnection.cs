@@ -249,6 +249,13 @@ public abstract class UNetConnection : UPlayer {
     ///     Most recently acked outgoing packet.
     /// </summary>
     public int OutAckPacketId { get; private set; }
+
+    /// <summary>
+    ///     Record of which channels wrote data into each outgoing packet - see FWrittenChannelsRecord.
+    ///     Required for reliable bunches to ever be released; this used to be a TODO, which is why the
+    ///     reliable queue never drained.
+    /// </summary>
+    public FWrittenChannelsRecord ChannelRecord { get; } = new();
     
     public bool LastHasServerFrameTime { get; private set; }
     
@@ -865,8 +872,6 @@ public abstract class UNetConnection : UPlayer {
         // LastRecvAckTimestamp = Driver.GetElapsedTime();
 
         if (PackageMap != null) PackageMap.ReceivedAck(ackPacketId);
-        
-        // TODO: Invoke AckChannelFunc on all channels written for this PacketId
 
         var ackChannelFunc = new Action<int, uint>((ackedPacketId, channelIndex) => {
             if (channelIndex >= Channels.Length) {
@@ -890,7 +895,7 @@ public abstract class UNetConnection : UPlayer {
         });
 
         // Invoke AckChannelFunc on all channels written for this PacketId
-        // FChannelRecordImpl::ConsumeChannelRecordsForPacket(ChannelRecord, AckPacketId, AckChannelFunc);
+        ChannelRecord.ConsumeChannelRecordsForPacket(ackPacketId, ackChannelFunc);
     }
 
     private void ReceivedNak(int nakPacketId) {
@@ -898,8 +903,21 @@ public abstract class UNetConnection : UPlayer {
         
         // Update pending NetGUIDs
         PackageMap!.ReceivedNak(nakPacketId);
-        
-        // TODO: Invoke NakChannelFunc on all channels written for this PacketId
+
+        var nakChannelFunc = new Action<int, uint>((nackedPacketId, channelIndex) => {
+            if (channelIndex >= Channels.Length) return;
+
+            var channel = Channels[channelIndex];
+            if (channel == null) return;
+
+            channel.ReceivedNak(nackedPacketId);
+
+            // warning: May destroy Channel.
+            if (channel.OpenPacketId.InRange(nackedPacketId)) channel.ReceivedAcks();
+        });
+
+        // Invoke NakChannelFunc on all channels written for this PacketId
+        ChannelRecord.ConsumeChannelRecordsForPacket(nakPacketId, nakChannelFunc);
     }
 
     // Matches real UE 4.23.0's UNetConnection::ReadPacketInfo exactly - this engine version has no
@@ -941,7 +959,8 @@ public abstract class UNetConnection : UPlayer {
             for (var i = 0; i < OutReliable.Length; i++) OutReliable[i] = InitOutReliable;
 
             PacketNotify.Init(new((ushort)InPacketId), new((ushort)OutPacketId));
-            
+            ChannelRecord.Reset();
+
             // Logger.Verbose("InitSequence: IncomingSequence: {SeqA}, OutgoingSequence: {SeqB}", incomingSequence, outgoingSequence);
             // Logger.Verbose("InitSequence: InitInReliable: {In}, InitOutReliable: {Out}", InitInReliable, InitOutReliable);
         }
@@ -1030,10 +1049,10 @@ public abstract class UNetConnection : UPlayer {
         var bIsOpenOrClose = bunch.bOpen || bunch.bClose;
         var bIsOpenOrReliable = bunch.bOpen || bunch.bReliable;
 
-        Console.WriteLine($"SendRawBunch fields: bIsOpenOrClose={bIsOpenOrClose} bIsReplicationPaused={bunch.bIsReplicationPaused} bReliable={bunch.bReliable} ChIndex={bunch.ChIndex} bHasPackageMapExports={bunch.bHasPackageMapExports} bHasMustBeMappedGUIDs={bunch.bHasMustBeMappedGUIDs} bPartial={bunch.bPartial} ChSequence={bunch.ChSequence} bIsOpenOrReliable={bIsOpenOrReliable} ChName={bunch.ChName} IsInternalAck={IsInternalAck()}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"SendRawBunch fields: bIsOpenOrClose={bIsOpenOrClose} bIsReplicationPaused={bunch.bIsReplicationPaused} bReliable={bunch.bReliable} ChIndex={bunch.ChIndex} bHasPackageMapExports={bunch.bHasPackageMapExports} bHasMustBeMappedGUIDs={bunch.bHasMustBeMappedGUIDs} bPartial={bunch.bPartial} ChSequence={bunch.ChSequence} bIsOpenOrReliable={bIsOpenOrReliable} ChName={bunch.ChName} IsInternalAck={IsInternalAck()}");
 
         sendBunchHeader.WriteBit(bIsOpenOrClose);
-        Console.WriteLine($"  after bIsOpenOrClose: {sendBunchHeader.GetNumBits()}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after bIsOpenOrClose: {sendBunchHeader.GetNumBits()}");
 
         if (bIsOpenOrClose) {
             sendBunchHeader.WriteBit(bunch.bOpen);
@@ -1043,22 +1062,22 @@ public abstract class UNetConnection : UPlayer {
         }
 
         sendBunchHeader.WriteBit(bunch.bIsReplicationPaused);
-        Console.WriteLine($"  after bIsReplicationPaused: {sendBunchHeader.GetNumBits()}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after bIsReplicationPaused: {sendBunchHeader.GetNumBits()}");
         sendBunchHeader.WriteBit(bunch.bReliable);
-        Console.WriteLine($"  after bReliable: {sendBunchHeader.GetNumBits()}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after bReliable: {sendBunchHeader.GetNumBits()}");
 
         sendBunchHeader.SerializeIntPacked((uint)bunch.ChIndex);
-        Console.WriteLine($"  after ChIndex: {sendBunchHeader.GetNumBits()}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after ChIndex: {sendBunchHeader.GetNumBits()}");
 
         sendBunchHeader.WriteBit(bunch.bHasPackageMapExports);
         sendBunchHeader.WriteBit(bunch.bHasMustBeMappedGUIDs);
         sendBunchHeader.WriteBit(bunch.bPartial);
-        Console.WriteLine($"  after exports/guids/partial: {sendBunchHeader.GetNumBits()}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after exports/guids/partial: {sendBunchHeader.GetNumBits()}");
 
         if (bunch.bReliable && !IsInternalAck()) {
             // 14 > 24
             sendBunchHeader.WriteIntWrapped((uint)bunch.ChSequence, MaxChSequence);
-            Console.WriteLine($"  after ChSequence: {sendBunchHeader.GetNumBits()}");
+            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after ChSequence: {sendBunchHeader.GetNumBits()}");
         }
 
         if (bunch.bPartial) {
@@ -1069,11 +1088,11 @@ public abstract class UNetConnection : UPlayer {
         if (bIsOpenOrReliable) {
             var name = (FName?) bunch.ChName;
             UPackageMap.StaticSerializeName(sendBunchHeader, ref name);
-            Console.WriteLine($"  after ChName: {sendBunchHeader.GetNumBits()}");
+            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  after ChName: {sendBunchHeader.GetNumBits()}");
         }
 
         sendBunchHeader.WriteIntWrapped((uint)bunch.GetNumBits(), (uint)(MaxPacket * 8));
-        Console.WriteLine($"SendRawBunch: ChIndex={bunch.ChIndex} ChName={bunch.ChName} bOpen={bunch.bOpen} bClose={bunch.bClose} bReliable={bunch.bReliable} bPartial={bunch.bPartial} bunch.GetNumBits()={bunch.GetNumBits()} headerBitsSoFar={sendBunchHeader.GetNumBits()} bunchDataHex={Convert.ToHexString(bunch.GetData())}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"SendRawBunch: ChIndex={bunch.ChIndex} ChName={bunch.ChName} bOpen={bunch.bOpen} bClose={bunch.bClose} bReliable={bunch.bReliable} bPartial={bunch.bPartial} bunch.GetNumBits()={bunch.GetNumBits()} headerBitsSoFar={sendBunchHeader.GetNumBits()} bunchDataHex={Convert.ToHexString(bunch.GetData())}");
 
         if (sendBunchHeader.IsError()) {
             // Logger.Fatal("SendBunchHeader Error: Bunch = {Bunch}", bunch);
@@ -1090,12 +1109,15 @@ public abstract class UNetConnection : UPlayer {
         // flush packet now so that we can report collected stats in the correct scope
         PrepareWriteBitsToSendBuffer(bunchHeaderBits, bunchBits);
 
-        Console.WriteLine($"  SendBuffer.GetNumBits() before appending bunch: {SendBuffer.GetNumBits()} (bunchHeaderBits={bunchHeaderBits} bunchBits={bunchBits})");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  SendBuffer.GetNumBits() before appending bunch: {SendBuffer.GetNumBits()} (bunchHeaderBits={bunchHeaderBits} bunchBits={bunchBits})");
 
         // Write the bits to the buffer and remember the packet id used
         bunch.PacketId = WriteBitsToSendBufferInternal(sendBunchHeader.GetData(), (int)bunchHeaderBits, bunch.GetData(), (int)bunchBits, EWriteBitsDataType.Bunch);
 
-        Console.WriteLine($"  SendBuffer.GetNumBits() after appending bunch: {SendBuffer.GetNumBits()}");
+        // Track channels that wrote data to this packet.
+        ChannelRecord.PushChannelRecord(bunch.PacketId, bunch.ChIndex);
+
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"  SendBuffer.GetNumBits() after appending bunch: {SendBuffer.GetNumBits()}");
 
         if (PackageMap != null && bunch.bHasPackageMapExports) {
             PackageMap.NotifyBunchCommit(bunch.PacketId, bunch);
@@ -1328,7 +1350,10 @@ public abstract class UNetConnection : UPlayer {
             // Increase outgoing sequence number
             if (!IsInternalAck()) PacketNotify.CommitAndIncrementOutSeq();
             
-            // TODO: Make sure that we always push an ChannelRecordEntry for each transmitted packet even if it is empty
+            // Make sure that we always push a ChannelRecordEntry for each transmitted packet even if
+            // it is empty - ConsumeChannelRecordsForPacket consumes packets strictly in order and
+            // would desync on the first ack for a packet that no channel wrote into.
+            ChannelRecord.PushPacketId(OutPacketId);
 
             ++OutPacketId;
             

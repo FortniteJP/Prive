@@ -551,14 +551,22 @@ public abstract class UChannel {
                 bunch.Next = null;
                 bunch.ChSequence = ++Connection.OutReliable[ChIndex];
                 NumOutRec++;
-                // TODO: Verify below works as expected
                 outBunch = new FOutBunch(bunch);
-                var outLink = OutRec;
 
-                while (outLink != null) outLink = outLink.Next;
-
-                if (outLink == null) OutRec = outBunch;
-                else outLink.Next = outBunch;
+                // Append to the TAIL of OutRec. Real UE walks a pointer-to-pointer
+                // (FOutBunch** OutLink = &OutRec; while (*OutLink) OutLink = &(*OutLink)->Next;)
+                // so the final assignment lands on either OutRec itself or the last node's Next.
+                // The C# translation of that walked a plain reference to null and then always
+                // assigned OutRec, which replaced the head of the list on every send: each previously
+                // queued bunch was orphaned (never released, never disposed) while NumOutRec kept
+                // counting them, so the queue drifted upward until it tripped RELIABLE_BUFFER.
+                if (OutRec == null) {
+                    OutRec = outBunch;
+                } else {
+                    var outLink = OutRec;
+                    while (outLink.Next != null) outLink = outLink.Next;
+                    outLink.Next = outBunch;
+                }
             } else {
                 bunch.Next = outBunch.Next;
                 outBunch = bunch;
@@ -594,6 +602,29 @@ public abstract class UChannel {
     private static bool IsBunchTooLarge(UNetConnection connection, FInBunch? bunch) => !connection.IsInternalAck() && bunch != null && bunch.GetNumBytes() > NetMaxConstructedPartialBunchSizeBytes;
 
     private static bool IsBunchTooLarge(UNetConnection connection, FOutBunch? bunch) => !connection.IsInternalAck() && bunch != null && bunch.GetNumBytes() > NetMaxConstructedPartialBunchSizeBytes;
+
+    /// <summary>
+    ///     Port of UChannel::ReceivedNak - resend every reliable bunch that was in the lost packet and
+    ///     hasn't since been acked. Until FWrittenChannelsRecord existed there was nothing to drive
+    ///     this from, so a dropped packet simply lost its reliable bunches forever.
+    /// </summary>
+    public virtual void ReceivedNak(int nakPacketId) {
+        for (var outBunch = OutRec; outBunch != null; outBunch = outBunch.Next) {
+            if (outBunch.PacketId != nakPacketId || outBunch.ReceivedAck) continue;
+
+            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UChannel.ReceivedNak: ChIndex={ChIndex} resending ChSequence={outBunch.ChSequence}");
+
+            Connection!.SendRawBunch(outBunch, false);
+        }
+    }
+
+    /// <summary>
+    ///     Set the first time this channel actually releases a reliable bunch. Logged once, unguarded,
+    ///     because "did the reliable queue ever drain at all" is the single fact that separates a
+    ///     healthy connection from the failure mode this used to have, and it is otherwise invisible
+    ///     until the connection dies several seconds later for an apparently unrelated reason.
+    /// </summary>
+    private bool _LoggedFirstReliableRelease;
 
     public void ReceivedAcks() {
         bool bCleanup = false;
@@ -638,6 +669,21 @@ public abstract class UChannel {
             OutRec = OutRec.Next;
             release.Dispose();
             NumOutRec--;
+
+            if (!_LoggedFirstReliableRelease) {
+                _LoggedFirstReliableRelease = true;
+                Console.WriteLine($"UChannel.ReceivedAcks: ChIndex={ChIndex} released its first acked reliable bunch " +
+                    $"(Seq {release.ChSequence}, PacketId {release.PacketId}); NumOutRec now {NumOutRec}.");
+            }
+        }
+
+        // If a close has been acknowledged in sequence, we're done. This was previously unreachable
+        // in practice - bCleanup was computed and then dropped - because no bunch was ever acked at
+        // all; now that acks land, a channel we closed actually gets torn down.
+        if (bCleanup || (OpenTemporary && OpenAcked)) {
+            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UChannel.ReceivedAcks: cleaning up after close acked. ChIndex={ChIndex} CloseReason={closeReason}");
+
+            ConditionalCleanUp(false, closeReason);
         }
     }
 }
