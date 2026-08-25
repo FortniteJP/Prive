@@ -1,0 +1,131 @@
+Reading C:\Users\user\AppData\Local\Temp\claude\c--Users-user-Documents-Prive\058027bb-4373-4a48-a8ca-22c1b76a4a21\scratchpad\PacketProxy\bin\Debug\net10.0\packets_ProjectReboot3.0.log (limit=40)
+2804 lines total
+OodleHandlerComponent: loaded FortniteGameOutput.udic (dictionary=1048576 bytes, hashTableBits=17)
+OodleHandlerComponent: loaded FortniteGameInput.udic (dictionary=1048576 bytes, hashTableBits=17)
+---- #1 C->S len=25 ----
+IncomingConnectionless
+bHandshakePacket: True, bRestartHandshake: False, secretId: 0, timestamp: 0
+SendConnectChallenge
+#1: [server role] handshake packet processed (len=25)
+---- #2 S->C len=25 ----
+StatelessConnectHandlerComponent.Incoming
+Invalid handshake packet size bits: 191
+#2: EXCEPTION during decode: InvalidOperationException: The operation is not allowed on non-connected sockets.
+---- #3 C->S len=25 ----
+IncomingConnectionless
+bHandshakePacket: True, bRestartHandshake: False, secretId: 1, timestamp: 296.70062
+cookieDelta: -296.70062, secretDelta: 296.70062, bValidCookieLifetime: False, bValidSecretIdTimestamp: False
+#3: [server role] handshake packet processed (len=25)
+---- #4 S->C len=25 ----
+StatelessConnectHandlerComponent.Incoming
+#4: EXCEPTION during decode: ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 200.
+---- #5 C->S len=28 ----
+IncomingConnectionless
+#5: [server role] handshake packet processed (len=28)
+---- #6 S->C len=32 ----
+StatelessConnectHandlerComponent.Incoming
+#6: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #7 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#7: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #8 C->S len=227 ----
+IncomingConnectionless
+#8: [server role] handshake packet processed (len=227)
+---- #9 C->S len=11 ----
+IncomingConnectionless
+#9: [server role] handshake packet processed (len=11)
+---- #10 S->C len=111 ----
+StatelessConnectHandlerComponent.Incoming
+#10: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #11 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#11: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #12 C->S len=22 ----
+IncomingConnectionless
+#12: [server role] handshake packet processed (len=22)
+---- #13 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#13: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #14 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#14: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #15 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#15: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #16 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#16: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #17 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#17: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #18 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#18: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #19 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#19: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #20 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#20: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #21 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+#21: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #22 C->S len=18 ----
+IncomingConnectionless
+#22: [server role] handshake packet processed (len=18)
+---- #23 C->S len=11 ----
+IncomingConnectionless
+#23: [server role] handshake packet processed (len=11)
+---- #24 S->C len=746 ----
+StatelessConnectHandlerComponent.Incoming
+#24: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #25 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#25: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #26 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#26: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #27 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#27: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #28 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#28: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #29 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#29: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #30 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#30: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #31 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#31: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #32 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#32: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #33 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#33: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #34 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#34: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #35 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#35: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #36 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#36: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #37 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#37: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #38 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#38: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #39 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#39: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+---- #40 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+#40: packet carries data but sequence isn't initialized yet - skipping (handshake not complete?)
+Done. Processed 40 packets.

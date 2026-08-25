@@ -1,0 +1,160 @@
+Reading C:\Users\user\AppData\Local\Temp\claude\c--Users-user-Documents-Prive\058027bb-4373-4a48-a8ca-22c1b76a4a21\scratchpad\PacketProxy\bin\Debug\net10.0\packets_ProjectReboot3.0.log (limit=40)
+2804 lines total
+OodleHandlerComponent: loaded FortniteGameOutput.udic (dictionary=1048576 bytes, hashTableBits=17)
+OodleHandlerComponent: loaded FortniteGameInput.udic (dictionary=1048576 bytes, hashTableBits=17)
+---- #1 C->S len=25 ----
+#1: [server role] waiting for handshake sequence numbers (recovered from the S->C side), skipping
+---- #2 S->C len=25 ----
+StatelessConnectHandlerComponent.Incoming
+Invalid handshake packet size bits: 191
+---- #3 C->S len=25 ----
+#3: [server role] waiting for handshake sequence numbers (recovered from the S->C side), skipping
+---- #4 S->C len=25 ----
+StatelessConnectHandlerComponent.Incoming
+GetChallengeSequences: serverSequence=1352 clientSequence=11745
+#4: [client role] handshake complete (serverSeq=1352, clientSeq=11745)
+---- #5 C->S len=28 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=5BC22A38 Seq=5872 AckedSeq=8867 HistoryWordCount=9 posAfterHeader=32 numBits=208
+#5: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #6 S->C len=32 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=0A916F00 Seq=676 AckedSeq=5872 HistoryWordCount=1 posAfterHeader=32 numBits=246
+#6: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #7 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A936F08 Seq=8868 AckedSeq=14064 HistoryWordCount=9 posAfterHeader=32 numBits=80
+#7: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #8 C->S len=227 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=5BC42A38 Seq=5873 AckedSeq=675 HistoryWordCount=9 posAfterHeader=32 numBits=1806
+#8: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #9 C->S len=11 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=DBC62A48 Seq=14065 AckedSeq=8868 HistoryWordCount=9 posAfterHeader=32 numBits=72
+#9: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #10 S->C len=111 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A956F08 Seq=8869 AckedSeq=5872 HistoryWordCount=9 posAfterHeader=32 numBits=878
+#10: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #11 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A976F18 Seq=8869 AckedSeq=14065 HistoryWordCount=9 posAfterHeader=32 numBits=80
+#11: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #12 C->S len=22 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=DBC82A58 Seq=14066 AckedSeq=677 HistoryWordCount=9 posAfterHeader=32 numBits=166
+#12: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #13 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A996F20 Seq=8870 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#13: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #14 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A9B6F20 Seq=8870 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#14: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #15 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A9D6F20 Seq=8871 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#15: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #16 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8A9F6F20 Seq=8871 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#16: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #17 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AA16F20 Seq=8872 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#17: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #18 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AA36F20 Seq=8872 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#18: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #19 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AA56F20 Seq=8873 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#19: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #20 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AA76F20 Seq=8873 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#20: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #21 S->C len=12 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AA96F20 Seq=8874 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=80
+#21: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #22 C->S len=18 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=DBCA2A58 Seq=14066 AckedSeq=8869 HistoryWordCount=9 posAfterHeader=32 numBits=134
+#22: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #23 C->S len=11 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=DBCC2AA0 Seq=14067 AckedSeq=682 HistoryWordCount=1 posAfterHeader=32 numBits=72
+#23: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #24 S->C len=746 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AAB6F20 Seq=8874 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=5956
+#24: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #25 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AAD6F20 Seq=8875 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#25: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #26 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AAF6F20 Seq=8875 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#26: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #27 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AB16F20 Seq=8876 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#27: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #28 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AB36F20 Seq=8876 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#28: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #29 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AB56F20 Seq=8877 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#29: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #30 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AB76F20 Seq=8877 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#30: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #31 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AB96F20 Seq=8878 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#31: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #32 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8ABB6F20 Seq=8878 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#32: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #33 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8ABD6F20 Seq=8879 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#33: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #34 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8ABF6F20 Seq=8879 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#34: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #35 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AC16F20 Seq=8880 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#35: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #36 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AC36F20 Seq=8880 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#36: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #37 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AC56F20 Seq=8881 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#37: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #38 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AC76F20 Seq=8881 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#38: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #39 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8AC96F20 Seq=8882 AckedSeq=5874 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#39: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+---- #40 S->C len=953 ----
+StatelessConnectHandlerComponent.Incoming
+FNetPacketNotify.ReadHeader: packedHeader=8ACB6F20 Seq=8882 AckedSeq=14066 HistoryWordCount=1 posAfterHeader=32 numBits=7608
+#40: out-of-order/duplicate packet (sequence delta=0), skipping bunch parse
+Done. Processed 40 packets.

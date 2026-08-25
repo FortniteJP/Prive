@@ -1,0 +1,84 @@
+Reading C:\Users\user\AppData\Local\Temp\claude\c--Users-user-Documents-Prive\058027bb-4373-4a48-a8ca-22c1b76a4a21\scratchpad\PacketProxy\bin\Debug\net10.0\packets_ProjectReboot3.0.log (limit=6)
+2804 lines total
+OodleHandlerComponent: loaded FortniteGameOutput.udic (dictionary=1048576 bytes, hashTableBits=17)
+OodleHandlerComponent: loaded FortniteGameInput.udic (dictionary=1048576 bytes, hashTableBits=17)
+---- #1 C->S len=25 ----
+#1: [server role] waiting for handshake sequence numbers (recovered from the S->C side), skipping
+---- #2 S->C len=25 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=200 trimmedCountBits=199 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+Invalid handshake packet size bits: 191
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=199 Num=199 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=199 NumBefore=199
+[DIAG] Realigned: PosAfter=199 NumAfter=199
+[DIAG] AES.Incoming enter Pos=199 Num=199
+[DIAG] AES.Incoming exit (not encrypted) Pos=200 Num=199
+[DIAG] After AESHandlerComponent.Incoming: Pos=200 Num=199 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=200 NumBefore=199
+[DIAG] Realigned: PosAfter=200 NumAfter=199
+[DIAG] Oodle.Incoming enter Pos=200 Num=199
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=201 Num=199
+[DIAG] After OodleHandlerComponent.Incoming: Pos=201 Num=199 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=0
+---- #3 C->S len=25 ----
+#3: [server role] waiting for handshake sequence numbers (recovered from the S->C side), skipping
+---- #4 S->C len=25 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=200 trimmedCountBits=199 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=199 Num=199 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=199 NumBefore=199
+[DIAG] Realigned: PosAfter=199 NumAfter=199
+[DIAG] AES.Incoming enter Pos=199 Num=199
+[DIAG] AES.Incoming exit (not encrypted) Pos=200 Num=199
+[DIAG] After AESHandlerComponent.Incoming: Pos=200 Num=199 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=200 NumBefore=199
+[DIAG] Realigned: PosAfter=200 NumAfter=199
+[DIAG] Oodle.Incoming enter Pos=200 Num=199
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=201 Num=199
+[DIAG] After OodleHandlerComponent.Incoming: Pos=201 Num=199 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=0
+GetChallengeSequences: serverSequence=1352 clientSequence=11745
+#4: [client role] handshake complete (serverSeq=1352, clientSeq=11745)
+---- #5 C->S len=28 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=224 trimmedCountBits=216 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=216 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=216
+[DIAG] Realigned: PosAfter=0 NumAfter=211
+[DIAG] AES.Incoming enter Pos=0 Num=211
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=211
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=211 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=211
+[DIAG] Realigned: PosAfter=0 NumAfter=210
+[DIAG] Oodle.Incoming enter Pos=0 Num=210
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=210
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=210 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=209
+#5: post-Handler.Incoming clean bytes (27): 382AC25B00000080001300E2FD1780020001B4E46B780000000001
+FNetPacketNotify.ReadHeader: packedHeader=5BC22A38 Seq=5872 AckedSeq=8867 HistoryWordCount=9 posAfterHeader=32 numBits=208
+#5: implausible HistoryWordCount=9 - packet header looks misaligned, abandoning this packet
+---- #6 S->C len=32 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=256 trimmedCountBits=254 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=254 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=254
+[DIAG] Realigned: PosAfter=0 NumAfter=249
+[DIAG] AES.Incoming enter Pos=0 Num=249
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=249
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=249 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=249
+[DIAG] Realigned: PosAfter=0 NumAfter=248
+[DIAG] Oodle.Incoming enter Pos=0 Num=248
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=248
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=248 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=247
+#6: post-Handler.Incoming clean bytes (31): 006F910A000000800000044052FF05E0C0400200004090D050CC4D11CE0D40
+FNetPacketNotify.ReadHeader: packedHeader=0A916F00 Seq=676 AckedSeq=5872 HistoryWordCount=1 posAfterHeader=32 numBits=246
+#6: note - sequence delta=0 (see interleaved-connection caveat), decoding anyway
+#6: bunch ChIndex=32 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=1152
+#6:   ChIndex=32 (None) content not decoded (1152 bits)
+Done. Processed 6 packets.

@@ -362,10 +362,11 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         if (NetDriver != null) NetDriver.AddNetworkActor(actor);
     }
 
-    private void OpenActorChannelFor(UNetConnection connection, AActor actor) {
+    private UActorChannel OpenActorChannelFor(UNetConnection connection, AActor actor) {
         var channel = (UActorChannel) connection.CreateChannelByName(EName.Actor, EChannelCreateFlags.OpenedLocally, UnrealConstants.IndexNone);
         channel.SetChannelActor(actor);
         channel.ReplicateActor();
+        return channel;
     }
 
     private void RemoveNetworkActor(AActor? actor) {
@@ -415,8 +416,20 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
             // connection's own PlayerController (and Pawn, once PostLogin possesses one). No ongoing
             // per-tick property replication happens yet - see AFortOnlineBeacon.Net.UPackageMapClient.
             if (newPlayer is UNetConnection ownerConnection) {
-                OpenActorChannelFor(ownerConnection, newPlayerController);
-                if (newPlayerController.Pawn != null) OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);
+                if (gameMode.GameState != null) OpenActorChannelFor(ownerConnection, gameMode.GameState);
+                if (newPlayerController.PlayerState != null) OpenActorChannelFor(ownerConnection, newPlayerController.PlayerState);
+                // See AFortInventory's doc comment - a real actor with its own channel, opened before
+                // the PlayerController so its GUID is already assigned when the PC's own property
+                // push (WorldInventory, an ObjectRef Cmd) references it, matching PlayerState's order.
+                if (newPlayerController.WorldInventory != null) OpenActorChannelFor(ownerConnection, newPlayerController.WorldInventory);
+                var pcChannel = OpenActorChannelFor(ownerConnection, newPlayerController);
+                if (newPlayerController.Pawn != null) {
+                    OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);
+                    // See UActorChannel.SendClientRestart's doc comment - without this, a real client
+                    // never recognizes it controls this pawn and keeps calling
+                    // ServerSetSpectatorLocation forever instead of actually moving.
+                    pcChannel.SendClientRestart(newPlayerController.Pawn);
+                }
             }
 
             return newPlayerController;

@@ -230,7 +230,12 @@ public class FBitWriter : FArchive {
                     var dataTemp = Data;
                     Array.Resize(ref dataTemp, (int) byteMax);
                     Data = dataTemp;
-                } else throw new NotImplementedException();
+                } else {
+                    var newData = Pool.Rent((int) byteMax);
+                    Buffer.BlockCopy(Data, 0, newData, 0, Data.Length);
+                    Pool.Return(Data, true);
+                    Data = newData;
+                }
                 
                 return true;
             } else return false;

@@ -1,43 +1,35 @@
-using AFortOnlineBeacon.Net.Actors;
+using AFortOnlineBeacon.Net;
+using AFortOnlineBeacon.Net.Replication;
 
-namespace AFortOnlineBeacon.Net;
+namespace PacketReplayDecoder;
 
 /// <summary>
-///     Ground-truth field *membership* for the real native engine classes (/Script/Engine.Actor,
-///     .Controller, .PlayerController, .Pawn) that our AActor/AController/APlayerController/APawn
-///     are mapped to (see GUClassArray.NativePackagePaths) - transcribed from a live dump of the
-///     real, running Fortnite 10.40 client's reflection data (UClass::GetChildren() walked
-///     in-process via a modified PriveDev/UEDumper, filtered to CPF_Net properties / FUNC_Net
-///     functions). Notably it also caught a Fortnite-specific addition not present in vanilla
-///     engine source: PlayerController has an extra "ServerExecRPC" function.
-///
-///     The WIRE ORDER is NOT UClass::GetChildren()'s order, though - a first attempt assumed it
-///     was and produced garbage (decoded RepIndex values that pointed at Client-direction RPCs on
-///     received client-to-server traffic). Reading UClass::SetUpRuntimeReplicationData (Class.cpp)
-///     revealed the real rule: after NetFields is built by walking Children, it gets explicitly
-///     re-sorted - "Sort(NetFields.GetData(), NetFields.Num(), FCompareUFieldNames())" - by name,
-///     via FString's operator&lt; (case-INsensitive, see UnrealString.h). FClassNetCacheMgr::
-///     GetClassNetCache (CoreNet.cpp) then assigns FieldNetIndex by walking that POST-sort
-///     NetFields array in order. So each class's own net fields, in wire order, is simply that
-///     class's own field set sorted alphabetically (ordinal, case-insensitive) - applied in
-///     OwnFieldsSorted below rather than by hand-ordering the arrays.
+///     Local copies of AFortOnlineBeacon's ground-truth wire tables (NativeClassNetCache.cs /
+///     NativeRepLayouts.cs are `internal` to that assembly, so we can't reference them directly -
+///     this is a plain data copy, not a reimplementation of any algorithm). Used to name RepLayout
+///     property handles and ClassNetCache RPC field indices when decoding a captured session from a
+///     DIFFERENT (real, unmodified) server, purely for cross-referencing what that real server sends
+///     against what this project already knows about.
 /// </summary>
-internal static class NativeClassNetCache {
-    private static string[] OwnFieldsSorted(params string[] fields) {
+internal static class GroundTruth {
+    private static string[] Sorted(params string[] fields) {
         var sorted = (string[]) fields.Clone();
         Array.Sort(sorted, StringComparer.OrdinalIgnoreCase);
         return sorted;
     }
-    private static readonly string[] ActorOwnFields = OwnFieldsSorted(
+
+    // ---- FClassNetCache (RPC / legacy-field dispatch) chains ----
+
+    private static readonly string[] ActorOwnFields = Sorted(
         "bHidden", "bReplicateMovement", "bTearOff", "bCanBeDamaged", "RemoteRole",
         "ReplicatedMovement", "AttachmentReplication", "Owner", "Role", "Instigator"
     );
 
-    private static readonly string[] ControllerOwnFields = OwnFieldsSorted(
+    private static readonly string[] ControllerOwnFields = Sorted(
         "PlayerState", "Pawn", "ClientSetRotation", "ClientSetLocation"
     );
 
-    private static readonly string[] PlayerControllerOwnFields = OwnFieldsSorted(
+    private static readonly string[] PlayerControllerOwnFields = Sorted(
         "TargetViewRotation", "SpawnLocation",
         "ServerViewSelf", "ServerViewPrevPlayer", "ServerViewNextPlayer", "ServerVerifyViewTarget",
         "ServerUpdateMultipleLevelsVisibility", "ServerUpdateLevelVisibility", "ServerUpdateCamera",
@@ -60,20 +52,11 @@ internal static class NativeClassNetCache {
         "ClientCapBandwidth", "ClientCancelPendingMapChange", "ClientAddTextureStreamingLoc"
     );
 
-    private static readonly string[] PawnOwnFields = OwnFieldsSorted(
+    private static readonly string[] PawnOwnFields = Sorted(
         "RemoteViewPitch", "PlayerState", "Controller"
     );
 
-    // APlayerController's spawn archetype was upgraded from bare /Script/Engine.PlayerController to
-    // the real /Script/FortniteGame.FortPlayerControllerAthena (see GUClassArray) so
-    // bHasServerFinishedLoading could be sent at all - but ClassNetCache's FieldNetIndex bounded-int
-    // WIDTH (WriteIntWrapped/ReadInt's bit count) depends on the class's TOTAL own+inherited field
-    // count, not just the fields this project recognizes by name. Without these 5 extra levels,
-    // GetMaxIndex() was far too small, so even a correctly-indexed field like ServerShortTimeout
-    // decoded with a too-narrow bit width and desynced the very next field read (crashed with
-    // "BitReader::SerializeInt Overflow"). Ground-truthed via the same live UEDumper NetFields.txt
-    // dump as everything else in this file.
-    private static readonly string[] FortPlayerControllerOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerControllerOwnFields = Sorted(
         "bFailedToRespawn", "bHasInitiallySpawned", "bHasServerFinishedLoading", "IntensityGraphInfo",
         "PIDValuesGraphInfo", "PIDContributionsGraphInfo", "bBuildFree", "bCraftFree", "DelayedQuickBarActions",
         "PinnedSchematics", "bAutoEquipBetterItems", "WorldInventory", "OutpostInventory", "LatestRewardReport",
@@ -125,7 +108,7 @@ internal static class NativeClassNetCache {
         "Cheat_ForceAthenaCosmeticItemInSlot", "Cheat_ClearForcedCosmeticItems"
     );
 
-    private static readonly string[] FortPlayerControllerGameplayOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerControllerGameplayOwnFields = Sorted(
         "PoiTagContainerTableID", "CreativeQuickbarComponent", "GhostModeRepData", "ServerNumNPCs",
         "ServerMaxNumNPCs", "bDisplayNPCNumbers", "FlyingModifierIndex", "bIsFlightSprinting",
         "bIsCreativeModeEnabled", "bIsCreativeQuickbarEnabled",
@@ -136,7 +119,7 @@ internal static class NativeClassNetCache {
         "ClientReceiveCreativeAssetsByCategory", "ClientCreativeStopFly", "ClientCreativePhoneCreated"
     );
 
-    private static readonly string[] FortPlayerControllerZoneOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerControllerZoneOwnFields = Sorted(
         "VoiceChatChannel", "DesyncNotifyList",
         "ServerVoiceChatRequestJoinToken", "ServerSubmitGameplayVote", "ServerSpectatePlayerState",
         "ServerSpectatePlayer", "ServerSetShouldDisablePlayerTeleportingDuringMissionResults",
@@ -148,11 +131,11 @@ internal static class NativeClassNetCache {
         "ClientClearDeathNotification", "ClientAckLoadoutConfig"
     );
 
-    private static readonly string[] FortPlayerControllerPvPOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerControllerPvPOwnFields = Sorted(
         "ClientReceiveKillNotification"
     );
 
-    private static readonly string[] FortPlayerControllerAthenaOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerControllerAthenaOwnFields = Sorted(
         "SkydiveLeader", "ViewTargetInventory", "bNextRespawnInAir", "bCanUseSolaris", "MaxPlotCount",
         "bMarkedAlive", "CreativeIslands", "LastUsedCreativeIsland", "bIsAllowedToPublish",
         "PartyAssistedMemberData", "BroadcastRemoteClientInfo", "CreativePlotLinkedVolume", "OwnedPortal",
@@ -189,14 +172,12 @@ internal static class NativeClassNetCache {
         "Client_DisplayQuestUpdate_Self", "Client_DisplayQuestUpdate_Assist"
     );
 
-    // APlayerState : AInfo : AActor (AInfo adds nothing - see NativeRepLayouts.GameStateProps for
-    // the same fact used there).
-    private static readonly string[] PlayerStateOwnFields = OwnFieldsSorted(
+    private static readonly string[] PlayerStateOwnFields = Sorted(
         "Score", "PlayerID", "Ping", "bIsSpectator", "bOnlySpectator", "bIsABot", "bIsInactive",
         "bFromPreviousLevel", "StartTime", "UniqueId", "PlayerNamePrivate"
     );
 
-    private static readonly string[] FortPlayerStateOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerStateOwnFields = Sorted(
         "bIsWorldDataOwner", "bIsGameSessionOwner", "bIsGameSessionAdmin", "bIsReadyToContinue",
         "bHasFinishedLoading", "bHasStartedPlaying", "bShowHeroBackpack", "bShowHeroHeadAccessories",
         "bRepFlag1", "PlayerRole", "PartyOwnerUniqueId", "WorldPlayerId", "HeroId", "HeroType", "CurrentCharXP",
@@ -207,7 +188,7 @@ internal static class NativeClassNetCache {
         "ServerSetShowHeroHeadAccessories", "ServerSetShowHeroBackpack", "ClientNotifyAwardGranted"
     );
 
-    private static readonly string[] FortPlayerStateZoneOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerStateZoneOwnFields = Sorted(
         "SpectatingTarget", "Spectators", "KickedFromSessionReason", "CarriedObject", "NumRejoins",
         "bInvincibleDueToUI", "CurrentHealth", "MaxHealth", "CurrentShield", "MaxShield", "CurrentSignalInStorm",
         "MaxSignalInStorm", "AccumulatedItems", "SimulatedAttributes", "bHasEverSkydivedFromBus",
@@ -215,9 +196,7 @@ internal static class NativeClassNetCache {
         "MulticastTriggerOnGadgetTrackedAttributeDestroyedFX"
     );
 
-    // FortPlayerStatePvP declares no NetFields of its own (confirmed empty in the live dump).
-
-    private static readonly string[] FortPlayerStateAthenaOwnFields = OwnFieldsSorted(
+    private static readonly string[] FortPlayerStateAthenaOwnFields = Sorted(
         "PersonalLobbyAction", "ReplicatedTeamMemberState", "TeamKillScore", "TeamIndex", "TeamScorePlacement",
         "TeamScore", "Place", "DownScore", "KillScore", "NumChestsOpened", "NumAmmoCansOpened",
         "NumSupplyDropsOpened", "NumLlamasOpened", "NumForagedItemsConsumed", "NumMinutesAlive",
@@ -230,78 +209,6 @@ internal static class NativeClassNetCache {
         "ClientReportDBNO", "ClientNotifyMatchEntered", "ClientAddKillFeedErrorMessage"
     );
 
-    // Everything below is ground-truthed the same way (live UEDumper NetFields.txt dump) for the
-    // full class chain a real Athena pawn actually is: APlayerPawn_Athena_C ->
-    // APlayerPawn_Athena_Generic_C -> APlayerPawn_Athena_Generic_Parent_C -> AFortPlayerPawnAthena
-    // -> AFortPlayerPawn -> AFortPawn -> ACharacter -> APawn (this project's single APawn class
-    // stands in for the whole chain - there's no per-level C# subclass, but FClassNetCache still
-    // needs the FULL real chain to compute correct FieldNetIndex values, since RPCs/fields further
-    // up the chain - like ServerMoveNoBase on ACharacter - shift every index after them). The two
-    // Blueprint layers PlayerPawn_Athena_Generic_Parent_C/PlayerPawn_Athena_Generic_C add no
-    // NetFields of their own (empty in the dump), so they're skipped entirely below - an empty
-    // link would contribute 0 fields either way, so omitting it changes no downstream index.
-    private static readonly string[] CharacterOwnFields = OwnFieldsSorted(
-        "ReplicatedBasedMovement", "AnimRootMotionTranslationScale", "ReplicatedServerLastTransformUpdateTimeStamp",
-        "ReplayLastTransformUpdateTimeStamp", "ReplicatedMovementMode", "bIsCrouched", "bProxyIsJumpForceApplied",
-        "JumpMaxHoldTime", "JumpMaxCount", "RepRootMotion",
-        "ServerMoveOld", "ServerMoveNoBase", "ServerMoveDualNoBase", "ServerMoveDualHybridRootMotion",
-        "ServerMoveDual", "ServerMove", "RootMotionDebugClientPrintOnScreen", "ClientVeryShortAdjustPosition",
-        "ClientCheatWalk", "ClientCheatGhost", "ClientCheatFly", "ClientAdjustRootMotionSourcePosition",
-        "ClientAdjustRootMotionPosition", "ClientAdjustPosition", "ClientAckGoodMove"
-    );
-
-    private static readonly string[] FortPawnOwnFields = OwnFieldsSorted(
-        "bIgnoreNextFallingDamage", "bIsDying", "bIsHiddenForDeath", "bIsKnockedback", "bIsStaggered",
-        "bMovingEmote", "bMovingEmoteForwardOnly", "bIsInvulnerable", "bSpotted", "bWeaponActivated",
-        "bWeaponHolstered", "bIsDBNO", "CurrentMovementStyle", "TeleportCounter", "StormShieldComponent",
-        "PawnUniqueID", "CurrentWeapon", "SpawnImmunityTime", "bIsStunned", "PushMomentum", "LocalSpin",
-        "DamageZoneActiveBitMask", "JumpFlashCountPacked", "LandingFlashCountPacked", "LastReplicatedEmoteExecuted",
-        "EmoteWalkSpeed", "VocalChords", "DisplayName", "CurrentCalloutTag", "CurrentSentence",
-        "ServerTeleportNearLocation", "ServerInternalEquipWeapon", "PlaySound",
-        "NetMulticast_InvokeGameplayCuesExecuted_WithParams", "NetMulticast_InvokeGameplayCuesExecuted",
-        "NetMulticast_InvokeGameplayCuesAddedAndWhileActive_WithParams",
-        "NetMulticast_InvokeGameplayCueExecuted_WithParams", "NetMulticast_InvokeGameplayCueExecuted_FromSpec",
-        "NetMulticast_InvokeGameplayCueExecuted", "NetMulticast_InvokeGameplayCueAddedAndWhileActive_WithParams",
-        "NetMulticast_InvokeGameplayCueAddedAndWhileActive_FromSpec", "NetMulticast_InvokeGameplayCueAdded_WithParams",
-        "NetMulticast_InvokeGameplayCueAdded", "NetMulticast_Athena_BatchedDamageCues", "ClientInternalEquipWeapon"
-    );
-
-    private static readonly string[] FortPlayerPawnOwnFields = OwnFieldsSorted(
-        "VehicleInputStateReliable", "bIsNearSafeZoneEdge", "bIsTargeting", "StasisMode", "BuildingState",
-        "AccelerationZPack", "bIsInWaterVolume", "CachedTeamControllingRC", "BalloonActiveCount", "bIsSkydiving",
-        "bIsParachuteOpen", "bIsParachuteForcedOpen", "bIsSkydivingFromBus", "bIsSkydivingFromLaunchPad",
-        "bReplicatedIsInVortex", "bReplicatedIsInSlipperyMovement", "bIsSlopeSliding", "bIsProxySimulationTimedOut",
-        "bInGliderRedeploy", "bStartedInteractSearch", "bIsUsingJetpack", "bIsPlayingEmote", "bIsRespawning",
-        "bIsRespawningInAir", "VehicleInputStateUnreliable", "bIsInAnyStorm", "bIsInsideSafeZone", "ZiplineState",
-        "bCanPredictJumpApex", "VehicleStateRep", "PossessedProp", "CosmeticLoadout", "RepCharPartAnimMontageInfo",
-        "ClientObservedStats", "AnimBPOverride", "FootstepBankOverride", "PackedReplicatedSlopeAngles",
-        "PlayerStatus", "AccelerationPack", "RepAnimMontageInfo", "RepAnimMontageStartSection",
-        "bNetMovementPrioritized", "LandingMontagePair", "bParachuteLockedOpen", "AttachmentMesh", "VortexParams",
-        "ReplicatedSkyTube", "PetState", "GliderOverrideStack", "RemoteViewData32", "ControlledRCPawn",
-        "StoredControlRotation",
-        "ServerUpdateVehicleInputStateUnreliable", "ServerUpdateVehicleInputStateReliable", "ServerUnmarkRespawned",
-        "ServerToggleGender", "ServerToggleBodyType", "ServerSetAttachment", "ServerSetAimbotDetection",
-        "ServerSendZiplineState", "ServerSendAimbotDetectionStatus", "ServerRootMotionInterruptNotifyStopMontage",
-        "ServerReviveFromDBNO", "ServerRespawnFromDBNO", "ServerPlayUnableToPerformActionMontage",
-        "ServerHandlePickupWithSwap", "ServerHandlePickupWithRequestedSwap", "ServerHandlePickup",
-        "ServerEquipLastWeaponOrGadget", "ServerCyclePart", "ServerCycleColorSwatch", "ServerCycleAccessoryColorSwatch",
-        "ServerChoosePart", "ServerChooseGender", "MulticastUpdateVehicleInputStateReliable",
-        "ClientResetAbilitySystemComponent", "ClientNotifyAbilityFailed", "ClientAcknowledgeVehicleInputState"
-    );
-
-    private static readonly string[] FortPlayerPawnAthenaOwnFields = OwnFieldsSorted(
-        "ItemInteractionActor", "DBNORevivalStacking", "ItemSpecialActorID", "ItemSpecialActorCategoryTag",
-        "CapsuleRadiusAthena", "CapsuleHalfHeightAthena", "MeshHeightAdjustAthena", "AttributeReplicationProxy",
-        "ReplayRepAnimMontageInfo", "SimulatedProxyGameplayCues", "FastReplicationMinimalReplicationTags",
-        "EncryptedPawnReplayData", "bIsCreativeGhostModeActivated",
-        "ServerSuicide", "ServerSetInteractingItem", "NetMulticast_SuccessfulBuildingEdit", "FastSharedReplication"
-    );
-
-    private static readonly string[] PlayerPawnAthenaOwnFields = OwnFieldsSorted(
-        "PlayResOut", "ClientRunSnowGC", "AddSafeZoneGameplayCue", "RemoveSafeZoneGameplayCueServerToClient",
-        "PlayRespawnFXOnSpawn"
-    );
-
     private static readonly FClassNetCache ActorCache = new(null, ActorOwnFields);
     private static readonly FClassNetCache ControllerCache = new(ActorCache, ControllerOwnFields);
     private static readonly FClassNetCache PlayerControllerBaseCache = new(ControllerCache, PlayerControllerOwnFields);
@@ -309,24 +216,96 @@ internal static class NativeClassNetCache {
     private static readonly FClassNetCache FortPlayerControllerGameplayCache = new(FortPlayerControllerCache, FortPlayerControllerGameplayOwnFields);
     private static readonly FClassNetCache FortPlayerControllerZoneCache = new(FortPlayerControllerGameplayCache, FortPlayerControllerZoneOwnFields);
     private static readonly FClassNetCache FortPlayerControllerPvPCache = new(FortPlayerControllerZoneCache, FortPlayerControllerPvPOwnFields);
-    private static readonly FClassNetCache PlayerControllerCache = new(FortPlayerControllerPvPCache, FortPlayerControllerAthenaOwnFields);
+    public static readonly FClassNetCache PlayerControllerCache = new(FortPlayerControllerPvPCache, FortPlayerControllerAthenaOwnFields);
     private static readonly FClassNetCache PawnBaseCache = new(ActorCache, PawnOwnFields);
-    private static readonly FClassNetCache CharacterCache = new(PawnBaseCache, CharacterOwnFields);
-    private static readonly FClassNetCache FortPawnCache = new(CharacterCache, FortPawnOwnFields);
-    private static readonly FClassNetCache FortPlayerPawnCache = new(FortPawnCache, FortPlayerPawnOwnFields);
-    private static readonly FClassNetCache FortPlayerPawnAthenaCache = new(FortPlayerPawnCache, FortPlayerPawnAthenaOwnFields);
-    private static readonly FClassNetCache PawnCache = new(FortPlayerPawnAthenaCache, PlayerPawnAthenaOwnFields);
+    public static readonly FClassNetCache PawnCache = PawnBaseCache; // trimmed - Character/FortPawn/etc chain not needed for our RPC decode targets
 
     private static readonly FClassNetCache PlayerStateBaseCache = new(ActorCache, PlayerStateOwnFields);
     private static readonly FClassNetCache FortPlayerStateCache = new(PlayerStateBaseCache, FortPlayerStateOwnFields);
     private static readonly FClassNetCache FortPlayerStateZoneCache = new(FortPlayerStateCache, FortPlayerStateZoneOwnFields);
-    private static readonly FClassNetCache PlayerStateCache = new(FortPlayerStateZoneCache, FortPlayerStateAthenaOwnFields);
+    public static readonly FClassNetCache PlayerStateCache = new(FortPlayerStateZoneCache, FortPlayerStateAthenaOwnFields);
 
-    public static FClassNetCache Get(AActor actor) => actor switch {
-        APlayerController => PlayerControllerCache,
-        AController => ControllerCache,
-        APawn => PawnCache,
-        APlayerState => PlayerStateCache,
-        _ => ActorCache
+    public static readonly FClassNetCache GenericActorCache = ActorCache;
+
+    // ---- FRepLayout (ordinary UPROPERTY replication) handle tables ----
+    //
+    // Unlike the ClassNetCache field loop (self-describing via a packed bit-count per field), the
+    // RepLayout property blob has NO per-property length prefix - the reader must know each
+    // property's real C++ type to know how many bits its value occupies. AFortOnlineBeacon's own
+    // NativeRepLayouts.cs only actually models a handful of properties it sends (RemoteRole/Role as
+    // a 2-bit ByteEnum, PlayerState as an ObjectRef, and three Bools) - everything else there is a
+    // "Reserved" placeholder that exists purely to give later properties the right handle NUMBER,
+    // with NO confirmed wire width. Re-declaring all of them as Bool/StructAtomic here would be
+    // GUESSING - if a guess is wrong the whole rest of the blob silently desyncs. So each entry
+    // below is either FixedBits (a width we're actually confident of - real UE bools are always
+    // exactly 1 bit, a plain byte/TEnumAsByte-without-enum is always 8 bits, and the properties this
+    // project actually sends have a getter, confirming Kind/width), IsObjectRef (self-describing via
+    // a NetGUID read), or neither (name known from the live handle-numbering probe, width unknown -
+    // decode stops there and the remainder is hex-dumped for manual follow-up).
+    public sealed record RepHandleDef(string Name, int? FixedBits, bool IsObjectRef = false, RepHandleDef[]? Children = null);
+
+    private static RepHandleDef Bit(string name) => new(name, 1);
+    private static RepHandleDef Byte(string name) => new(name, 8);
+    private static RepHandleDef Obj(string name) => new(name, null, true);
+    private static RepHandleDef Unknown(string name) => new(name, null);
+
+    public static readonly RepHandleDef[] ActorProps = {
+        Bit("bHidden"), Bit("bReplicateMovement"), Bit("bTearOff"), Bit("bCanBeDamaged"),
+        new("RemoteRole", 2), // TEnumAsByte<ENetRole>, CeilLogTwo(ROLE_MAX=4) = 2 bits - GetByteValue-confirmed in NativeRepLayouts
+        Unknown("ReplicatedMovement"), // FRepMovement - variable/quantized, not modeled
+        new("AttachmentReplication", null, false, new[] {
+            Unknown("AttachmentReplication[0]"), Unknown("AttachmentReplication[1]"), Unknown("AttachmentReplication[2]"),
+            Unknown("AttachmentReplication[3]"), Unknown("AttachmentReplication[4]"), Unknown("AttachmentReplication[5]")
+        }),
+        Obj("Owner"),
+        new("Role", 2), // GetByteValue-confirmed
+        Obj("Instigator")
     };
+
+    public static readonly RepHandleDef[] ControllerProps = ActorProps.Concat(new[] {
+        Obj("PlayerState"), // GetObjectValue-confirmed
+        Obj("Pawn")
+    }).ToArray();
+
+    public static readonly RepHandleDef[] PlayerControllerProps = ControllerProps.Concat(new[] {
+        Unknown("TargetViewRotation"), // FRotator - not modeled
+        Unknown("SpawnLocation"), // FVector - not modeled
+        Bit("bFailedToRespawn"),
+        Bit("bHasInitiallySpawned"),
+        Bit("bHasServerFinishedLoading") // GetByteValue-confirmed
+    }).ToArray();
+
+    public static readonly RepHandleDef[] PawnProps = ActorProps.Concat(new[] {
+        Byte("RemoteViewPitch"), // plain uint8, always 8 bits
+        Obj("PlayerState"),
+        Obj("Controller")
+    }).ToArray();
+
+    public static readonly RepHandleDef[] GameStateProps = ActorProps.Concat(new[] {
+        Obj("GameModeClass"),
+        Obj("SpectatorClass"),
+        Bit("bReplicatedHasBegunPlay"), // GetByteValue-confirmed
+        Unknown("ReplicatedWorldTimeSeconds") // float in real UE, but width/quantization not confirmed here
+    }).ToArray();
+
+    public static readonly RepHandleDef[] PlayerStateProps = ActorProps.Concat(new[] {
+        Unknown("Score"), Unknown("PlayerID"), Unknown("Ping"),
+        Bit("bIsSpectator"), Bit("bOnlySpectator"), Bit("bIsABot"), Bit("bIsInactive"), Bit("bFromPreviousLevel"),
+        Unknown("StartTime"), Unknown("UniqueId"), Unknown("PlayerNamePrivate"),
+        Bit("bIsGameSessionOwner"), Bit("bIsWorldDataOwner"), Bit("bHasFinishedLoading"),
+        Bit("bHasStartedPlaying") // GetByteValue-confirmed
+    }).ToArray();
+
+    /// <summary>Flattens a table into (handle -&gt; def), replicating FRepLayout's own numbering: sequential ++ per leaf, recursing into children instead of assigning the parent a handle.</summary>
+    public static Dictionary<uint, RepHandleDef> BuildHandleMap(RepHandleDef[] topLevel) {
+        var map = new Dictionary<uint, RepHandleDef>();
+        uint handle = 0;
+        void Visit(RepHandleDef def) {
+            if (def.Children != null) { foreach (var c in def.Children) Visit(c); return; }
+            handle++;
+            map[handle] = def;
+        }
+        foreach (var d in topLevel) Visit(d);
+        return map;
+    }
 }

@@ -1,0 +1,45 @@
+Reading C:\Users\user\AppData\Local\Temp\claude\c--Users-user-Documents-Prive\058027bb-4373-4a48-a8ca-22c1b76a4a21\scratchpad\PacketProxy\bin\Debug\net10.0\packets_ProjectReboot3.0.log (limit=5)
+2804 lines total
+OodleHandlerComponent: loaded FortniteGameOutput.udic (dictionary=1048576 bytes, hashTableBits=17)
+OodleHandlerComponent: loaded FortniteGameInput.udic (dictionary=1048576 bytes, hashTableBits=17)
+---- #1 C->S len=25 ----
+IncomingConnectionless
+bHandshakePacket: True, bRestartHandshake: False, secretId: 0, timestamp: 0
+SendConnectChallenge
+#1: [server role] handshake packet processed (len=25)
+---- #2 S->C len=25 ----
+StatelessConnectHandlerComponent.Incoming
+Invalid handshake packet size bits: 191
+#2: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 200.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at AFortOnlineBeacon.Net.OodleHandlerComponent.Incoming(FBitReader packet) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\OodleHandlerComponent.cs:line 151
+   at AFortOnlineBeacon.Net.PacketHandler.Incoming_Internal(FReceivedPacketView packetView) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\PacketHandler.cs:line 148
+   at AFortOnlineBeacon.Net.PacketHandler.Incoming(FReceivedPacketView packetView) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\PacketHandler.cs:line 107
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 173
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 153
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] raw) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 104
+---- #3 C->S len=25 ----
+IncomingConnectionless
+bHandshakePacket: True, bRestartHandshake: False, secretId: 1, timestamp: 296.70062
+cookieDelta: -296.70062, secretDelta: 296.70062, bValidCookieLifetime: False, bValidSecretIdTimestamp: False
+#3: [server role] handshake packet processed (len=25)
+---- #4 S->C len=25 ----
+StatelessConnectHandlerComponent.Incoming
+#4: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 200.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at AFortOnlineBeacon.Net.OodleHandlerComponent.Incoming(FBitReader packet) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\OodleHandlerComponent.cs:line 151
+   at AFortOnlineBeacon.Net.PacketHandler.Incoming_Internal(FReceivedPacketView packetView) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\PacketHandler.cs:line 148
+   at AFortOnlineBeacon.Net.PacketHandler.Incoming(FReceivedPacketView packetView) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\PacketHandler.cs:line 107
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 173
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 153
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] raw) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 104
+---- #5 C->S len=28 ----
+IncomingConnectionless
+#5: [server role] handshake packet processed (len=28)
+Done. Processed 5 packets.

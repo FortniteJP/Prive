@@ -43,4 +43,15 @@ public class FClassNetCache {
 
         return null;
     }
+
+    /// <summary>Reverse lookup for writing (server->client) content-block fields - real UE builds a name->field TMap alongside the index array; a linear scan is fine here given how rarely this is called (a handful of RPC sends, not every received field).</summary>
+    public FFieldNetCache? GetFromName(string name) {
+        for (var c = this; c != null; c = c.Super) {
+            foreach (var field in c._fields) {
+                if (field.Name == name) return field;
+            }
+        }
+
+        return null;
+    }
 }

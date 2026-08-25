@@ -61,11 +61,42 @@ public sealed class FRepLayout {
         foreach (var cmd in _cmds) {
             if (!changedNames.Contains(cmd.Def.Name)) continue;
 
+            var handle = cmd.RelativeHandle;
+
+            if (cmd.Def.Kind == ERepPropertyKind.ObjectRef) {
+                if (cmd.Def.GetObjectValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no object value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                ((UPackageMapClient) payload.PackageMap!).SerializeObject(payload, cmd.Def.GetObjectValue(instance));
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.EmptyDynamicArrayProbe) {
+                payload.SerializeIntPacked(&handle);
+                ushort arrayNum = 0;
+                payload.SerializeBits(&arrayNum, 16);
+                uint arrayTerminator = 0;
+                payload.SerializeIntPacked(&arrayTerminator);
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.Name) {
+                if (cmd.Def.GetNameValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no name value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                FName? nameValue = cmd.Def.GetNameValue(instance);
+                UPackageMap.StaticSerializeName(payload, ref nameValue);
+                continue;
+            }
+
             if (cmd.Def.GetByteValue == null) {
                 throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no value serializer yet, can't be in a changed set.");
             }
 
-            var handle = cmd.RelativeHandle;
             payload.SerializeIntPacked(&handle);
 
             var value = cmd.Def.GetByteValue(instance);

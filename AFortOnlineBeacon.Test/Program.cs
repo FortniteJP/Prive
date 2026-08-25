@@ -10,8 +10,8 @@ class Program {
     private static readonly PeriodicTimer Tick = new PeriodicTimer(TimeSpan.FromSeconds(TickRate));
 
     static async Task<int> Main(string[] args) {
-        StartPacketCapture();
-        StartConsoleLog();
+        //StartPacketCapture();
+        //StartConsoleLog();
 
         var worldUrl = new FUrl {
             Map = "/Game/Athena/Maps/Athena_Terrain",

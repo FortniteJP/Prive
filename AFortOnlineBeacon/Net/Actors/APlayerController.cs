@@ -4,6 +4,19 @@ public class APlayerController : AController {
     public byte NetPlayerIndex { get; set; }
     public UPlayer? Player { get; private set; }
 
+    /// <summary>Last location/rotation reported by ServerSetSpectatorLocation, mirroring the real fields of the same name.</summary>
+    public FVector? LastSpectatorSyncLocation { get; set; }
+    public FRotator? LastSpectatorSyncRotation { get; set; }
+
+    /// <summary>AFortPlayerController's own property - see NativeRepLayouts.PlayerControllerProps for why this matters.</summary>
+    public bool bHasServerFinishedLoading { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerController::WorldInventory - see AFortInventory's doc comment for why
+    ///     ClientRestart_Implementation needs this to resolve to something non-null client-side.
+    /// </summary>
+    public AFortInventory? WorldInventory { get; set; }
+
     public void SetPlayer(UPlayer inPlayer) => Player = inPlayer;
 
     /// <summary>

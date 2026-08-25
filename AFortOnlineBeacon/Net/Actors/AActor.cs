@@ -9,6 +9,19 @@ public class AActor : UObject {
     public ENetRole Role { get; private set; } = ENetRole.ROLE_Authority;
     public ENetRole RemoteRole { get; private set; } = ENetRole.ROLE_None;
     public bool bReplicates { get; private set; }
+
+    /// <summary>
+    ///     Standing in for the RootComponent-based transform real UE actors have - this project has
+    ///     no component system yet (see SerializeNewActor's own comment), so location/rotation just
+    ///     live directly on the actor.
+    /// </summary>
+    public FVector Location { get; private set; } = new();
+    public FRotator Rotation { get; private set; } = new();
+
+    public FVector GetActorLocation() => Location;
+    public void SetActorLocation(FVector newLocation) => Location = newLocation;
+    public FRotator GetActorRotation() => Rotation;
+    public void SetActorRotation(FRotator newRotation) => Rotation = newRotation;
     
     // TODO: UPROPERTY(BlueprintReadWrite, ReplicatedUsing=OnRep_Instigator, meta=(ExposeOnSpawn=true, AllowPrivateAccess=true), Category=Actor)
     /// <summary>

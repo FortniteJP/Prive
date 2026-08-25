@@ -55,7 +55,11 @@ public class UIpNetDriver : UNetDriver {
         
         while (ReceiveThread.TryReceive(out var packet)) {
             // Logger.Information("Received from {Adress} data {Buffer}", packet.Address, packet.DataView.GetData());
-            Console.WriteLine($"Recv {packet.DataView.NumBytes()} {packet.Address}, {BitConverter.ToString(packet.DataView.GetData())}");
+            // Buffered so a pure ack/keepalive packet (the bulk of idle-connection traffic) never
+            // prints anything - see NetDebugLog. Connectionless (handshake) packets and anything
+            // that reaches ReceivedPacket's bunch loop still get flushed and shown in full.
+            NetDebugLog.Begin();
+            NetDebugLog.Write($"Recv {packet.DataView.NumBytes()} {packet.Address}, {BitConverter.ToString(packet.DataView.GetData())}");
             PacketCapture.Raise(EPacketDirection.Incoming, packet.Address, packet.DataView.GetData());
 
             UNetConnection? connection = ServerConnection;
@@ -72,6 +76,11 @@ public class UIpNetDriver : UNetDriver {
             if (connection == null) {
                 connection = ProcessConnectionlessPacket(packet);
                 bIgnorePacket = packet.DataView.NumBytes() == 0;
+
+                // Connectionless (handshake) traffic is rare and always worth seeing in full - only
+                // an already-established connection's ReceivedRawPacket gets to decide whether this
+                // packet was boring enough (a pure ack) to discard instead.
+                NetDebugLog.Flush();
             }
             
             // Send the packet to the connection for processing.

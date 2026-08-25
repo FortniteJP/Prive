@@ -158,7 +158,7 @@ public class StatelessConnectHandlerComponent : HandlerComponent {
     }
 
     public override void Incoming(FBitReader packet) {
-        Console.WriteLine("StatelessConnectHandlerComponent.Incoming");
+        NetDebugLog.Write("StatelessConnectHandlerComponent.Incoming");
         if (_MagicHeader.Length > 0) {
             // Skip magic header.
             packet.Pos += _MagicHeader.Length;

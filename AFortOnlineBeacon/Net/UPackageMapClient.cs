@@ -129,6 +129,8 @@ public class UPackageMapClient : UPackageMap {
         InternalWriteObject(_currentExportBunch, netGuid, obj, pathName, objOuter);
         GuidCache.IsExportingNetGUIDBunch = false;
 
+        Console.WriteLine($"ExportNetGUID: guid={netGuid} obj={obj?.GetFName()} pathName='{pathName}' objOuter={objOuter?.GetFName()} currentExportNetGuidsCount={_currentExportNetGuids.Count} currentExportBunchIsError={_currentExportBunch.IsError()} currentExportBunchNumBits={_currentExportBunch.GetNumBits()}");
+
         if (_currentExportNetGuids.Count == 0) return false;
 
         if (_currentExportBunch.IsError()) {

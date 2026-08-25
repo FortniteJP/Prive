@@ -416,6 +416,7 @@ public abstract class UNetConnection : UPlayer {
                 if (packetView.DataView.NumBytes() == 0) return;
             } else {
                 // Logger.Fatal("Packet failed PacketHandler processing");
+                NetDebugLog.Flush();
                 Close();
                 return;
             }
@@ -430,7 +431,7 @@ public abstract class UNetConnection : UPlayer {
             var count = packetView.DataView.NumBytes();
 
             var lastByte = data[count - 1];
-            Console.WriteLine($"ReceivedRawPacket post-handler: count={count} NumBits={packetView.DataView.NumBits()} lastByte={lastByte:X2} data={Convert.ToHexString(data)}");
+            NetDebugLog.Write($"ReceivedRawPacket post-handler: count={count} NumBits={packetView.DataView.NumBits()} lastByte={lastByte:X2} data={Convert.ToHexString(data)}");
             if (lastByte != 0) {
                 var bitSize = (count * 8) - 1;
 
@@ -457,9 +458,10 @@ public abstract class UNetConnection : UPlayer {
     }
 
     private void ReceivedPacket(FBitReader reader, bool bIsReinjectedPacket = false) {
-        Console.WriteLine($"ReceivedPacket: IsError={reader.IsError()} NumBits={reader.GetNumBits()} PosBits={reader.GetPosBits()}");
+        NetDebugLog.Write($"ReceivedPacket: IsError={reader.IsError()} NumBits={reader.GetNumBits()} PosBits={reader.GetPosBits()}");
         if (reader.IsError()) {
             // Logger.Error("Packet too small");
+            NetDebugLog.Flush();
             return;
         }
 
@@ -472,15 +474,16 @@ public abstract class UNetConnection : UPlayer {
             var header = new FNotificationHeader();
 
             var bReadHeaderOk = PacketNotify.ReadHeader(ref header, reader);
-            Console.WriteLine($"PacketNotify.ReadHeader: ok={bReadHeaderOk} readerError={reader.IsError()} posAfter={reader.GetPosBits()}");
+            NetDebugLog.Write($"PacketNotify.ReadHeader: ok={bReadHeaderOk} readerError={reader.IsError()} posAfter={reader.GetPosBits()}");
             if (!bReadHeaderOk) {
                 // Logger.Fatal("Failed to read PacketHeader");
+                NetDebugLog.Flush();
                 Close();
                 return;
             }
 
             var packetSequenceDelta = PacketNotify.GetSequenceDelta(header);
-            Console.WriteLine($"GetSequenceDelta: delta={packetSequenceDelta} header.Seq={header.Seq.Value} header.AckedSeq={header.AckedSeq.Value} InSeq={PacketNotify.GetInSeq().Value} OutSeq={PacketNotify.GetOutSeq().Value} OutAckSeq={PacketNotify.GetOutAckSeq().Value} InAckSeq={PacketNotify.GetInAckSeq().Value}");
+            NetDebugLog.Write($"GetSequenceDelta: delta={packetSequenceDelta} header.Seq={header.Seq.Value} header.AckedSeq={header.AckedSeq.Value} InSeq={PacketNotify.GetInSeq().Value} OutSeq={PacketNotify.GetOutSeq().Value} OutAckSeq={PacketNotify.GetOutAckSeq().Value} InAckSeq={PacketNotify.GetInAckSeq().Value}");
             if (packetSequenceDelta > 0) {
                 var bPacketOrderCacheActive = !_bFlushingPacketOrderCache && _PacketOrderCache != null;
                 var bCheckForMissingSequence = bPacketOrderCacheActive && _PacketOrderCacheCount == 0;
@@ -504,20 +507,29 @@ public abstract class UNetConnection : UPlayer {
                 // TODO: Increment things
                 // TODO: PacketOrderCache
                 // Logger.Warning("Received out of order packet");
+                NetDebugLog.Flush();
                 return;
             }
 
             // Update incoming sequence data and deliver packet notifications
             // Packet is only accepted if both the incoming sequence number and incoming ack data are valid
             PacketNotify.Update(header, new PacketNotifyUpdateContext(_PacketNotifyUpdateDelegate, channelsToClose));
-            
+
             // Extra information associated with the header (read only after acks have been processed)
             if (packetSequenceDelta > 0 && !ReadPacketInfo(reader)) {
                 // Logger.Fatal("Failed to read PacketHeader");
+                NetDebugLog.Flush();
                 Close();
                 return;
             }
         }
+
+        // A packet that carries no bunches at all - a pure ack/keepalive - is the overwhelming
+        // majority of traffic once a connection is idle. Silently drop everything buffered above
+        // for it rather than drowning out the packets that actually carry bunches/RPCs/properties.
+        // This only affects logging - channel-close bookkeeping below still has to run either way.
+        if (reader.AtEnd()) NetDebugLog.Discard();
+        else NetDebugLog.Flush();
 
         var bIgnoreRPCS = Driver!.ShouldIgnoreRPCs();
         var bSkipAck = false;

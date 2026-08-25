@@ -1,0 +1,896 @@
+Reading C:\Users\user\AppData\Local\Temp\claude\c--Users-user-Documents-Prive\058027bb-4373-4a48-a8ca-22c1b76a4a21\scratchpad\PacketProxy\bin\Debug\net10.0\packets_ProjectReboot3.0.log (limit=40)
+2804 lines total
+OodleHandlerComponent: loaded FortniteGameOutput.udic (dictionary=1048576 bytes, hashTableBits=17)
+OodleHandlerComponent: loaded FortniteGameInput.udic (dictionary=1048576 bytes, hashTableBits=17)
+---- #1 C->S len=25 ----
+#1: [server role] waiting for handshake sequence numbers (recovered from the S->C side), skipping
+---- #2 S->C len=25 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=200 trimmedCountBits=199 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+Invalid handshake packet size bits: 191
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=199 Num=199 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=199 NumBefore=199
+[DIAG] Realigned: PosAfter=199 NumAfter=199
+[DIAG] AES.Incoming enter Pos=199 Num=199
+[DIAG] AES.Incoming exit (not encrypted) Pos=200 Num=199
+[DIAG] After AESHandlerComponent.Incoming: Pos=200 Num=199 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=200 NumBefore=199
+[DIAG] Realigned: PosAfter=200 NumAfter=199
+[DIAG] Oodle.Incoming enter Pos=200 Num=199
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=201 Num=199
+[DIAG] After OodleHandlerComponent.Incoming: Pos=201 Num=199 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=0
+---- #3 C->S len=25 ----
+#3: [server role] waiting for handshake sequence numbers (recovered from the S->C side), skipping
+---- #4 S->C len=25 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=200 trimmedCountBits=199 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=199 Num=199 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=199 NumBefore=199
+[DIAG] Realigned: PosAfter=199 NumAfter=199
+[DIAG] AES.Incoming enter Pos=199 Num=199
+[DIAG] AES.Incoming exit (not encrypted) Pos=200 Num=199
+[DIAG] After AESHandlerComponent.Incoming: Pos=200 Num=199 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=200 NumBefore=199
+[DIAG] Realigned: PosAfter=200 NumAfter=199
+[DIAG] Oodle.Incoming enter Pos=200 Num=199
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=201 Num=199
+[DIAG] After OodleHandlerComponent.Incoming: Pos=201 Num=199 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=0
+GetChallengeSequences: serverSequence=1352 clientSequence=11745
+#4: [client role] handshake complete (serverSeq=1352, clientSeq=11745)
+---- #5 C->S len=28 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=224 trimmedCountBits=216 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=216 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=216
+[DIAG] Realigned: PosAfter=0 NumAfter=211
+[DIAG] AES.Incoming enter Pos=0 Num=211
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=211
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=211 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=211
+[DIAG] Realigned: PosAfter=0 NumAfter=210
+[DIAG] Oodle.Incoming enter Pos=0 Num=210
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=210
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=210 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=209
+#5: post-Handler.Incoming clean bytes (27): 382AC25B00000080001300E2FD1780020001B4E46B780000000001
+#5: header Seq=5872 AckedSeq=8867 HistoryWordCount=9
+#5: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 320.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 263
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedServerRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 162
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 144
+---- #6 S->C len=32 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=256 trimmedCountBits=254 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=254 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=254
+[DIAG] Realigned: PosAfter=0 NumAfter=249
+[DIAG] AES.Incoming enter Pos=0 Num=249
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=249
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=249 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=249
+[DIAG] Realigned: PosAfter=0 NumAfter=248
+[DIAG] Oodle.Incoming enter Pos=0 Num=248
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=248
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=248 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=247
+#6: post-Handler.Incoming clean bytes (31): 006F910A000000800000044052FF05E0C0400200004090D050CC4D11CE0D40
+#6: header Seq=676 AckedSeq=5872 HistoryWordCount=1
+#6: bunch ChIndex=32 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=1152
+#6:   ChIndex=32 (None) content not decoded (1152 bits)
+---- #7 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#7: post-Handler.Incoming clean bytes (11): 086F938A00000080200001
+#7: header Seq=8868 AckedSeq=14064 HistoryWordCount=9
+#7: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 320.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 263
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #8 C->S len=227 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=1816 trimmedCountBits=1814 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=1814 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=1814
+[DIAG] Realigned: PosAfter=0 NumAfter=1809
+[DIAG] AES.Incoming enter Pos=0 Num=1809
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=1809
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=1809 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=1809
+[DIAG] Realigned: PosAfter=0 NumAfter=1808
+[DIAG] Oodle.Incoming enter Pos=0 Num=1808
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=1808
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=1808 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=1807
+#8: post-Handler.Incoming clean bytes (226): 382AC45B000000800004C078FF05204D81000000000C402B0000C0CB51585BD94B5318DCDC8B91DC9B1B5D991BD98F53585B590F5999DD4F501D1D1A55DAD85A195DCF8C58D958990D59980D4CCE0D0D8E184D4E0E194D18CE584C4E5858CE8C0CD9CC4FD0541251CF5E505191104C0D8D510B0D4D91504BCD8D0D4D4B0ED18C4C8B908D5050D14C51904C0C114EDF0F145B189DD99B5C5BCF5592D34F905B185B1E5DDAD81C145B185DCF559A1BD9DBDDDC8F58D29C519ADC1CDD54999C5D999CD25B9A5B4F0C40044497155C353C2712E26052C767797BB62501000040D3101440
+#8: header Seq=5873 AckedSeq=675 HistoryWordCount=9
+#8: bunch ChIndex=14763 ChName=None bOpen=False bClose=True bReliable=False bPartial=True/False/False bHasPackageMapExports=False bits=8114
+#8:   ChIndex=14763 (None) content not decoded (8114 bits)
+#8: ChIndex=14763 (None) CLOSED, reason=Dormancy
+---- #9 C->S len=11 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=88 trimmedCountBits=80 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=80 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=80
+[DIAG] Realigned: PosAfter=0 NumAfter=75
+[DIAG] AES.Incoming enter Pos=0 Num=75
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=75
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=75 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=75
+[DIAG] Realigned: PosAfter=0 NumAfter=74
+[DIAG] Oodle.Incoming enter Pos=0 Num=74
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=74
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=74 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=73
+#9: post-Handler.Incoming clean bytes (10): 482AC6DB010000800001
+#9: header Seq=14065 AckedSeq=8868 HistoryWordCount=9
+#9: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 320.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 263
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedServerRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 162
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 144
+---- #10 S->C len=111 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=888 trimmedCountBits=886 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=886 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=886
+[DIAG] Realigned: PosAfter=0 NumAfter=881
+[DIAG] AES.Incoming enter Pos=0 Num=881
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=881
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=881 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=881
+[DIAG] Realigned: PosAfter=0 NumAfter=880
+[DIAG] Oodle.Incoming enter Pos=0 Num=880
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=880
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=880 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=879
+#10: post-Handler.Incoming clean bytes (110): 086F958A000000802000048052FF05D04540080000C0CB51585BD94B101D5A995BD84B5318DCDC4B101D5A995BD81755999C5C589A1BC00B0000C0CB51585BD94B101D5A995BD84B101D5A995BD8D751585B59D31B59994B101D5A995BD8D751585B59D31B59D9D7100000000040
+#10: header Seq=8869 AckedSeq=5872 HistoryWordCount=9
+#10: implausible ChIndex=1026286352 - bunch header looks misaligned, abandoning rest of packet
+---- #11 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#11: post-Handler.Incoming clean bytes (11): 186F978A03000080210001
+#11: header Seq=8869 AckedSeq=14065 HistoryWordCount=9
+#11: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 320.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 263
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #12 C->S len=22 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=176 trimmedCountBits=174 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=174 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=174
+[DIAG] Realigned: PosAfter=0 NumAfter=169
+[DIAG] AES.Incoming enter Pos=0 Num=169
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=169
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=169 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=169
+[DIAG] Realigned: PosAfter=0 NumAfter=168
+[DIAG] Oodle.Incoming enter Pos=0 Num=168
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=168
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=168 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=167
+#12: post-Handler.Incoming clean bytes (21): 582AC8DB0700008000040079FF05500001983A0040
+#12: header Seq=14066 AckedSeq=677 HistoryWordCount=9
+#12: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 320.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 263
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedServerRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 162
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 144
+---- #13 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#13: post-Handler.Incoming clean bytes (11): 206F998A07000080200001
+#13: header Seq=8870 AckedSeq=5874 HistoryWordCount=1
+#13: EXCEPTION during decode: AFortOnlineBeacon.Exceptions.UnrealSerializationException: BitReader::SerializeInt Overflow.
+   at AFortOnlineBeacon.Serialization.FBitReader.SerializeInt(UInt32* outValue, UInt32 valueMax) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 77
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadInt(UInt32 max) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 88
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 318
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #14 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#14: post-Handler.Incoming clean bytes (11): 206F9B8A07000080210001
+#14: header Seq=8870 AckedSeq=14066 HistoryWordCount=1
+---- #15 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#15: post-Handler.Incoming clean bytes (11): 206F9D8A07000080210001
+#15: header Seq=8871 AckedSeq=5874 HistoryWordCount=1
+---- #16 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#16: post-Handler.Incoming clean bytes (11): 206F9F8A07000080200001
+#16: header Seq=8871 AckedSeq=14066 HistoryWordCount=1
+#16: EXCEPTION during decode: AFortOnlineBeacon.Exceptions.UnrealSerializationException: BitReader::SerializeInt Overflow.
+   at AFortOnlineBeacon.Serialization.FBitReader.SerializeInt(UInt32* outValue, UInt32 valueMax) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 77
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadInt(UInt32 max) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 88
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 318
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #17 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#17: post-Handler.Incoming clean bytes (11): 206FA18A07000080200001
+#17: header Seq=8872 AckedSeq=5874 HistoryWordCount=1
+#17: EXCEPTION during decode: AFortOnlineBeacon.Exceptions.UnrealSerializationException: BitReader::SerializeInt Overflow.
+   at AFortOnlineBeacon.Serialization.FBitReader.SerializeInt(UInt32* outValue, UInt32 valueMax) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 77
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadInt(UInt32 max) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 88
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 318
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #18 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#18: post-Handler.Incoming clean bytes (11): 206FA38A07000080210001
+#18: header Seq=8872 AckedSeq=14066 HistoryWordCount=1
+---- #19 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#19: post-Handler.Incoming clean bytes (11): 206FA58A07000080210001
+#19: header Seq=8873 AckedSeq=5874 HistoryWordCount=1
+---- #20 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#20: post-Handler.Incoming clean bytes (11): 206FA78A07000080210001
+#20: header Seq=8873 AckedSeq=14066 HistoryWordCount=1
+---- #21 S->C len=12 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=96 trimmedCountBits=88 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=88 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=88
+[DIAG] Realigned: PosAfter=0 NumAfter=83
+[DIAG] AES.Incoming enter Pos=0 Num=83
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=83
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=83 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=83
+[DIAG] Realigned: PosAfter=0 NumAfter=82
+[DIAG] Oodle.Incoming enter Pos=0 Num=82
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=82
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=82 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=81
+#21: post-Handler.Incoming clean bytes (11): 206FA98A07000080210001
+#21: header Seq=8874 AckedSeq=5874 HistoryWordCount=1
+---- #22 C->S len=18 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=144 trimmedCountBits=142 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=142 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=142
+[DIAG] Realigned: PosAfter=0 NumAfter=137
+[DIAG] AES.Incoming enter Pos=0 Num=137
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=137
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=137 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=137
+[DIAG] Realigned: PosAfter=0 NumAfter=136
+[DIAG] Oodle.Incoming enter Pos=0 Num=136
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=136
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=136 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=135
+#22: post-Handler.Incoming clean bytes (17): 582ACADB0700008000044079FF05104042
+#22: header Seq=14066 AckedSeq=8869 HistoryWordCount=9
+#22: EXCEPTION during decode: System.ArgumentOutOfRangeException: Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')
+Actual value was 320.
+   at System.Collections.BitArray.ThrowArgumentOutOfRangeException(Int32 index)
+   at System.Collections.BitArray.get_Item(Int32 index)
+   at AFortOnlineBeacon.Serialization.FBitReader.ReadBit() in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Serialization\FBitReader.cs:line 92
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 263
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedServerRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 162
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 144
+---- #23 C->S len=11 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=88 trimmedCountBits=80 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=80 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=80
+[DIAG] Realigned: PosAfter=0 NumAfter=75
+[DIAG] AES.Incoming enter Pos=0 Num=75
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=75
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=75 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=75
+[DIAG] Realigned: PosAfter=0 NumAfter=74
+[DIAG] Oodle.Incoming enter Pos=0 Num=74
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=74
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=74 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=73
+#23: post-Handler.Incoming clean bytes (10): A02ACCDBFF0F00800001
+#23: header Seq=14067 AckedSeq=682 HistoryWordCount=1
+---- #24 S->C len=746 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=5968 trimmedCountBits=5964 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=5964 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=5964
+[DIAG] Realigned: PosAfter=0 NumAfter=5959
+[DIAG] AES.Incoming enter Pos=0 Num=5959
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=5959
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=5959 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=5959
+[DIAG] Realigned: PosAfter=0 NumAfter=5958
+[DIAG] Oodle.Incoming enter Pos=0 Num=5958
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=5958
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=5958 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=5957
+#24: post-Handler.Incoming clean bytes (745): 206FAB8A07000080210004C052FF05D00005C001000040101D5A995B18C024685265CE460A000000A6040AAE040A004A0000005E8EC2DACA5E82E8D0CADCC25E82E8D0CADCC2BEA0D8C2F2CAE486DEDCE8E4DED8D8CAE400000000004600000088CACCC2EAD8E8BEBE82E8D0CADCC2BEA0D8C2F2CAE486DEDCE8E4DED8D8CAE4BE8600BAA8107A8E040E96040E9E040E00420000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BEA8CAE4E4C2D2DC00000000001E00000082E8D0CADCC2BEA8CAE4E4C2D2DC000000000020000000A0CAE4E6D2E6E8CADCE898CAECCAD80000000000300E080C2C000000A4CAE6EAE4E4CAC6E8D2DEDC86DEDAE0DEDCCADCE8009C37B62A390E080C200000009AC2E4D6CAE486DEDAE0DEDCCADCE8004A57DB0A410E080C18000000B0A086DEDAE0DEDCCADCE80050F392CF4960A5CCBCA00200A60408A6048E0452533A05D3BBD9BC054BA50180170528C831088289907802727F04FA3190B86411118311042805001801E00800C84590CF4006000000000000000000000028000000040000001408400000000060000000008000000000A090210001000080020108000000000C00000000100000000014320430000000502000010000008001000000000200000080428600080000000A0420000000003000000000400000000050C810400100004081000400000000060000000008000000000A19023000000028108000000000C00000000000010000004021430007000000050210000000001800000000200000000028640800010000A04000020000000003000000000400000000850C01240000001408400000000060000000008000000000A090210005000080020108000000000C00000000100000000014320440022C957903287208800465AACCD141000000C09640C197400140050000C0CBD4985C1A1CDD8BD19B1C9D5B1A5DD951585B19000000008002000080D19B1C5D5512941D1440156BFD2109DC9499994000C096804430446E0990004E65E600924C1018
+#24: header Seq=8874 AckedSeq=14066 HistoryWordCount=1
+#24: bunch ChIndex=0 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/False bHasPackageMapExports=False bits=8105
+#24:   ChIndex=0 (None) content not decoded (8105 bits)
+---- #25 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#25: post-Handler.Incoming clean bytes (952): 206FAD8A07000080210024E05365C6E93685A1F0580843192020060000E0E528ACADEC25880EADCC2DECA5290C6EEE8529CC8D6C6E2C0CAEEC25880EADCC2DEC8BAA4C4E2E2CCDED8B69EA0B060600000000E0FFFFFF7F620000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E98C2DCC8E6C6C2E0CA5E82E8D0CADCC2BEA8CAE4E4C2D2DCBE98A6BE60620000000000FEFFFFFF27060000E0E528ACADEC25880EADCC2DECA5290C6EEE8529CC8D6C6E2C0CAEEC25880EADCC2DEC8BAA4C4E2E2CCDED8B69EA0B460600000000E0FFFFFF7F620000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E98C2DCC8E6C6C2E0CA5E82E8D0CADCC2BEA8CAE4E4C2D2DCBE98A6BE60660000000000FEFFFFFF27060000E0E528ACADEC25880EADCC2DECA5290C6EEE8529CC8D6C6E2C0CAEEC25880EADCC2DEC8BAA4C4E2E2CCDED8B69EA0BA60600000000E0FFFFFF7F520000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BEA09E92BE8CDEEADCC8C2E8D2DEDCE60000000000FEFFFFFFA7050000E0E528ACADEC25880EADCC2DECA5290C6EEE25A88E2CEDED25880EADCC2DEC8BAA4C4E2E2CCDED2BA88E2CED0D00000000E0FFFFFF7F500000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BEA6E8E4CAC2DAD2DCCEBE8EE4D2C80000000000FEFFFFFF47060000E0E528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC25880EADCC2DECEB28ACAD0C8E2D2C2F688CEE4D6E0E00000000E0FFFFFF7F520000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BE98DEC6C2E8D2DEDCACDED8EADACAE60000000000FEFFFFFF27050000E0E528ACADEC25880EADCC2DECA5290C6EEE25880EADCC2DEC6B28ACAD4C2E8CE96D2C8C2EEDCD6D0E00000000E0FFFFFF1F5E0000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84C2C6D6CEE4DEEADCC85E82E8D0CADCC2BE84C2C6D6CEE4DEEADCC80000000000FEFFFFFFA7040000E0E528ACADEC25880EADCC2DECA5290C6EEE25880EADCC2DEC6B298D8DCDEA8DADAEAD6C0E00000000E0FFFFFF7F4C0000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BE8CDEE4C2CECAC892E8CADAE60000000000FEFFFFFF67040000E0E528ACADEC25880EADCC2DECA5290C6EEE25880EADCC2DEC6BE84D4EAE0E8EAE8C0C00000000E0FFFFFF7F440000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BEB4D2E0D8D2DCCAE60000000000FEFFFFFF47050000E0E528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC01
+#25: header Seq=8875 AckedSeq=5874 HistoryWordCount=1
+#25: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/True bHasPackageMapExports=False bits=4777
+#25:   ChIndex=1 (None) content not decoded (4777 bits)
+#25: EXCEPTION during decode: System.Exception: String is too large
+   at AFortOnlineBeacon.Core.FString.Deserialize(FArchive archive) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\FString.cs:line 61
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 20
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #26 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#26: post-Handler.Incoming clean bytes (952): 206FAF8A07000080210024205464C6E925880EADCC2DEC6B0AEACBCA080B00000000E0FFFFFF7F4E0000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E82E8D0CADCC2BE88E4DEDCCAA6E0C2EEDCCAE4E60000000000FEFFFFFF47040000E0E528ACADEC25880EADCC2DECA5290C6EEE25880EADCC2DECCB29CCEEAB298C8D0D00000000E0FFFFFF7F620000005E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E98C2DCC8E6C6C2E0CA5E82E8D0CADCC2BEA8CAE4E4C2D2DCBE98A6BE60680000000000FEFFFFFF27060000E0E528ACADEC25880EADCC2DECA5290C6EEE85AA6C8EEE652A06E6C529ED0C8DCE29ED0C8D6EAA2CAEAECC6DACAC290C0E00000000E0FFFFFF1F740000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE84E4D2C8CECABE606066BE6C646660C8CC66C20000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9ABA96C2EEC0B06A6E62B0646C6C68C86A60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE9ACAE6C2BE606064BE666A647272C6C2C60000000000FEFFFFFF47070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98BAACECDAD8CED0B0646E66B8C0647AC4C66460600000000E0FFFFFF7F740000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEA4ACA0C2E4D6BE606062BE6ACC6872C462C4C60000000000FEFFFFFF47070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E94B482E8DECACEC0B0646E68BE6068786668C2C0700000000E0FFFFFF7F780000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEA6EAC4EAE4C4C2DCBE60606CBE66C86C64606AC6700000000000FEFFFFFF87070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E96BAA4EAC4E4E2CCCED0B26A6E6CB8CA6CC4CAC8CAC0600000000E0FFFFFF7F740000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE84E4D2C8CECABE606062BE666268C66EC666720000000000FEFFFFFFA7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E94B2ACCEDAC4CEEA98E0EEE6D8EEECB01
+#26: header Seq=8875 AckedSeq=14066 HistoryWordCount=1
+#26: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2216
+#26:   ChIndex=1 (None) content not decoded (2216 bits)
+#26: bunch ChIndex=34 ChName=None bOpen=False bClose=True bReliable=False bPartial=True/False/False bHasPackageMapExports=True bits=4788
+#26:   [ChIndex=34] GUID-export bunch, notRepLayoutExport=True, count=-1598111012
+#26:     export count -1598111012 looks implausible, aborting export decode
+#26: ChIndex=34 (None) CLOSED, reason=TearOff
+#26: EXCEPTION during decode: System.Exception: String is too large
+   at AFortOnlineBeacon.Core.FString.Deserialize(FArchive archive) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\FString.cs:line 61
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 20
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #27 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#27: post-Handler.Incoming clean bytes (952): 206FB18A07000080210024605464C6E90CA62C0C8686EC0600000000E0FFFFFF7F720000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE98DEC4C4F2BE606068BE66CC6AC2C4686AC60000000000FEFFFFFF87070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E96BA8ACAD8CAE4C2EEF0B0626E6ABC6CC0CC6864C060600000000E0FFFFFF7F760000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE92DAE0E4D2DCE8BE606062BE666472CCCAC662720000000000FEFFFFFF87070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E94BA9CE6D2D2F4C8EEC0B0626E64BC68CAC46A666AC0C00000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE9AD2DCCABE606062BE6C6A6CC6C666C4720000000000FEFFFFFFC7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9EB2A4CAE0CEDAD6EAE6CEE0B0666E62B2C2C476C06276C0600000000E0FFFFFF7F7A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE86D0D2DCC2A8DEEEDCBE606062BE6A62C46A726C60C60000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98B292C4DEE0B0666E68B4C0626862C27A70600000000E0FFFFFF7F760000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE9AC2DCE6D2DEDCBE606066BEC270CC70C868C2C80000000000FEFFFFFF27070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E90B2A8CAD6DEE0B0646E6CB0CC66C6C2C47860600000000E0FFFFFF7F760000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEACD2D8D8C2CECABE606062BE6C686060C46C6ECA0000000000FEFFFFFFA7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E96BA8ACAD8CAE4C2EEF0B064646EC6BA606C62C870C260C00000000E0FFFFFF7F740000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE98C2D6CABE606068BEC8BE6272CC6C6C6EC87001
+#27: header Seq=8876 AckedSeq=5874 HistoryWordCount=1
+#27: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/False/False bHasPackageMapExports=False bits=4650
+#27:   ChIndex=1 (None) content not decoded (4650 bits)
+#27: bunch ChIndex=0 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=0
+#27: bunch ChIndex=64 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/True bHasPackageMapExports=True bits=8191
+#27:   [ChIndex=64] GUID-export bunch, notRepLayoutExport=True, count=3883007
+#27:     export count 3883007 looks implausible, aborting export decode
+---- #28 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#28: post-Handler.Incoming clean bytes (952): 206FB38A07000080210024A05464C6E90000000000FEFFFFFF27080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98BA84E4E4E4EA84EEEAC4CEE0B0626E64BEC2B2726C72C2766CC0C00000000E0FFFFFF7F740000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE86C2E6E8D8CABE606064BE6C62C666726C62CC0000000000FEFFFFFF87070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9AB080F8EED4DAE4CEE0B0626E60B07C626664CA62C0700000000E0FFFFFF7F820000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEAED2DCE8CAE4ACD2D8D8C2CECABE606062BECAC666C67064C2C40000000000FEFFFFFF27080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E96BE8ADADADCE2D8D2E0F2A4C6EED0B0666E66B0627ACEC266CA60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEA6D0D2E0BE606062BE68CC606C6ECA6C680000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E96BE8CDAEEC0B0626E64BC60C27E706264C0600000000E0FFFFFF7F7A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE84D2CEA8CADAE0D8CABE606062BE686A6E686668CACC0000000000FEFFFFFFE7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9CBEA8D6D2CCCED6DE8CD6D8E4EAE6E8C2EEDCDED0B0626E66B2C862C2C26C62C0C00000000E0FFFFFF7F760000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEACDED8C6C2DCDEBE606064BE6C62C86A647266620000000000FEFFFFFF47080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E94BA9CEED8CADAC080F8EED4DAE4CEE0B0626E6EB660667062606A60C00000000E0FFFFFF7F7A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEA4C2C6CAA8E4C2C6D6BE606062BE66C86CC86E6A62680000000000FEFFFFFFE7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E9258801
+#28: header Seq=8876 AckedSeq=14066 HistoryWordCount=1
+#28: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2217
+#28:   ChIndex=1 (None) content not decoded (2217 bits)
+#28: channel-name deserialization failed at ChIndex=116
+---- #29 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#29: post-Handler.Incoming clean bytes (952): 206FB58A07000080210024E05464C6E90EADCC2DEC0BEA29E94BA9CEED8CAD0CEAED8D6DEE0B0626E60B072626A62CCC460C00000000E0FFFFFF7F760000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE92DAE0E4D2DCE8BE606064BECACA6C62C2C6C2C20000000000FEFFFFFF27070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98B296CADEC0B068666ECAB6C86E686ACE6A60C00000000E0FFFFFF7F760000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE98C2D6CABE606068C4BEC4BE6E6AC266C26EC4C60000000000FEFFFFFFC7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E92B69AC4CA84CEE4CE88D8EEEAD8DE64B2C2CAC660C46C60C00000000E0FFFFFF7F720000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEA6E8E4D2E09AC2D8D8BEC66468CCC86268CC0000000000FEFFFFFFC7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98BAAAC0D8EAD4CAA2ECDED0B0626E66B6C66CC666CAC2C0C00000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE98C2ECC2BE606064BE72726066606C6CC40000000000FEFFFFFF87070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98B296CAD8CE86D6CED2B886AE92BE6264CA6C626260600000000E0FFFFFF7F7E0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEACDED8C6C2DCDE84C2E6CABE606062BE726AC6C270626C660000000000FEFFFFFF87070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98B296CADAC88ECACEC0B0626E68BE686C646262C460600000000E0FFFFFF7F660000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE98C2D6CA8AC8CECABE6060640012A6CE09FEFFFFFFC7060000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE4588ED6D6CED05EA29E94B88ED6D6CED4B882DCC6DED6B0C2646CC0C27060700000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE01
+#29: header Seq=8877 AckedSeq=5874 HistoryWordCount=1
+#29: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/False bHasPackageMapExports=False bits=4650
+#29:   ChIndex=1 (None) content not decoded (4650 bits)
+#29: implausible ChIndex=-1049375162 - bunch header looks misaligned, abandoning rest of packet
+---- #30 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#30: post-Handler.Incoming clean bytes (952): 206FB78A07000080210024205564C6E986C2E8E8EAE6BEC2BE6ECC6E66C66E72C60000000000FEFFFFFF67070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E98B296CADEC0B068686EC4BE60BC646C606C64C2C0C00000000E0FFFFFF7FA00000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BE6AF06ABE94AA9C8EBEA0D2E4C2E8CA86C2DAE0BEC2BEC8CAE6E8BE6C6E6066CC6AC2600000000000FEFFFFFFC7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9EB2A4CAE0CEDAD6EAE6CEE0B06A6E62B2647868646CC0C0600000000E0FFFFFF7F840000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA4CAE6CAE4ECCA5E82E8D0CADCC2BEA09E92BEAEC2E4CAD0DEEAE6CAE6BE606064BEC8CA706270686C660000000000FEFFFFFF67070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E96B288D2EEF4BA8E90B0626E6AB4CA6A62CEC06E60600000000E0FFFFFF7F740000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE9ACAE8CADEE4BEA66260BE627268C2C26CC4CA0000000000FEFFFFFF07060000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E94BAA68E80B0626E64B0C808C5A5AE0FFFFFF7F7C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE98C2D6CA92E6D8C2DCC8BE606068BE707064686EC666C40000000000FEFFFFFF47070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E90BAAAE4C8CEDED0B0626E68B262767CC66462C0600000000E0FFFFFF7F7C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA4CAE6CAE4ECCA5E82E8D0CADCC2BEA09E92BEA0E4D2E6DEDCBE606066BE62727066C4CCC2C60000000000FEFFFFFFA7070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45AA6CAE4CCEAEEC25880EADCC2DEC0BEA29E96BEA2EAC0DEE0B0666E6CBAC0647A6E606270600000000E0FFFFFF7F9C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6EF062645E82E8D0CADCC2BEA09E92BE8ECADCCAE4D2C6A0D8DEE8BE8E82A6BE606064BE626A6C7060CCC8640000000000FEFFFFFF670B0000E08501
+#30: header Seq=8877 AckedSeq=14066 HistoryWordCount=1
+#30: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2218
+#30:   ChIndex=1 (None) content not decoded (2218 bits)
+#30: EXCEPTION during decode: System.Exception: String is too large
+   at AFortOnlineBeacon.Core.FString.Deserialize(FArchive archive) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\FString.cs:line 61
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 20
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #31 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#31: post-Handler.Incoming clean bytes (952): 206FB98A07000080210024605564C6E9AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE650AAE6C2C2D8CEDE52A4CAE0CEDAD6EAEEC6B2A06E625880EADCC2DECEB2A4CAE0CEDAD6EAEEC0B0626E6AB062FE78BECCB66CC2C66CC66AC0C00000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE8CC2E4DAA6E8CAC2C8BEA6E0D8D2E8BE82BE606062BE666666C2C860C26C0000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9CB284CAE6D8AAE2C8CEC6B0A8E2D8DEE4BE80B0626E62B86ACAC26C60CC70600000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BE8CC2E4DAA6E8CAC2C8BEA6E0D8D2E8BE86BE606062BECC6A6670C46462660000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE05EA29E925880EADCC2DEC0BEA29E9CB284CAE6D8AAE2C8CEC6B0A8E2D8DEE8BE80B0626E60B866C2C270CC7660600000000E0FFFFFF7F800000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA09E925E82E8D0CADCC2BEA09E92BEA4EAD2DCCAC8A8DEEEDCBE606062BEC4BECC70646E6264C8C80000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B2B260BE6AB066606266C46260C00000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB064B260BE62C86070C6C46AC20000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B6B260BE62B2666EC666C46060700000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB068B260BE70CC70CC6ACAC8720000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0BAB260BE64B4646EC86662CC60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB062B262BE6A726C6A66C464680000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA52901
+#31: header Seq=8878 AckedSeq=5874 HistoryWordCount=1
+#31: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/False/True bHasPackageMapExports=False bits=4650
+#31:   ChIndex=1 (None) content not decoded (4650 bits)
+#31: EXCEPTION during decode: System.Exception: String is too large
+   at AFortOnlineBeacon.Core.FString.Deserialize(FArchive archive) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\FString.cs:line 61
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 20
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #32 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#32: post-Handler.Incoming clean bytes (952): 206FBB8A07000080210024A05564C6E90C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B4B262BE68B26468C26C6A6CC0600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB066B262BE646C6264C2CA60600000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B8B262BE6CBC6CC4C2CC766060700000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB06AB262BEC46270CAC4C4726E0000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B0B264BE60B26074726272C470C00000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB062B264BEC4C6CC6EC8CC6C6C0000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B4B264BE62B46AC6C2C0667660600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB066B264BE6260C26E726666C80000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B8B264BE60BC7CCCC0CC62C670600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB06AB264BEC46860C660C6C8720000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B0B266BE64B2C076766EC262C0700000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB062B266BE72666CC460646E6E0000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B4B266BE62BCC8CC60CE686A60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB066B266BECAC662CA666A70680000000000FEFFFFFF01
+#32: header Seq=8878 AckedSeq=14066 HistoryWordCount=1
+#32: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2219
+#32:   ChIndex=1 (None) content not decoded (2219 bits)
+#32: implausible ChIndex=171122381 - bunch header looks misaligned, abandoning rest of packet
+---- #33 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#33: post-Handler.Incoming clean bytes (952): 206FBD8A07000080210024E05564C6E907070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B8B266BE62BECC62C26ECC6860C00000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB06AB266BE666C6ACACA62C6720000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B0B268BE6CB26C6860C86A6C60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB062B268BE62CCCCC2C664CAC80000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B4B268BE6CB0646462C8CACC60C00000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB066B268BECA606EC2606866720000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B8B268BE6AB664C2C2C0CE7A60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB06AB268BECCC26CC6C66CC2600000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B0B26ABE64B26A68C6CAC4C460600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB062B26ABE6ACACC6E72CC6E600000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B4B26ABE6CB668CAC6CAC0C270600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB066B26ABE66C8CC6A68CC606C0000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B8B26ABE6ABE626472C262C470600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCA01
+#33: header Seq=8879 AckedSeq=5874 HistoryWordCount=1
+#33: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/True bHasPackageMapExports=False bits=4650
+#33:   ChIndex=1 (None) content not decoded (4650 bits)
+#33: implausible ChIndex=-342538190 - bunch header looks misaligned, abandoning rest of packet
+---- #34 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#34: post-Handler.Incoming clean bytes (952): 206FBF8A07000080210024205664C6E9D8BEB06AB26ABE646CC4C668CAC6660000000000FEFFFFFF07070000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE658A4EAE2CAC2DCDEDEC65AA4E8CADCCAE8CED0B0B260BE62B07466CC6A666A60600000000E0FFFFFF7F700000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65EA6E8E4CAC2DAD2DCCE5EA6EAC4D8CAECCAD8BEB060B262BE6CC264C4C272C46C0000000000FEFFFFFFE7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEEC2BEE4BE62B470CA66C4C2C6C0600000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA6AA84BE66F066BE90DEEAE6CABEDEBECA70726AC462CA680000000000FEFFFFFF47090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEEC2BEC0B4AAE0CEE4B66C6AC6C06A6060600000000E0FFFFFF7F8C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA6AA84BE66F066BE90DEEAE6CABECE64BE64667068607068C20000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEECEBEC2BE606C6EC86CC260700000000E0FFFFFF7F940000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA6AA84BE66F066BE8EC2E6A6E8C2E8D2DEDCBEC4BE6CC272C472686AC60000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEECABEDEB86C62C2627A60C0600000000E0FFFFFF7F9C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABEA4EAD2DCCAC884EAD2D8C8D2DCCEBECABECCC2C6706EC272720000000000FEFFFFFF27090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6BAA4AE86B066FE68B2A6CEC6D8A2ECC8DEC2BEC6BCC0C26868C8C860C00000000E0FFFFFF7F9C0000005EA8CADAE05E8EC2DACA01
+#34: header Seq=8879 AckedSeq=14066 HistoryWordCount=1
+#34: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2220
+#34:   ChIndex=1 (None) content not decoded (2220 bits)
+#34: implausible ChIndex=1267213 - bunch header looks misaligned, abandoning rest of packet
+---- #35 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#35: post-Handler.Incoming clean bytes (952): 206FC18A07000080210024605664C6E95E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA6AA84BE66F066BEA4EAD2DCCAC884EAD2D8C8D2DCCEBEC2BE64C46E606C6A6A600000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6BAA4AE86B066FE60BE9AD6EAEEC2BEC4B2C0C6786CC4C6C0C00000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE90DEEAE6CABEC2BE60CC607060CC68640000000000FEFFFFFF87090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC2B482A89E86B066FE64B482E8DECAC6C0A2D6C6CED2BEC2B47A686662C26860C00000000E0FFFFFF7F980000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BE82A49288BE66F066BE84E4D2C8CECAA6D0C2C6D6BEC4BE7268CC68606064C20000000000FEFFFFFF87080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC4BAAA8E96B066FE6AB29CDADEC8BECCB2CC7462C6CC62C0700000000E0FFFFFF7F880000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA48A9ABE66F066BE9AD2DCCABEC6BE606C72CC68CC72600000000000FEFFFFFFC7090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEE5062F46E625880EADCC2DEC0BEA29E9EBA8CCAD4C2E6D0C8AED8DEE2BC989E80B0646E62BC76C46260CC6A60C00000000E0FFFFFF7FA00000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA09E92BE8ECADCCAE4D2C6A0D8DEE8BEA6DCCACAF4F2BE606062BE6A62627262C464720000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6B88CAE9AB06AFE60B8A2D4C2FEC4BECAB4CC666EC66C6860600000000E0FFFFFF7F940000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BE86A89CBE66F066BE86DEDADACAE4C6D2C2D8BEC2BE647266C4CC7062640000000000FEFFFFFF67090000E085AA01
+#35: header Seq=8880 AckedSeq=5874 HistoryWordCount=1
+#35: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/False/False bHasPackageMapExports=False bits=4651
+#35:   ChIndex=1 (None) content not decoded (4651 bits)
+#35: bunch ChIndex=0 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=3008
+#35:   ChIndex=0 (None) content not decoded (3008 bits)
+---- #36 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#36: post-Handler.Incoming clean bytes (952): 206FC38A07000080210024A05664C6E9AC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6B88CAE96B066FE64BAA6C2E8DACCC8D2E2D8CED2BEC8B8CA62CAC0667860C00000000E0FFFFFF7F940000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BE86A89CBE66F066BE86DEDADACAE4C6D2C2D8BEC6BEC86E68626262626E0000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6B88CAE9AB06AFE60B8A2D4C2FEC2BECCB8C66C6660C06270700000000E0FFFFFF7F940000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BE86A89CBE6AF06ABE86DEDADACAE4C6D2C2D8BEC2BEC6CCC47264626E6E0000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6B88CAE9AB06AFE68BEAEDAE4CEE2BECEB4606A6E64626A70C00000000E0FFFFFF7F940000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BE86A89CBE6AF06ABE86DEDADACAE4C6D2C2D8BEC4BEC6C26868C87072620000000000FEFFFFFF07090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DECAB06AFE60B2A8CAD6DEE4BAA8C2E2C8DED4BEC4BACA6C62C468CAC0600000000E0FFFFFF7F900000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF0725E82E8D0CADCC2BE6AF072BEA0C2D8DAE6BEA4CAE8C2D2D8BEC6BE68C272626C6EC8600000000000FEFFFFFF87090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DECAB06AFE60B2A8CAD6DEEEB286C6E8A2E8C2EEDCDED4BECCB268726CC2667260600000000E0FFFFFF7F900000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF0725E82E8D0CADCC2BE6AF072BEA0C2D8DAE6BEA4CAE6DEE4E8BEC6BEC4C26E647266626C0000000000FEFFFFFF07090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA5062FE725880EADCC2DECAB062FE70B2A8CAD6DEE4BAA6CEE4D8EEE8BECCB662C27A70686860600000000E0FFFFFF7F980000005E01
+#36: header Seq=8880 AckedSeq=14066 HistoryWordCount=1
+#36: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2221
+#36:   ChIndex=1 (None) content not decoded (2221 bits)
+#36: bunch ChIndex=11984 ChName=108 bOpen=True bClose=True bReliable=False bPartial=True/False/True bHasPackageMapExports=False bits=4808
+#36:   ChIndex=11984 (108) content not decoded (4808 bits)
+#36: ChIndex=11984 (108) CLOSED, reason=5
+#36: bunch ChIndex=94 ChName=None bOpen=False bClose=True bReliable=False bPartial=True/True/True bHasPackageMapExports=False bits=1212
+#36:   ChIndex=94 (None) content not decoded (1212 bits)
+#36: ChIndex=94 (None) CLOSED, reason=6
+---- #37 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#37: post-Handler.Incoming clean bytes (952): 206FC58A07000080210024E05664C6E9A8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6EF062645E82E8D0CADCC2BE6EF06264BEA0C2D8DAE6BE90DEEAE6CAE6BEC2BEC4BEC862C262C46C68680000000000FEFFFFFF47080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE25062FE625482E8DEC25880EADCC2DEC2B482A89E82B062FE66B0A2D6C6CED4B0C403E7DBDE0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEAC9296BE66F066BE90DEEAE6CABEC4BE6CC26E6C62C672600000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DECCB2A69E96B066FE60BE9AD6EAEEC6BECCB2CAC0C866C666C0600000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEAC9296BE66F066BE90DEEAE6CABEC2BE6466727272C6CC640000000000FEFFFFFFE7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DECCB2A69E96B066FE66B8A2E4C8CAD6CEE2BEC0B46464626478CE60600000000E0FFFFFF7F8C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEAC9296BE6AF06ABEA6E2EAC2E4CABEC2BE6C6EC66870C4C6680000000000FEFFFFFF27090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DECCB2A69E9AB06AFE68BE9CDED0CE9AD6EAEEC2BEC8B46A68646662C060600000000E0FFFFFF7F880000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF0725E82E8D0CADCC2BEAC9296BE6AF06ABEA6D0D2E0BEC2BE6EC4646CC4666E6C0000000000FEFFFFFFE7090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC8B296CADEC6B066FE64BAA6CAE2C4C6E0CED6BEC2B886AE96BEC8B6686CC86868C260700000000E0FFFFFF7F920000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BE98C2D6CABE66F066BEA4CAE6CAC2E4C6D0BEC8BE66C6C2CA686AC2C80000000000FEFFFFFF27090000E085AAAC0DEEE528ACADEC25880EADCC01
+#37: header Seq=8881 AckedSeq=5874 HistoryWordCount=1
+#37: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/False bHasPackageMapExports=False bits=4651
+#37:   ChIndex=1 (None) content not decoded (4651 bits)
+#37: EXCEPTION during decode: System.Exception: String is too large
+   at AFortOnlineBeacon.Core.FString.Deserialize(FArchive archive) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\FString.cs:line 61
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 20
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #38 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#38: post-Handler.Incoming clean bytes (952): 206FC78A07000080210024205764C6E92DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC8B296CADEC6B066FE64BAA6CAE2C4C6E0CEDABEC0BA766AC264C26A70600000000E0FFFFFF7F8C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA6AA84BE66F066BE90DEEAE6CABEDE64BE6260CA646ACAC4CC0000000000FEFFFFFFC7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6BAA4AE86B066FE60BE9AD6EAEEC2B6CE6CB4CC6262627C7AC0600000000E0FFFFFF7F8C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE90DEEAE6CABECE68BE6070C668C66A66620000000000FEFFFFFFC7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEECAB6DE64B860C66460C468C0C00000000E0FFFFFF7F9A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE86C2DAE0D2DCCEA6E8DEE4CABEC264BEC6C872706C64C4660000000000FEFFFFFF67090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6BAA4AE86B066FE6EB286C6E8A2E8C2EEDCDED2B4CE6CB6CE6866626A6460600000000E0FFFFFF7F8C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE90DEEAE6CABEC866BEC46A6872CA66CA6C0000000000FEFFFFFF270A0000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6BAA4AE86B066FE66B28CD2E6DEC6BAA4E6C8A2E8C2EEDCDED4B4CE66B8C8C8C860647860600000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABEA0C2E4D6BEC664BE66C8626E66C8CA680000000000FEFFFFFF27080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA5062FE725880EADCC2DEC8B48E8AB062FE78B2A6CECEDABEC06872C862CA70C00000000E0FFFFFF7FA40000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E01
+#38: header Seq=8881 AckedSeq=14066 HistoryWordCount=1
+#38: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2222
+#38:   ChIndex=1 (None) content not decoded (2222 bits)
+#38: bunch ChIndex=115 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/False/True bHasPackageMapExports=False bits=4016
+#38:   ChIndex=115 (None) content not decoded (4016 bits)
+#38: EXCEPTION during decode: System.Collections.Generic.KeyNotFoundException: The given key '47' was not present in the dictionary.
+   at System.Collections.Generic.Dictionary`2.get_Item(TKey key)
+   at AFortOnlineBeacon.Core.Names.FNamePool.Find(EName name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\Names\FNamePool.cs:line 34
+   at AFortOnlineBeacon.Core.Names.FName..ctor(EName hardcodedName, Int32 number) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\Names\FName.cs:line 11
+   at AFortOnlineBeacon.Core.Names.FName..ctor(EName hardcodedName) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\Names\FName.cs:line 8
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 17
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+---- #39 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#39: post-Handler.Incoming clean bytes (952): 206FC98A07000080210024605764C6E984EAD2D8C8D2DCCEE65E6AF0725E82E8D0CADCC2BE92868ABE6AF072BE86C2E6E8D8CA84EAD2D8C8D2DCCEE6BEC4BE6062BEC6C2626670CA6ACC0000000000FEFFFFFF470A0000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA5062FE725880EADCC2DEC2B69A8E8AB062FE76B286C8E8EAD4CA82E8D8D2CCDED6CEE2BEC0B46E66B8C864CC6CC86AC0600000000E0FFFFFF7F980000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E72F062645E82E8D0CADCC2BE92868ABE72F06264BE86C2E6E8D8CA8EC2E8CABEC2BE626470C66C6E64C20000000000FEFFFFFFE7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA5062FE725880EADCC2DEC2B69A8E8AB062FE70B29CCED2C4C6EEE2BEC8B2CAC2687CC662C0700000000E0FFFFFF7F960000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6EF062645E82E8D0CADCC2BE92868ABE6EF06264BE8AF0E0D8DEE4CAE4E6BEC2BE6E6C686A6E6ACAC60000000000FEFFFFFF07090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC2B69A8E86B066FE6AB080F8EED4DAE4CEE2BEC6B8C666CEC2646260700000000E0FFFFFF7F900000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E62F0625E82E8D0CADCC2BE92868ABE62F062BE8AF0E0D8DEE4CAE4BEC2BEC46E72C46A68C2680000000000FEFFFFFFE7090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEE5062F46E625880EADCC2DEC2B69A8E8EB062F46E6EB2ACD8DAE4CCE2A8D8D2DECACEC6BEC0B07A7A686862C670600000000E0FFFFFF7F9E0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6EF062645E82E8D0CADCC2BE92868ABE6EF06264BEAED2DCE8CAE4ACD2D8D8C2CECABEC8BE626A6064C66864CC0000000000FEFFFFFFE7090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEE5062F46E625880EADCC2DEC2B69A8E8EB062F46E6EB2ACD8DAE4CCE2A8D8D2DECACEC4BEC4BC6CC2CA6866C260600000000E0FFFFFF7F9E0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6EF062645E82E8D0CADCC2BE92868ABE6EF06264BEAED2DCE8CAE4ACD2D8D8C2CE01
+#39: header Seq=8882 AckedSeq=5874 HistoryWordCount=1
+#39: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/False/True bHasPackageMapExports=False bits=4651
+#39:   ChIndex=1 (None) content not decoded (4651 bits)
+#39: bunch ChIndex=81 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=0
+#39: bunch ChIndex=0 ChName=None bOpen=False bClose=False bReliable=False bPartial=True/True/True bHasPackageMapExports=True bits=8191
+#39:   [ChIndex=0] GUID-export bunch, notRepLayoutExport=True, count=10387455
+#39:     export count 10387455 looks implausible, aborting export decode
+---- #40 S->C len=953 ----
+[DIAG] Incoming_Internal: dataView.NumBits()=7624 trimmedCountBits=7616 connectionless=False
+StatelessConnectHandlerComponent.Incoming
+[DIAG] After StatelessConnectHandlerComponent.Incoming: Pos=5 Num=7616 IsError=False
+[DIAG] Realigning before AESHandlerComponent: PosBefore=5 NumBefore=7616
+[DIAG] Realigned: PosAfter=0 NumAfter=7611
+[DIAG] AES.Incoming enter Pos=0 Num=7611
+[DIAG] AES.Incoming exit (not encrypted) Pos=1 Num=7611
+[DIAG] After AESHandlerComponent.Incoming: Pos=1 Num=7611 IsError=False
+[DIAG] Realigning before OodleHandlerComponent: PosBefore=1 NumBefore=7611
+[DIAG] Realigned: PosAfter=0 NumAfter=7610
+[DIAG] Oodle.Incoming enter Pos=0 Num=7610
+[DIAG] Oodle: compressed bit = False
+[DIAG] Oodle.Incoming exit (not compressed) Pos=1 Num=7610
+[DIAG] After OodleHandlerComponent.Incoming: Pos=1 Num=7610 IsError=False
+[DIAG] Final _IncomingPacket: BitsLeft=7609
+#40: post-Handler.Incoming clean bytes (952): 206FCB8A07000080210024A05764C6E9CABEC2BECC6260C6CC6C68680000000000FEFFFFFFE7090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEE5062F46E625880EADCC2DEC2B69A8E8EB062F46E6EB2ACD8DAE4CCE2A8D8D2DECACECABECAB06472C86A66C060600000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE90DEEAE6CABEF2BEC4707066C26ACC620000000000FEFFFFFFA7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEECEBEC8BECC6662627ACAC0600000000E0FFFFFF7F940000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE90DEEAE6CABEE2BEA0E4CAE0BE70606A66CAC8CA680000000000FEFFFFFFC7080000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAE4CE62BEC0B878CE6E6A62C860600000000E0FFFFFF7F8A0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E6AF06A5E82E8D0CADCC2BEA6AA84BE6AF06ABE90DEEAE6CABEDABEC66E62686EC6CCC20000000000FEFFFFFF47090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE65066FE625880EADCC2DEC6BAA4AE86B066FE6EB286C6E8A2E8C2EEDCDED2BEC4B860CA6AC4686AC0C00000000E0FFFFFF7F8C0000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E66F0665E82E8D0CADCC2BEA6AA84BE66F066BE90DEEAE6CABECE64BE646C6A6ECCCA6CC80000000000FEFFFFFF87090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEE25062FE625880EADCC2DEC6BAA4AE82B062FE62BC8CDEDADCE6DAC4C6E8A2ECC8DECABEC06C626ACCC260600000000E0FFFFFF7F960000005EA8CADAE05E8EC2DACA5E82E8D0CADCC25E9AC2E0E65E84EAD2D8C8D2DCCEE65E62F0625E82E8D0CADCC2BEA6AA84BE62F062BEA6E8DEE4C2CECA8EC2E4C2CECABE6CCAC47068C268C20000000000FEFFFFFF47090000E085AAAC0DEEE528ACADEC25880EADCC2DECA5290C6EEE45A82E8D8D2CCDED6CEEA506AFE625880EADCC2DEC6BAA4AE8AB06AFE60BE9AD6EAEEC8BEE01
+#40: header Seq=8882 AckedSeq=14066 HistoryWordCount=1
+#40: bunch ChIndex=1 ChName=None bOpen=False bClose=False bReliable=False bPartial=False/False/False bHasPackageMapExports=False bits=2223
+#40:   ChIndex=1 (None) content not decoded (2223 bits)
+#40: EXCEPTION during decode: System.Exception: String is too large
+   at AFortOnlineBeacon.Core.FString.Deserialize(FArchive archive) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Core\FString.cs:line 61
+   at AFortOnlineBeacon.Net.UPackageMap.StaticSerializeName(FArchive ar, Nullable`1& name) in C:\Users\user\Documents\Prive\AFortOnlineBeacon\Net\UPackageMap.cs:line 20
+   at PacketReplayDecoder.RoleDecoder.ParseOneBunch(Int32 packetIndex, FBitReader reader) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 310
+   at PacketReplayDecoder.RoleDecoder.ParsePacketBody(Int32 packetIndex, FBitReader reader, Boolean senderIsServer) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 272
+   at PacketReplayDecoder.RoleDecoder.FeedEstablished(Int32 packetIndex, Byte[] raw, Int32 trueLength, Boolean senderIsServer, Boolean preHandshakeCheck) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 227
+   at PacketReplayDecoder.RoleDecoder.FeedClientRole(Int32 packetIndex, Byte[] raw, Int32 trueLength) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 169
+   at PacketReplayDecoder.RoleDecoder.Feed(Int32 packetIndex, Byte[] rawIn) in C:\Users\user\Documents\Prive\PacketReplayDecoder\Decoder.cs:line 145
+Done. Processed 40 packets.

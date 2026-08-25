@@ -369,6 +369,8 @@ public abstract class UChannel {
             ((UPackageMapClient) Connection.PackageMap!).AppendExportBunches(outgoingBunches);
         }
 
+        Console.WriteLine($"SendBunch: ChIndex={ChIndex} outgoingBunches(export)Count={outgoingBunches.Count}" + (outgoingBunches.Count > 0 ? " hex=" + string.Join(",", outgoingBunches.Select(b => Convert.ToHexString(b.GetData(), 0, (int) b.GetNumBytes()))) : ""));
+
         if (outgoingBunches.Count != 0) {
             // Don't merge if we are exporting guid's
             // We can't be for sure if the last bunch has exported guids as well, so this just simplifies things

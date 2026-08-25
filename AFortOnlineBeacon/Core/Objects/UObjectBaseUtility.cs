@@ -61,7 +61,7 @@ public class UObjectBaseUtility : UObjectBase {
      * True for objects the client can resolve by path (CDOs, classes, packages); false for anything
      * spawned at runtime (actors, etc), which get dynamic GUIDs instead.
      */
-    public virtual bool IsNameStableForNetworking() => HasAnyFlags(EObjectFlags.RF_ClassDefaultObject | EObjectFlags.RF_ArchetypeObject) || this is UPackage || this is UClass;
+    public virtual bool IsNameStableForNetworking() => HasAnyFlags(EObjectFlags.RF_ClassDefaultObject | EObjectFlags.RF_ArchetypeObject | EObjectFlags.RF_DefaultSubObject) || this is UPackage || this is UClass;
 
     /// <summary>
     ///     True for objects the server can hand a fresh (dynamic) NetGUID to and have the client spawn
