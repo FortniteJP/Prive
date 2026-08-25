@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Replication;
+﻿namespace AFortOnlineBeacon.Net.Replication;
 
 /// <summary>
 ///     How a replicated property occupies handles in an FRepLayout - mirrors the cases
@@ -39,6 +39,14 @@ public enum ERepPropertyKind {
     Name,
 
     /// <summary>
+    ///     An FString leaf (e.g. APlayerState::PlayerNamePrivate) - UStrProperty::NetSerializeItem is
+    ///     just `Ar &lt;&lt; String`, i.e. FString's ordinary length-prefixed archive format, and it
+    ///     occupies exactly 1 handle like any other leaf. The same FString.Serialize this uses is
+    ///     already proven on the wire by UPackageMapClient's NetGUID path exports.
+    /// </summary>
+    String,
+
+    /// <summary>
     ///     TEMP diagnostic (2026-08-25): a TArray-typed leaf, sent as an always-empty array - the
     ///     minimal, unambiguous DynamicArray Cmd encoding per RepLayout.cpp's SendProperties_r
     ///     (line ~1998-2033): [handle(packed)][ArrayNum=0 (raw uint16, NOT packed)]
@@ -75,6 +83,9 @@ public sealed class FRepPropertyDef {
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Name"/>.</summary>
     public Func<object, FName>? GetNameValue { get; init; }
+
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.String"/>.</summary>
+    public Func<object, string>? GetStringValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ByteEnum"/> - the enum's highest raw value (e.g. ENetRole.ROLE_MAX=4), matching UByteProperty::NetSerializeItem's CeilLogTwo(Enum-&gt;GetMaxEnumValue()).</summary>
     public int EnumMaxValue { get; init; }

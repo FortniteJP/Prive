@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Channels.Actor;
+﻿namespace AFortOnlineBeacon.Net.Channels.Actor;
 
 public class UActorChannel : UChannel {
     public AActor? Actor { get; private set; }
@@ -33,14 +33,16 @@ public class UActorChannel : UChannel {
     /// </summary>
     private static HashSet<string> GetInitialReplicatedProperties(AActor actor) => actor switch {
         AGameState => new HashSet<string> { "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState" },
-        APlayerState => new HashSet<string> { "RemoteRole", "Role", "bHasStartedPlaying" },
-        // WorldInventory (handle 51) RE-ENABLED (2026-08-25) - x64dbg live analysis of the real
-        // client found the "Invalid property terminator handle" string is emitted from TWO distinct
-        // UE_LOG call sites (FRepLayout::ReceiveProperties AND FRepLayout::ReceiveFastArrayItem),
-        // both routed through the shared ReceiveProperties_r - meaning past client logs could never
-        // tell which path actually fired. Hardware read breakpoints are now set on both string
-        // literals in the live client; sending WorldInventory again should trip one of them and its
-        // call stack will reveal the true receive path once and for all.
+        APlayerState => new HashSet<string> { "RemoteRole", "Role", "PlayerNamePrivate", "bHasStartedPlaying", "HeroType" },
+        // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
+        // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
+        // FRepLayout at all - see NativeRepLayouts.InventoryProps.
+        AFortInventory => new HashSet<string> { "RemoteRole", "Role", "Owner", "InventoryType" },
+        // WorldInventory maps to handle 34 as a plain ObjectRef - CONFIRMED live by the truncated
+        // name probe, which reported "Property=WorldInventory, Parent=25, Cmd=53, ReadHandle=34"
+        // with ReadLen=8, i.e. a packed NetGUID byte, matching PlayerState's own ObjectRef read at
+        // handle 16 (and unlike the 1-bit bools that really occupy 49/50/51, where every earlier
+        // attempt had wrongly placed this). See NativeRepLayouts.PlayerControllerProps.
         APlayerController => new HashSet<string> { "RemoteRole", "Role", "bHasServerFinishedLoading", "PlayerState", "WorldInventory" },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
@@ -67,10 +69,12 @@ public class UActorChannel : UChannel {
     ///     header, followed by a property push via NativeRepLayouts/FRepLayout (this project's
     ///     minimal stand-in for FObjectReplicator::ReplicateProperties/FRepLayout::SendProperties).
     ///
-    ///     TEMPORARY (2026-08-24, reintroduced): if REPLAYOUT_PROBE_HANDLE is set and Actor is an
-    ///     APlayerController, sends HandleProbe's confirmed-prefix+1-bit-probe layout targeting that
-    ///     handle instead, to find AFortPlayerController::WorldInventory's real handle - see
-    ///     HandleProbe.cs.
+    ///     TEMPORARY diagnostic, replacing the normal layout entirely: if REPLAYOUT_PROBE_HANDLE=N
+    ///     is set, sends HandleProbe's truncated name probe for handle N on the actor named by
+    ///     REPLAYOUT_PROBE_ACTOR (substring match on the runtime type name, default APlayerController).
+    ///     It makes the client's read of that property overflow, so ReceiveProperties_r logs
+    ///     "BunchIsError - Property=<real name>, Parent=<idx>, Cmd=<idx>" - the only condition under
+    ///     which the client will name a handle at all. See HandleProbe.cs for how to read the result.
     /// </summary>
     public unsafe void ReplicateActor() {
         if (Actor == null || Connection == null) return;
@@ -83,12 +87,24 @@ public class UActorChannel : UChannel {
         Actor.OnSerializeNewActor(bunch);
 
         var payload = new FNetBitWriter(Connection.PackageMap, 64);
+        // REPLAYOUT_PROBE_HANDLE - the truncated name probe (see HandleProbe.WriteTruncatedNameProbe).
+        // Any handle is valid, including the already-confirmed 1-22, which are useful as calibration
+        // targets; there is deliberately no guard that can throw here, since this runs deep inside
+        // packet dispatch where an exception kills the server outright.
         var probeHandleEnv = Environment.GetEnvironmentVariable("REPLAYOUT_PROBE_HANDLE");
-        if (Actor is APlayerController && int.TryParse(probeHandleEnv, out var probeHandle)) {
-            Console.WriteLine($"ReplicateActor: REPLAYOUT_PROBE_HANDLE={probeHandle} - sending PlayerController probe instead of the normal layout");
-            HandleProbe.BuildPlayerControllerProbeLayout(probeHandle).WriteChangedProperties(payload, Actor, new HashSet<string> { "RemoteRole", "Probe" });
+        // REPLAYOUT_PROBE_ACTOR picks which actor's channel carries the probe, matched against the
+        // runtime type name (case-insensitive substring, e.g. "AFortInventory"). Defaults to
+        // APlayerController, which is what every probe so far has targeted. Only one actor should
+        // ever match: the probe deliberately corrupts that channel, and the client closes the
+        // connection as soon as it fails.
+        var probeActor = Environment.GetEnvironmentVariable("REPLAYOUT_PROBE_ACTOR") ?? nameof(APlayerController);
+        if (Actor.GetType().Name.Contains(probeActor, StringComparison.OrdinalIgnoreCase)
+            && uint.TryParse(probeHandleEnv, out var probeHandle) && probeHandle > 0) {
+            Console.WriteLine($"ReplicateActor: REPLAYOUT_PROBE_HANDLE={probeHandle} on {Actor.GetType().Name} - sending TRUNCATED name probe (RemoteRole anchor + bare handle, no value bits, no terminator) instead of the normal layout");
+            HandleProbe.WriteTruncatedNameProbe(payload, Actor, probeHandle);
         } else {
             NativeRepLayouts.Get(Actor).WriteChangedProperties(payload, Actor, GetInitialReplicatedProperties(Actor));
+            WriteCustomDeltaProperties(payload);
         }
 
         bunch.WriteBit(true); // bHasRepLayout
@@ -205,13 +221,113 @@ public class UActorChannel : UChannel {
     ///     than routed through a generic RPC-writer abstraction (see FRpcReader for the read-side
     ///     equivalent, which this project only needed for client->server calls until now).
     /// </summary>
-    public unsafe void SendClientRestart(APawn pawn) {
+    /// <summary>
+    ///     Stand-in for FObjectReplicator::ReplicateCustomDeltaProperties (DataReplication.cpp:1421),
+    ///     called straight after the RepLayout property push so both land in the same content-block
+    ///     payload - the same single-Writer arrangement real UE uses in ReplicateProperties.
+    ///
+    ///     Only AFortInventory::Inventory is sent, and only ever as an empty delta. That property is
+    ///     an FFortItemList, which derives from FFastArraySerializer and is therefore a Custom Delta
+    ///     property: it is excluded from FRepLayout's handle stream entirely and has to travel as
+    ///     its own RepIndex-addressed field. See FFastArraySerializerWriter for the wire format and
+    ///     why an empty delta is still a real message rather than a no-op.
+    ///
+    ///     Why send an empty inventory at all: the client's ClientRestart_Implementation currently
+    ///     stops with "Quickbars are invalid, waiting to finish restarting". Quickbars are not
+    ///     replicated on this build - AFortQuickBars derives from AFortClientOnlyActor and
+    ///     AFortPlayerController::ClientQuickBars carries no Net flag, so the client builds them
+    ///     itself - and the inventory is the most plausible thing it is waiting on, since quickbars
+    ///     are a view onto it and AFortInventory has both an OnRep on Inventory and its own
+    ///     HandleInventoryLocalUpdate. Unconfirmed; if this does not move the client on, the field
+    ///     framing here is still the prerequisite for any real item replication later.
+    /// </summary>
+    private unsafe void WriteCustomDeltaProperties(FNetBitWriter payload) {
+        if (Actor is not AFortInventory || Connection == null) return;
+
+        var classCache = NativeClassNetCache.Get(Actor);
+        var field = classCache.GetFromName("Inventory");
+        if (field == null) {
+            Console.WriteLine("WriteCustomDeltaProperties: 'Inventory' not found in AFortInventory's ClassNetCache, not sending");
+            return;
+        }
+
+        var inventory = (AFortInventory) Actor;
+        var fieldPayload = new FNetBitWriter(Connection.PackageMap, 256);
+        FFastArraySerializerWriter.WriteItemListDelta(fieldPayload, inventory.Inventory);
+
+        // Identical framing to SendClientRestart's RPC field below, which is the point: real UE
+        // routes custom delta properties and RPCs through the very same
+        // UActorChannel::WriteFieldHeaderAndPayload.
+        var fieldIndex = (uint) field.FieldNetIndex;
+        payload.SerializeInt(&fieldIndex, (uint) (classCache.GetMaxIndex() + 1));
+        var fieldBits = (uint) fieldPayload.GetNumBits();
+        payload.SerializeIntPacked(&fieldBits);
+        var fieldData = fieldPayload.GetData();
+        fixed (byte* p = fieldData) payload.SerializeBits(p, fieldPayload.GetNumBits());
+
+        Console.WriteLine($"WriteCustomDeltaProperties: Inventory fieldIndex={fieldIndex} maxIndex={classCache.GetMaxIndex()} items={inventory.Inventory.Count} fieldBits={fieldBits}");
+    }
+
+    public void SendClientRestart(APawn pawn) => SendPawnRpc("ClientRestart", pawn);
+
+    /// <summary>
+    ///     APlayerController::ClientRetryClientRestart - the server's half of the possession retry
+    ///     handshake, and the answer to a question the client had been asking us over and over with
+    ///     no reply.
+    ///
+    ///     Real UE (PlayerController.cpp:2684-2701, 672-706): when the client's
+    ///     ClientRestart_Implementation cannot finish - on this build it bails with
+    ///     "ClientRestart_Implementation failed because Quickbars are invalid, waiting to finish
+    ///     restarting" - it never acknowledges the pawn, and instead calls
+    ///     ServerCheckClientPossessionReliable. The server answers:
+    ///
+    ///         void APlayerController::ServerCheckClientPossession_Implementation() {
+    ///             if (AcknowledgedPawn != GetPawn()) {
+    ///                 LastRetryPlayerTime = ForceRetryClientRestartTime;   // bypass the throttle
+    ///                 SafeRetryClientRestart();                            // ClientRetryClientRestart(GetPawn())
+    ///             }
+    ///         }
+    ///
+    ///     and ClientRetryClientRestart_Implementation does strictly MORE than re-issue the call -
+    ///     it relinks pawn and controller client-side first:
+    ///
+    ///         SetPawn(NewPawn); NewPawn->Controller = this; NewPawn->OnRep_Controller();
+    ///         ClientRestart(GetPawn());
+    ///
+    ///     So this is not merely a retry: OnRep_Controller is client-side state we had no other way
+    ///     to trigger. Until now this project sent ClientRestart exactly once and ignored every
+    ///     ServerCheckClientPossession(Reliable) that came back, so the loop the engine designed to
+    ///     converge here could never run.
+    ///
+    ///     Same single-APawn-parameter shape as ClientRestart, so it shares SendPawnRpc.
+    /// </summary>
+    public void SendClientRetryClientRestart(APawn pawn) => SendPawnRpc("ClientRetryClientRestart", pawn);
+
+    /// <summary>
+    ///     Answers ServerCheckClientPossession / ...Reliable, mirroring
+    ///     APlayerController::SafeRetryClientRestart. No throttle is applied on purpose: real UE
+    ///     stamps LastRetryPlayerTime with ForceRetryClientRestartTime immediately before calling,
+    ///     precisely so this path is NOT throttled - its own comment says "Client already throttles
+    ///     their call to this function, so respond immediately". The RetryClientRestartThrottleTime
+    ///     check only guards the other, timer-driven callers of SafeRetryClientRestart.
+    /// </summary>
+    public void SafeRetryClientRestart() {
+        if (Actor is not APlayerController pc) return;
+        if (pc.Pawn == null) {
+            Console.WriteLine("SafeRetryClientRestart: PlayerController has no Pawn, not retrying");
+            return;
+        }
+
+        SendClientRetryClientRestart(pc.Pawn);
+    }
+
+    private unsafe void SendPawnRpc(string fieldName, APawn pawn) {
         if (Actor == null || Connection == null) return;
 
         var classCache = NativeClassNetCache.Get(Actor);
-        var field = classCache.GetFromName("ClientRestart");
+        var field = classCache.GetFromName(fieldName);
         if (field == null) {
-            Console.WriteLine($"SendClientRestart: 'ClientRestart' not found in {Actor.GetFName()}'s ClassNetCache, not sending");
+            Console.WriteLine($"SendPawnRpc: '{fieldName}' not found in {Actor.GetFName()}'s ClassNetCache, not sending");
             return;
         }
 
@@ -240,7 +356,7 @@ public class UActorChannel : UChannel {
         var numPayloadBits = (uint) payload.GetNumBits();
         bunch.SerializeIntPacked(&numPayloadBits);
         var payloadData = payload.GetData();
-        Console.WriteLine($"SendClientRestart: fieldIndex={fieldIndex} numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+        Console.WriteLine($"SendPawnRpc: {fieldName} fieldIndex={fieldIndex} numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
         fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
 
         SendBunch(bunch, false);
@@ -340,6 +456,15 @@ public class UActorChannel : UChannel {
                 try {
                     var values = FRpcReader.ReadParams(bunch, rpcDef.Params);
                     rpcDef.Invoke(Actor!, values);
+
+                    // Real UE routes both of these into
+                    // APlayerController::ServerCheckClientPossession_Implementation, whose whole job
+                    // is to re-send the possession RPC - see SafeRetryClientRestart. Handled here
+                    // rather than in NativeRpcHandlers because the reply needs the channel, and the
+                    // handler table is deliberately channel-agnostic.
+                    if (fieldName is "ServerCheckClientPossession" or "ServerCheckClientPossessionReliable") {
+                        SafeRetryClientRestart();
+                    }
                 } catch (Exception ex) {
                     Console.WriteLine($"UActorChannel.ReceivedBunch: RPC {fieldName} failed to decode on ChIndex={ChIndex} Actor={Actor?.GetFName()}: {ex}");
                 }

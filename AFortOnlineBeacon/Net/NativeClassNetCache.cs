@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Net.Actors;
 
 namespace AFortOnlineBeacon.Net;
 
@@ -302,7 +302,18 @@ internal static class NativeClassNetCache {
         "PlayRespawnFXOnSpawn"
     );
 
+    // /Script/FortniteGame.FortInventory derives straight from AActor. Its own net fields are the
+    // three CPF_Net properties Dumper-7 lists on it - Inventory (FFortItemList), InventoryType
+    // (ByteProperty) and ReplayPawn (ObjectProperty). Its ONLY function, HandleInventoryLocalUpdate,
+    // is Final|Native|Public with no Net flag (checked in Dumper-7's Dumpspace/FunctionsInfo.json),
+    // so it is not a net field and does not take an index. UEDumper's NetFields.txt has no
+    // FortInventory section at all, which is why this one is sourced from Dumper-7 instead.
+    private static readonly string[] FortInventoryOwnFields = OwnFieldsSorted(
+        "Inventory", "InventoryType", "ReplayPawn"
+    );
+
     private static readonly FClassNetCache ActorCache = new(null, ActorOwnFields);
+    private static readonly FClassNetCache FortInventoryCache = new(ActorCache, FortInventoryOwnFields);
     private static readonly FClassNetCache ControllerCache = new(ActorCache, ControllerOwnFields);
     private static readonly FClassNetCache PlayerControllerBaseCache = new(ControllerCache, PlayerControllerOwnFields);
     private static readonly FClassNetCache FortPlayerControllerCache = new(PlayerControllerBaseCache, FortPlayerControllerOwnFields);
@@ -323,6 +334,7 @@ internal static class NativeClassNetCache {
     private static readonly FClassNetCache PlayerStateCache = new(FortPlayerStateZoneCache, FortPlayerStateAthenaOwnFields);
 
     public static FClassNetCache Get(AActor actor) => actor switch {
+        AFortInventory => FortInventoryCache,
         APlayerController => PlayerControllerCache,
         AController => ControllerCache,
         APawn => PawnCache,

@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core;
+﻿using AFortOnlineBeacon.Core;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -85,6 +85,18 @@ public class AActor : UObject {
     public bool IsActorInitialized() => bActorInitialized;
 
     public bool IsPendingKillPending() => bActorIsBeingDestroyed || IsPendingKill();
+
+    /// <summary>
+    ///     AActor::Owner - wire handle 13, live-probe-confirmed. Replicated as a plain ObjectRef, so
+    ///     the client can rebuild the same ownership link the server has. It matters beyond
+    ///     bookkeeping: real UE derives an actor's net relevancy and its owning connection from this
+    ///     chain, and game code routinely reaches for GetOwner() to find "my" actor - e.g. the
+    ///     inventory actor behind AFortPlayerController::WorldInventory is owned by that
+    ///     PlayerController on a real server.
+    /// </summary>
+    public AActor? Owner { get; private set; }
+
+    public void SetOwner(AActor? newOwner) => Owner = newOwner;
 
     /// <summary>
     ///     Called right after PackageMap->SerializeNewActor writes this actor's spawn header, letting a

@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Serialization;
+﻿using AFortOnlineBeacon.Serialization;
 
 namespace AFortOnlineBeacon.Net.Replication;
 
@@ -79,6 +79,16 @@ public sealed class FRepLayout {
                 payload.SerializeBits(&arrayNum, 16);
                 uint arrayTerminator = 0;
                 payload.SerializeIntPacked(&arrayTerminator);
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.String) {
+                if (cmd.Def.GetStringValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no string value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                payload.WriteString(cmd.Def.GetStringValue(instance));
                 continue;
             }
 

@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 public class AGameModeBase : AInfo {
     public AGameModeBase() => OptionsString = string.Empty;
@@ -101,6 +101,22 @@ public class AGameModeBase : AInfo {
         if (worldInventory != null) {
             worldInventory.SetRole(ENetRole.ROLE_Authority);
             worldInventory.SetReplicates(true);
+            // A real server owns this actor with the PlayerController that holds it - see
+            // AActor.Owner. Erbium does the same (WorldInventory->SetOwner(PlayerController)).
+            worldInventory.SetOwner(newPlayerController);
+
+            // Starting inventory. A real PR3.0 capture (packet #253) shows a working server sends
+            // the pickaxe plus BuildingItemData_Wall/Floor/Stair_W/RoofS and EditTool here; this
+            // starts with just the pickaxe, the minimum that should make the client build its
+            // quickbars at all. ReplicationIDs must be unique and non-negative - real UE hands them
+            // out from FFastArraySerializer::MarkItemDirty.
+            worldInventory.Inventory.Add(new FFortItemEntry {
+                ReplicationId = 1,
+                ItemDefinition = UAssetRegistry.GetOrCreate("/Game/Athena/Items/Weapons/WID_Harvest_Pickaxe_Athena_C_T01.WID_Harvest_Pickaxe_Athena_C_T01"),
+                Count = 1,
+                ParentInventory = worldInventory
+            });
+
             newPlayerController.WorldInventory = worldInventory;
         }
 
@@ -113,6 +129,13 @@ public class AGameModeBase : AInfo {
             playerState.SetRole(ENetRole.ROLE_Authority);
             playerState.SetReplicates(true);
             playerState.bHasStartedPlaying = true;
+            // AFortPlayerState::HeroType (handle 40, live-probe-confirmed). Athena's quickbars are
+            // built from the hero loadout, which makes this the leading candidate for the client's
+            // "Quickbars are invalid" stall. Path taken from Erbium's FindObject call; the object
+            // itself is confirmed present in a live 10.40 object-table dump as
+            // "FortHeroType HID_001_Athena_Commando_F.HID_001_Athena_Commando_F". A static asset, so
+            // it needs a path-exported NetGUID rather than a spawned actor's - see UAssetRegistry.
+            playerState.HeroType = UAssetRegistry.GetOrCreate("/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
             newPlayerController.PlayerState = playerState;
         }
 

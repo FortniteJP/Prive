@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 
 namespace AFortOnlineBeacon.Core.Objects;
 
@@ -61,7 +61,10 @@ public class UObjectBaseUtility : UObjectBase {
      * True for objects the client can resolve by path (CDOs, classes, packages); false for anything
      * spawned at runtime (actors, etc), which get dynamic GUIDs instead.
      */
-    public virtual bool IsNameStableForNetworking() => HasAnyFlags(EObjectFlags.RF_ClassDefaultObject | EObjectFlags.RF_ArchetypeObject | EObjectFlags.RF_DefaultSubObject) || this is UPackage || this is UClass;
+    // RF_WasLoaded covers plain on-disk assets (see UAssetRegistry) - real UE's rule is exactly
+    // HasAnyFlags(RF_WasLoaded | RF_DefaultSubObject) || IsNative() || IsDefaultSubobject()
+    // (Obj.cpp:4515); the CDO/archetype/UClass/UPackage cases below stand in for IsNative().
+    public virtual bool IsNameStableForNetworking() => HasAnyFlags(EObjectFlags.RF_WasLoaded | EObjectFlags.RF_ClassDefaultObject | EObjectFlags.RF_ArchetypeObject | EObjectFlags.RF_DefaultSubObject) || this is UPackage || this is UClass;
 
     /// <summary>
     ///     True for objects the server can hand a fresh (dynamic) NetGUID to and have the client spawn

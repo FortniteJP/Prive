@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     Minimal placeholder for AFortPlayerController::WorldInventory's real target class. A live
@@ -17,4 +17,24 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     ERepPropertyKind.ObjectRef Cmd (see NativeRepLayouts.PlayerControllerProps), no export-path
 ///     machinery needed since a dynamically-spawned actor is never name-stable.
 /// </summary>
-public class AFortInventory : AActor;
+public class AFortInventory : AActor {
+    /// <summary>
+    ///     EFortInventoryType - handle 16, the first property after AActor's 15. Always World for
+    ///     the actor behind AFortPlayerController::WorldInventory (Outpost is what OutpostInventory,
+    ///     handle 35 on the PlayerController, would use - not spawned by this project).
+    /// </summary>
+    public EFortInventoryType InventoryType { get; set; } = EFortInventoryType.World;
+
+    /// <summary>
+    ///     AFortInventory::Inventory (FFortItemList) - handle 17, but it never travels through
+    ///     FRepLayout: FFortItemList derives from FFastArraySerializer, making it a Custom Delta
+    ///     property sent as its own RepIndex-addressed field (see
+    ///     UActorChannel.WriteCustomDeltaProperties / FFastArraySerializerWriter).
+    ///
+    ///     A real 10.40 server's opening inventory, recovered from a Project-Reboot-3.0 packet
+    ///     capture (packet #253), is the harvesting pickaxe plus the four building pieces and the
+    ///     edit tool - precisely what fills an Athena quickbar, which is why this is what the
+    ///     client's "Quickbars are invalid" stall is waiting on.
+    /// </summary>
+    public List<FFortItemEntry> Inventory { get; } = new();
+}
