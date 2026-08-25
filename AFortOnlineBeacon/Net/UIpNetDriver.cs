@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 
 namespace AFortOnlineBeacon.Net;
@@ -189,7 +189,7 @@ public class UIpNetDriver : UNetDriver {
         }
 
         if (countBits > 0) Socket.Send(data, FMath.DivideAndRoundUp(countBits, 8), address);
-        Console.WriteLine($"Sent {FMath.DivideAndRoundUp(countBits, 8)} {address.ToString()}, {BitConverter.ToString(data)}");
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"Sent {FMath.DivideAndRoundUp(countBits, 8)} {address.ToString()}, {BitConverter.ToString(data)}");
         PacketCapture.Raise(EPacketDirection.Outgoing, address, data);
     }
 

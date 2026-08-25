@@ -136,6 +136,25 @@ public class AGameModeBase : AInfo {
             // "FortHeroType HID_001_Athena_Commando_F.HID_001_Athena_Commando_F". A static asset, so
             // it needs a path-exported NetGUID rather than a spawned actor's - see UAssetRegistry.
             playerState.HeroType = UAssetRegistry.GetOrCreate("/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
+
+            // AFortPlayerState::CharacterData.Parts[6], indexed by EFortCustomPartType
+            // (Head=0, Body=1, Hat=2, Backpack=3, Charm=4, Face=5). Without these the client warns
+            // "Customization for PlayerPawn_Athena_C_… still hasn't completed after N secs" forever.
+            //
+            // These three exact object paths are not guesses: the client itself tried to load
+            // F_Med_Head1_ATH and CP_001_Athena_Body by full path (LogStreamableManager), and all
+            // three appear in the PR3.0 capture (packet #462).
+            playerState.CharacterParts[(int) EFortCustomPartType.Head] =
+                UAssetRegistry.GetOrCreate("/Game/Athena/Heroes/Meshes/Heads/F_Med_Head1_ATH.F_Med_Head1_ATH");
+            playerState.CharacterParts[(int) EFortCustomPartType.Body] =
+                UAssetRegistry.GetOrCreate("/Game/Athena/Heroes/Meshes/Bodies/CP_001_Athena_Body.CP_001_Athena_Body");
+            playerState.CharacterParts[(int) EFortCustomPartType.Backpack] =
+                UAssetRegistry.GetOrCreate("/Game/Characters/CharacterParts/Backpacks/NoBackpack.NoBackpack");
+            // One bit per slot actually replicated - Head | Body | Backpack.
+            playerState.WasPartReplicatedFlags =
+                (byte) ((1 << (int) EFortCustomPartType.Head)
+                      | (1 << (int) EFortCustomPartType.Body)
+                      | (1 << (int) EFortCustomPartType.Backpack));
             newPlayerController.PlayerState = playerState;
         }
 

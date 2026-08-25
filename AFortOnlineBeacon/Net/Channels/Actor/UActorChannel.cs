@@ -31,9 +31,47 @@ public class UActorChannel : UChannel {
     ///     per Project-Reboot-3.0's own disabled workaround comment, these are what gate a real
     ///     client's loading-screen dismissal.
     /// </summary>
-    private static HashSet<string> GetInitialReplicatedProperties(AActor actor) => actor switch {
+    /// <summary>
+    ///     REP_DISABLE - a comma-separated list of property names to drop from whatever changed-set
+    ///     GetInitialReplicatedProperties would otherwise return, so a suspected group can be
+    ///     switched off without editing code. Purely a bisecting aid: when adding several properties
+    ///     at once changes client behaviour for the worse, this narrows down which group did it in
+    ///     one run each instead of by reasoning.
+    ///
+    ///     An entry is either a bare property name, which disables it on every actor, or
+    ///     "ActorTypeName:PropertyName", which disables it only on that actor. The qualified form
+    ///     matters because the same name lives at different handles on different classes -
+    ///     "PlayerState" is handle 16 on APlayerController (load-bearing: it gates the loading
+    ///     screen) but handle 17 on APawn, so only "APawn:PlayerState" can turn the latter off.
+    ///     A colon is used rather than a dot because property names themselves contain dots
+    ///     (CharacterData.Parts[0]).
+    /// </summary>
+    private static readonly HashSet<string> DisabledProperties =
+        (Environment.GetEnvironmentVariable("REP_DISABLE") ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet();
+
+    private static HashSet<string> GetInitialReplicatedProperties(AActor actor) {
+        var changed = GetInitialReplicatedPropertiesCore(actor);
+        if (DisabledProperties.Count == 0) return changed;
+
+        var typeName = actor.GetType().Name;
+        var dropped = changed.Where(name =>
+            DisabledProperties.Contains(name) || DisabledProperties.Contains($"{typeName}:{name}")).ToArray();
+
+        if (dropped.Length > 0) {
+            changed.ExceptWith(dropped);
+            Console.WriteLine($"\aGetInitialReplicatedProperties: REP_DISABLE dropped [{string.Join(", ", dropped)}] from {typeName}");
+            File.AppendAllText("REP_DISABLE.log", $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {typeName} dropped [{string.Join(", ", dropped)}]{Environment.NewLine}");
+        }
+
+        return changed;
+    }
+
+    private static HashSet<string> GetInitialReplicatedPropertiesCore(AActor actor) => actor switch {
         AGameState => new HashSet<string> { "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState" },
-        APlayerState => new HashSet<string> { "RemoteRole", "Role", "PlayerNamePrivate", "bHasStartedPlaying", "HeroType" },
+        APlayerState => new HashSet<string> { "RemoteRole", "Role", "PlayerNamePrivate", "bHasStartedPlaying", "HeroId", "HeroType",
+            "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]" },
         // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
         // FRepLayout at all - see NativeRepLayouts.InventoryProps.
@@ -43,7 +81,10 @@ public class UActorChannel : UChannel {
         // with ReadLen=8, i.e. a packed NetGUID byte, matching PlayerState's own ObjectRef read at
         // handle 16 (and unlike the 1-bit bools that really occupy 49/50/51, where every earlier
         // attempt had wrongly placed this). See NativeRepLayouts.PlayerControllerProps.
-        APlayerController => new HashSet<string> { "RemoteRole", "Role", "bHasServerFinishedLoading", "PlayerState", "WorldInventory" },
+        // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
+        // with no controller and no player state.
+        APawn => new HashSet<string> { "RemoteRole", "Role", "Owner", "PlayerState", "Controller" },
+        APlayerController => new HashSet<string> { "RemoteRole", "Role", "bHasServerFinishedLoading", "PlayerState", "Pawn", "WorldInventory" },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
 
@@ -304,12 +345,72 @@ public class UActorChannel : UChannel {
     public void SendClientRetryClientRestart(APawn pawn) => SendPawnRpc("ClientRetryClientRestart", pawn);
 
     /// <summary>
+    ///     Server-side half of the possession handshake, driven by name rather than through
+    ///     NativeRpcHandlers because every branch needs the channel to reply on. Called for every
+    ///     field, whether or not it decoded into a registered RPC - the field's own declared bit
+    ///     count resyncs the reader either way, so the parameters do not have to be understood.
+    ///
+    ///     The important one is ServerSetSpectatorLocation. It looks like pure spectator noise, but
+    ///     APlayerController::ServerSetSpectatorLocation_Implementation (PlayerController.cpp:2745)
+    ///     is where a real server keeps retrying possession:
+    ///
+    ///         else if (World->TimeSeconds != LastSpectatorStateSynchTime) {
+    ///             if (AcknowledgedPawn != GetPawn()) SafeRetryClientRestart();
+    ///             else { ClientGotoState(GetStateName()); ClientSetViewTarget(GetViewTarget()); }
+    ///         }
+    ///
+    ///     That matters because ClientRestart can legitimately fail the first few times and the
+    ///     client then goes quiet - it only sends ServerCheckClientPossession while it still thinks
+    ///     it has a pawn. Observed here: the client tried twice, both times before its character
+    ///     customization had finished loading, and nothing ever retried afterwards even though the
+    ///     loader completed milliseconds later. The client keeps sending ServerSetSpectatorLocation
+    ///     the whole time, so that is the heartbeat a server is meant to retry on.
+    ///
+    ///     (The else branch - ClientGotoState/ClientSetViewTarget - is not implemented yet; it is
+    ///     what pulls the client out of spectator state once it HAS acknowledged.)
+    /// </summary>
+    private void HandlePossessionRpc(string fieldName) {
+        if (Actor is not APlayerController pc) return;
+
+        switch (fieldName) {
+            case "ServerAcknowledgePossession":
+                // The APawn* parameter is deliberately not decoded - the only pawn this controller
+                // can be acknowledging is its own.
+                pc.AcknowledgedPawn = pc.Pawn;
+                Console.WriteLine($"HandlePossessionRpc: ServerAcknowledgePossession - client acknowledged {pc.Pawn?.GetFName()}");
+                break;
+
+            case "ServerCheckClientPossession":
+            case "ServerCheckClientPossessionReliable":
+            case "ServerSetSpectatorLocation":
+                if (pc.AcknowledgedPawn != pc.Pawn) SafeRetryClientRestart();
+                break;
+        }
+    }
+
+    /// <summary>APlayerController::RetryClientRestartThrottleTime.</summary>
+    private const float RetryClientRestartThrottleTime = 0.5f;
+
+    private float _LastRetryPlayerTime = float.NegativeInfinity;
+
+    /// <summary>
     ///     Answers ServerCheckClientPossession / ...Reliable, mirroring
-    ///     APlayerController::SafeRetryClientRestart. No throttle is applied on purpose: real UE
-    ///     stamps LastRetryPlayerTime with ForceRetryClientRestartTime immediately before calling,
-    ///     precisely so this path is NOT throttled - its own comment says "Client already throttles
-    ///     their call to this function, so respond immediately". The RetryClientRestartThrottleTime
-    ///     check only guards the other, timer-driven callers of SafeRetryClientRestart.
+    ///     APlayerController::SafeRetryClientRestart - throttle included.
+    ///
+    ///     This was first written WITHOUT the throttle, reasoning that real UE deliberately bypasses
+    ///     it here (ServerCheckClientPossession_Implementation stamps LastRetryPlayerTime with
+    ///     ForceRetryClientRestartTime first, commenting "Client already throttles their call to
+    ///     this function, so respond immediately"). That reasoning was wrong in this context and the
+    ///     result was a self-amplifying loop: the client's ClientRestart fails, it immediately calls
+    ///     ServerCheckClientPossessionReliable from the failure path (not the throttled
+    ///     SafeServerCheckClientPossession path), we immediately answer with another RELIABLE
+    ///     ClientRetryClientRestart, and round it goes at frame rate. NumOutRec on this channel then
+    ///     climbs about 60/second until it hits UNetConnection.ReliableBuffer (256), at which point
+    ///     UChannel.SendBunch closes the connection - roughly four seconds in.
+    ///
+    ///     UE never sees this because on a healthy server the loop converges after one or two
+    ///     rounds. The client's own throttle cannot save us, because it is the FAILURE path doing
+    ///     the calling. So the brake has to live here; 0.5s is UE's own constant.
     /// </summary>
     public void SafeRetryClientRestart() {
         if (Actor is not APlayerController pc) return;
@@ -317,6 +418,13 @@ public class UActorChannel : UChannel {
             Console.WriteLine("SafeRetryClientRestart: PlayerController has no Pawn, not retrying");
             return;
         }
+
+        // UWorld.TimeSeconds only became a real clock when UWorld.Tick started advancing it; if
+        // GetWorld() is ever null here the throttle would jam at 0 and this would fire exactly once,
+        // so fall back to a source that always moves.
+        var now = Actor.GetWorld()?.TimeSeconds ?? (Environment.TickCount64 / 1000f);
+        if (now - _LastRetryPlayerTime <= RetryClientRestartThrottleTime) return;
+        _LastRetryPlayerTime = now;
 
         SendClientRetryClientRestart(pc.Pawn);
     }
@@ -403,7 +511,7 @@ public class UActorChannel : UChannel {
 
             var rawHex = HexDumpBits(bunch, payloadStart, Math.Min(payloadEnd, payloadStart + 512));
             var truncated = payloadEnd - payloadStart > 512 ? "..." : "";
-            Console.WriteLine($"UActorChannel.ReceivedBunch: content block ChIndex={ChIndex} Actor={Actor?.GetFName()} bHasRepLayout={bHasRepLayout} numPayloadBits={numPayloadBits} raw={rawHex}{truncated}");
+            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UActorChannel.ReceivedBunch: content block ChIndex={ChIndex} Actor={Actor?.GetFName()} bHasRepLayout={bHasRepLayout} numPayloadBits={numPayloadBits} raw={rawHex}{truncated}");
 
             if (Actor != null) {
                 try {
@@ -456,21 +564,14 @@ public class UActorChannel : UChannel {
                 try {
                     var values = FRpcReader.ReadParams(bunch, rpcDef.Params);
                     rpcDef.Invoke(Actor!, values);
-
-                    // Real UE routes both of these into
-                    // APlayerController::ServerCheckClientPossession_Implementation, whose whole job
-                    // is to re-send the possession RPC - see SafeRetryClientRestart. Handled here
-                    // rather than in NativeRpcHandlers because the reply needs the channel, and the
-                    // handler table is deliberately channel-agnostic.
-                    if (fieldName is "ServerCheckClientPossession" or "ServerCheckClientPossessionReliable") {
-                        SafeRetryClientRestart();
-                    }
                 } catch (Exception ex) {
                     Console.WriteLine($"UActorChannel.ReceivedBunch: RPC {fieldName} failed to decode on ChIndex={ChIndex} Actor={Actor?.GetFName()}: {ex}");
                 }
             } else {
-                Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits)");
+                if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits)");
             }
+
+            HandlePossessionRpc(fieldName);
 
             bunch.Pos = fieldEnd;
         }

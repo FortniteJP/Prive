@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 public class APlayerController : AController {
     public byte NetPlayerIndex { get; set; }
@@ -15,6 +15,14 @@ public class APlayerController : AController {
     ///     AFortPlayerController::WorldInventory - see AFortInventory's doc comment for why
     ///     ClientRestart_Implementation needs this to resolve to something non-null client-side.
     /// </summary>
+    /// <summary>
+    ///     APlayerController::AcknowledgedPawn - set when the client sends ServerAcknowledgePossession.
+    ///     While it differs from Pawn, the server keeps retrying ClientRestart (see
+    ///     UActorChannel.HandlePossessionRpc); once they match, possession is complete and the
+    ///     retries stop.
+    /// </summary>
+    public APawn? AcknowledgedPawn { get; set; }
+
     public AFortInventory? WorldInventory { get; set; }
 
     public void SetPlayer(UPlayer inPlayer) => Player = inPlayer;

@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Rpc;
+﻿namespace AFortOnlineBeacon.Net.Rpc;
 
 /// <summary>
 ///     Handlers for server-direction RPCs a real client sends us, keyed by name (matching
@@ -20,7 +20,7 @@ internal static class NativeRpcHandlers {
         name,
         Array.Empty<FRpcParamDef>(),
         (actor, _) => {
-            Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()}");
+            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()}");
             if (action != null && actor is APlayerController pc) action(pc);
         }
     );
@@ -33,18 +33,18 @@ internal static class NativeRpcHandlers {
                 if (actor is not APlayerController pc) return;
                 if (values[0] is FVector loc) pc.LastSpectatorSyncLocation = loc;
                 if (values[1] is FRotator rot) pc.LastSpectatorSyncRotation = rot;
-                Console.WriteLine($"NativeRpcHandlers: ServerSetSpectatorLocation on {pc.GetFName()} Loc={pc.LastSpectatorSyncLocation} Rot={pc.LastSpectatorSyncRotation}");
+                if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerSetSpectatorLocation on {pc.GetFName()} Loc={pc.LastSpectatorSyncLocation} Rot={pc.LastSpectatorSyncRotation}");
             }
         ),
         ["ServerSetSpectatorWaiting"] = new FRpcDef(
             "ServerSetSpectatorWaiting",
             new[] { new FRpcParamDef("bWaiting", ERpcParamKind.Bool) },
-            (actor, values) => Console.WriteLine($"NativeRpcHandlers: ServerSetSpectatorWaiting on {actor.GetFName()} bWaiting={values[0]}")
+            (actor, values) => { if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerSetSpectatorWaiting on {actor.GetFName()} bWaiting={values[0]}"); }
         ),
         ["ServerChangeName"] = new FRpcDef(
             "ServerChangeName",
             new[] { new FRpcParamDef("S", ERpcParamKind.String) },
-            (actor, values) => Console.WriteLine($"NativeRpcHandlers: ServerChangeName on {actor.GetFName()} S={values[0]}")
+            (actor, values) => { if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerChangeName on {actor.GetFName()} S={values[0]}"); }
         ),
 
         // No-op / log-only: real gameplay behavior (spectator pawn swap, AI logging toggle, level
@@ -95,7 +95,7 @@ internal static class NativeRpcHandlers {
                 actor.SetActorLocation(clientLoc);
 
                 var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
-                Console.WriteLine($"NativeRpcHandlers: ServerMoveNoBase on {actor.GetFName()} TimeStamp={values[0]} ClientLoc={clientLoc} CompressedMoveFlags={values[3]} ClientRoll={values[4]} View={view} ClientMovementMode={values[6]}");
+                if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerMoveNoBase on {actor.GetFName()} TimeStamp={values[0]} ClientLoc={clientLoc} CompressedMoveFlags={values[3]} ClientRoll={values[4]} View={view} ClientMovementMode={values[6]}");
             }
         )
     };

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 
@@ -879,7 +879,7 @@ public abstract class UNetConnection : UPlayer {
 
                 for (var outBunch = channel.OutRec; outBunch != null; outBunch = outBunch.Next) {
                     if (outBunch.bOpen) {
-                        Console.WriteLine($"Channel {channelIndex} reset Ackd because open is reliable");
+                        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"Channel {channelIndex} reset Ackd because open is reliable");
                         channel.OpenAcked = false;
                     }
 

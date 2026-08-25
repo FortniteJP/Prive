@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Channels;
+﻿namespace AFortOnlineBeacon.Net.Channels;
 
 public abstract class UChannel {
     private const int NetMaxConstructedPartialBunchSizeBytes = 1024 * 64;
@@ -331,7 +331,19 @@ public abstract class UChannel {
             return new FPacketIdRange(UnrealConstants.IndexNone);
         }
 
-        if (Closing || Connection.Channels[ChIndex] != this || bunch.IsError() || bunch.bHasPackageMapExports) throw new UnrealNetException();
+        // Was a bare `throw new UnrealNetException()`, which said nothing about which of four very
+        // different problems had occurred. bunch.IsError() in particular is usually NOT a
+        // serialization fault: FOutBunch's constructor marks a bunch overflowed when
+        // NumOutRec >= ReliableBuffer - 1, so a jammed reliable queue surfaces here as an opaque
+        // throw from the send path. NumOutRec only drains from the head of OutRec, so one bunch that
+        // never gets acked blocks every later one.
+        if (Closing || Connection.Channels[ChIndex] != this || bunch.IsError() || bunch.bHasPackageMapExports) {
+            throw new UnrealNetException(
+                $"UChannel.SendBunch refused to send on ChIndex={ChIndex}: Closing={Closing}, " +
+                $"ChannelMismatch={Connection.Channels[ChIndex] != this}, BunchIsError={bunch.IsError()}, " +
+                $"bHasPackageMapExports={bunch.bHasPackageMapExports}, NumOutRec={NumOutRec}/{UNetConnection.ReliableBuffer}, " +
+                $"OldestUnackedSeq={OutRec?.ChSequence.ToString() ?? "none"}");
+        }
 
         // Set bunch flags.
         var bDormancyClose = bunch.bClose && (bunch.CloseReason == EChannelCloseReason.Dormancy);
@@ -369,7 +381,7 @@ public abstract class UChannel {
             ((UPackageMapClient) Connection.PackageMap!).AppendExportBunches(outgoingBunches);
         }
 
-        Console.WriteLine($"SendBunch: ChIndex={ChIndex} outgoingBunches(export)Count={outgoingBunches.Count}" + (outgoingBunches.Count > 0 ? " hex=" + string.Join(",", outgoingBunches.Select(b => Convert.ToHexString(b.GetData(), 0, (int) b.GetNumBytes()))) : ""));
+        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"SendBunch: ChIndex={ChIndex} outgoingBunches(export)Count={outgoingBunches.Count}" + (outgoingBunches.Count > 0 ? " hex=" + string.Join(",", outgoingBunches.Select(b => Convert.ToHexString(b.GetData(), 0, (int) b.GetNumBytes()))) : ""));
 
         if (outgoingBunches.Count != 0) {
             // Don't merge if we are exporting guid's
@@ -437,11 +449,18 @@ public abstract class UChannel {
         var bOverflowsReliable = (NumOutRec + outgoingBunches.Count >= UNetConnection.ReliableBuffer + (bunch.bClose ? 1 : 0));
 
         if (bunch.bReliable && bOverflowsReliable) {
+            // Real UE closes the connection here too, but this used to also throw, which turned a
+            // diagnosable condition into an opaque crash. It is worth logging loudly: overflowing
+            // this buffer almost always means the server is answering some client request in an
+            // unthrottled loop (see UActorChannel.SafeRetryClientRestart, which did exactly that),
+            // and the symptom - the connection dying a few seconds in - looks nothing like the cause.
+            Console.WriteLine($"UChannel.SendBunch: RELIABLE BUFFER OVERFLOW on ChIndex={ChIndex} " +
+                $"(NumOutRec={NumOutRec} + {outgoingBunches.Count} >= {UNetConnection.ReliableBuffer}). " +
+                "Closing the connection - something is queueing reliable bunches faster than they can be acked.");
+
             // TODO: Send NMT_Failure
             // TODO: FlushNet(true);
             Connection.Close();
-
-            throw new NotImplementedException();
             return packetIdRange;
         }
 
@@ -586,7 +605,7 @@ public abstract class UChannel {
                 if (OutRec.bPartial) {
                     var openBunch = OutRec;
                     while (openBunch is not null) {
-                        Console.WriteLine($"Channel {ChIndex} open partials {openBunch.PacketId} ackd {openBunch.ReceivedAck} final {openBunch.bPartialFinal}");
+                        if (NetDebugLog.VerboseEnabled) Console.WriteLine($"Channel {ChIndex} open partials {openBunch.PacketId} ackd {openBunch.ReceivedAck} final {openBunch.bPartialFinal}");
                         if (!openBunch.ReceivedAck) {
                             openFinished = false;
                             break;
@@ -596,9 +615,19 @@ public abstract class UChannel {
                     }
                 }
                 if (openFinished) {
-                    Console.WriteLine($"Channel {ChIndex} is fully ackd. PacketID: {OutRec.PacketId}");
+                    if (NetDebugLog.VerboseEnabled) Console.WriteLine($"Channel {ChIndex} is fully ackd. PacketID: {OutRec.PacketId}");
                     OpenAcked = true;
-                } else break;
+                } else {
+                    // Head-of-line block: nothing behind this bunch can be released either. Worth
+                    // shouting about once the backlog gets close to the limit, because the eventual
+                    // symptom is an unexplained send failure rather than anything mentioning acks.
+                    if (NumOutRec > UNetConnection.ReliableBuffer / 2) {
+                        Console.WriteLine($"UChannel.ReceivedAcks: ChIndex={ChIndex} reliable queue is not draining - " +
+                            $"the channel-open bunch (Seq {OutRec.ChSequence}, PacketId {OutRec.PacketId}) is still unacked " +
+                            $"while NumOutRec={NumOutRec}/{UNetConnection.ReliableBuffer}.");
+                    }
+                    break;
+                }
             }
 
             bCleanup = bCleanup || OutRec.bClose;

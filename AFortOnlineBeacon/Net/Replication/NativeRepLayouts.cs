@@ -93,7 +93,7 @@ internal static class NativeRepLayouts {
         Reserved("Instigator") // live-probed handle 15
     };
 
-    private static readonly FRepPropertyDef[] ControllerProps = ActorProps.Concat(new[] {
+    private static readonly FRepPropertyDef[] ControllerProps = ActorProps.Concat(new FRepPropertyDef[] {
         new() {
             // Handle 16 (ActorProps' 15 + 1) - not independently live-probed, but PlayerController's
             // own TargetViewRotation landing on the predicted handle 18 (16+Pawn17+TargetViewRotation18)
@@ -102,7 +102,13 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((AController) obj).PlayerState
         },
-        Reserved("Pawn") // handle 17
+        new() {
+            // Handle 17. AController::Pawn - the other half of the possession link, alongside the
+            // Pawn's own Controller/Owner/PlayerState (see PawnProps).
+            Name = "Pawn",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AController) obj).Pawn
+        }
     }).ToArray();
 
     /// <summary>
@@ -210,10 +216,23 @@ internal static class NativeRepLayouts {
         // TArray + bool) or anything after them, so no Cmd needs to exist for them.
     ).ToArray();
 
+    /// <summary>
+    ///     APawn's own properties, after AActor's 15. All three come straight from
+    ///     APawn::PossessedBy on a real server (see AController.Possess) and none of them were being
+    ///     sent before - a client could see the pawn actor but nothing tying it to its controller.
+    /// </summary>
     private static readonly FRepPropertyDef[] PawnProps = ActorProps.Concat(new[] {
-        Reserved("RemoteViewPitch"),
-        Reserved("PlayerState"),
-        Reserved("Controller")
+        Reserved("RemoteViewPitch"), // 16
+        new FRepPropertyDef {
+            Name = "PlayerState", // 17
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).PlayerState
+        },
+        new FRepPropertyDef {
+            Name = "Controller", // 18
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).Controller
+        }
     }).ToArray();
 
     /// <summary>
@@ -243,19 +262,6 @@ internal static class NativeRepLayouts {
         }
     }).ToArray();
 
-    /// <summary>
-    ///     APlayerState : AInfo : AActor (AInfo adds nothing, same as AGameState above) - its own 11
-    ///     props (Score..PlayerNamePrivate) are all reserved/unpopulated, handles 16-26 following the
-    ///     corrected ActorProps base. AFortPlayerState's own props start right after, but NOT in
-    ///     declaration order: a UEDumper dump (still trustworthy here since none of these specific
-    ///     properties are arrays) showed bIsGameSessionOwner, bIsWorldDataOwner, bHasFinishedLoading
-    ///     immediately preceding bHasStartedPlaying, with bIsGameSessionAdmin/bIsReadyToContinue
-    ///     coming AFTER it instead. Not independently re-verified via live probe this round (only
-    ///     the ActorProps base offset was ever actually wrong - see ActorProps), but re-derived here
-    ///     against the corrected base (16, not 11). Everything AFortPlayerState declares after
-    ///     bHasStartedPlaying, and all of FortPlayerStateZone/PvP/Athena, is deliberately not
-    ///     declared - same reasoning as GameStateProps/PlayerControllerProps.
-    /// </summary>
     /// <summary>
     ///     APlayerState -> AFortPlayerState (spawned as /Script/FortniteGame.FortPlayerStateAthena,
     ///     see GUClassArray). AInfo adds nothing, so APlayerState's own properties start at handle
@@ -310,7 +316,13 @@ internal static class NativeRepLayouts {
         Reserved("PlayerRole"),               // 36, offset 916 (EFortPlayerRole)
         Reserved("PartyOwnerUniqueId", ERepPropertyKind.StructAtomic), // 37, offset 920, FUniqueNetIdRepl
         Reserved("WorldPlayerId"),            // 38, offset 960 (int32)
-        Reserved("HeroId"),                   // 39, offset 968
+        new FRepPropertyDef {
+            // 39, offset 968. See APlayerState.HeroId - an empty value here is what
+            // AFortPlayerState::InitializeHero was failing on, and quickbars come out of that.
+            Name = "HeroId",
+            Kind = ERepPropertyKind.String,
+            GetStringValue = obj => ((APlayerState) obj).HeroId
+        },
         new FRepPropertyDef {
             // 40, offset 984. PREDICTED, not yet live-probed - confirm with
             // REPLAYOUT_PROBE_ACTOR=APlayerState REPLAYOUT_PROBE_HANDLE=40 before relying on it.
@@ -320,7 +332,85 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((APlayerState) obj).HeroType
         }
-    }).ToArray();
+    }.Concat(new[] {
+        // Handles 41-69, predicted from NetFields.txt offsets plus Dumper-7 struct layouts under the
+        // offset-ascending / name-tiebreak rule. All distinct offsets here, so no alphabetising is
+        // involved; the only real assumptions are the handle COUNTS of the aggregate members below.
+        // Nothing in this block is sent - it exists so later handles number correctly and so the
+        // truncated name probe has something to aim at.
+        Reserved("CurrentCharXP"),           // 41, offset 1016
+        Reserved("MyBackpackPickup"),        // 42, offset 1096
+        Reserved("InitialExperienceLevel"),  // 43, offset 1104
+        Reserved("InitialExperienceAmount"), // 44, offset 1108
+        Reserved("ExperienceDeltas"),        // 45, offset 1112 - TArray, one top-level handle
+        Reserved("Platform"),                // 46, offset 1184 - FString
+        Reserved("CharacterGender"),         // 47, offset 1224
+        Reserved("CharacterBodyType"),       // 48, offset 1225
+        // 49-59: FCustomCharacterData (offset 1232) recursed. Dumper-7 gives it
+        // WasPartReplicatedFlags(uint8) + UCustomCharacterPart* Parts[6] + UAthenaCharmItemDefinition*
+        // Charms[4], with bReplicationFailed excluded as RepSkip - 11 handles. A C-array member takes
+        // one handle PER ELEMENT (InitFromClass loops ArrayIdx over ArrayDim), the same rule that made
+        // AActor::AttachmentReplication span six.
+        //
+        // Parts[6] is the cosmetic character loadout - the real server fills it with things like
+        // /Game/Athena/Heroes/Meshes/Heads/F_Med_Head1_ATH and CP_001_Athena_Body, which the PR3.0
+        // capture shows arriving at packet #462, well after the join.
+        new FRepPropertyDef {
+            // 49. A plain uint8 with no enum attached, so UByteProperty::NetSerializeItem writes a
+            // full 8 bits - expressed here as a ByteEnum with EnumMaxValue 256, since
+            // CeilLogTwo(256) is exactly 8.
+            Name = "CharacterData.WasPartReplicatedFlags",
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 256,
+            GetByteValue = obj => ((APlayerState) obj).WasPartReplicatedFlags
+        },
+        new FRepPropertyDef {
+            Name = "CharacterData.Parts[0]", // 50
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).CharacterParts[0]
+        },
+        new FRepPropertyDef {
+            Name = "CharacterData.Parts[1]", // 51
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).CharacterParts[1]
+        },
+        new FRepPropertyDef {
+            Name = "CharacterData.Parts[2]", // 52
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).CharacterParts[2]
+        },
+        new FRepPropertyDef {
+            Name = "CharacterData.Parts[3]", // 53
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).CharacterParts[3]
+        },
+        new FRepPropertyDef {
+            Name = "CharacterData.Parts[4]", // 54
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).CharacterParts[4]
+        },
+        new FRepPropertyDef {
+            Name = "CharacterData.Parts[5]", // 55
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).CharacterParts[5]
+        },
+        Reserved("CharacterData.Charms[0]"), // 56
+        Reserved("CharacterData.Charms[1]"), // 57
+        Reserved("CharacterData.Charms[2]"), // 58
+        Reserved("CharacterData.Charms[3]"), // 59
+        Reserved("CharacterColorSwatches[0]"),     // 60 | offset 1328, arrayDim=2
+        Reserved("CharacterColorSwatches[1]"),     // 61 |
+        Reserved("CharacterPartColorSwatches[0]"), // 62 |
+        Reserved("CharacterPartColorSwatches[1]"), // 63 |
+        Reserved("CharacterPartColorSwatches[2]"), // 64 | offset 1456, arrayDim=6
+        Reserved("CharacterPartColorSwatches[3]"), // 65 |
+        Reserved("CharacterPartColorSwatches[4]"), // 66 |
+        Reserved("CharacterPartColorSwatches[5]"), // 67 |
+        // 68 is the landmark worth probing: if it reports PlayerTeam, every count above - and in
+        // particular FCustomCharacterData being 11 handles - is confirmed in one shot.
+        Reserved("PlayerTeam"),        // 68, offset 1552
+        Reserved("PlayerTeamPrivate")  // 69, offset 1560
+    })).ToArray();
 
     /// <summary>
     ///     /Script/FortniteGame.FortInventory - the class AFortPlayerController::WorldInventory

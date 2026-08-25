@@ -22,6 +22,24 @@ public class APlayerState : AInfo {
     public string PlayerNamePrivate { get; set; } = "Player";
 
     /// <summary>
+    ///     AFortPlayerState::HeroId - wire handle 39, an FString (StrProperty at offset 968).
+    ///
+    ///     This is the property the client was actually stuck on, and it named itself:
+    ///     `LogFortCustomization: AFortPlayerState::InitializeHero failed. FortPC: …,
+    ///     FortPC->PlayerState: …, HeroId: ` - with the HeroId printed empty. InitializeHero is what
+    ///     sets the hero up client-side, and the quickbars come out of that, which is why
+    ///     ClientRestart_Implementation kept bailing with "Quickbars are invalid" no matter how much
+    ///     inventory or HeroType we sent.
+    ///
+    ///     The value is an McpProfile item instance id - 32 uppercase hex characters. A real
+    ///     Project-Reboot-3.0 capture sends `B1F06E544F8B1DAA4893F48EF011260C` in the very same
+    ///     packet (#250) that exports HeroType's asset. A fresh Guid in that format is used here
+    ///     rather than replaying that literal id, since it identifies a profile item and nothing on
+    ///     our side needs it to match anything.
+    /// </summary>
+    public string HeroId { get; set; } = Guid.NewGuid().ToString("N").ToUpperInvariant();
+
+    /// <summary>
     ///     AFortPlayerState::HeroType (UFortHeroType*) - wire handle 40, a plain ObjectRef.
     ///
     ///     Left null for now. It points at a STATIC asset (Erbium uses
@@ -34,4 +52,24 @@ public class APlayerState : AInfo {
     ///     leading remaining candidate for the "Quickbars are invalid" stall.
     /// </summary>
     public UObject? HeroType { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerState::CharacterData.WasPartReplicatedFlags - wire handle 49, a plain uint8
+    ///     (8 bits, no enum). A bitmask over EFortCustomPartType, i.e. bit (1 &lt;&lt; PartType) per slot
+    ///     this server actually replicated.
+    /// </summary>
+    public byte WasPartReplicatedFlags { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerState::CharacterData.Parts[6] - wire handles 50-55, one ObjectRef each (a
+    ///     C-array member gets one handle per element). Indexed by EFortCustomPartType:
+    ///     Head=0, Body=1, Hat=2, Backpack=3, Charm=4, Face=5.
+    ///
+    ///     These are what the client's customization pass consumes. Wiring the pawn to its
+    ///     PlayerState (see AController.Possess) is what first made the client actually look for
+    ///     them, at which point it started warning
+    ///     "Customization for PlayerPawn_Athena_C_… still hasn't completed after N secs" - it was
+    ///     waiting on parts nothing ever sent.
+    /// </summary>
+    public UObject?[] CharacterParts { get; } = new UObject?[6];
 }

@@ -89,6 +89,16 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     public float DeltaTimeSeconds { get; private set; }
     
     public void Tick(float deltaTime) {
+        // Advance world time, as UWorld::Tick does. These were initialised to zero and then never
+        // touched again, which quietly broke anything that measures an interval against
+        // TimeSeconds - UActorChannel.SafeRetryClientRestart's throttle compared 0 against 0 every
+        // time and so fired exactly once, which looked exactly like "the client stopped asking".
+        DeltaTimeSeconds = deltaTime;
+        TimeSeconds += deltaTime;
+        UnpausedTimeSeconds += deltaTime;
+        RealTimeSeconds += deltaTime;
+        AudioTimeSeconds += deltaTime;
+
         if (NetDriver != null) {
             NetDriver.TickDispatch(deltaTime);
             NetDriver.PostTickDispatch();

@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net;
+﻿namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Defers the per-packet diagnostic Console.WriteLine calls sprinkled through
@@ -11,11 +11,21 @@ namespace AFortOnlineBeacon.Net;
 ///     clobber each other's buffers.
 /// </summary>
 internal static class NetDebugLog {
+    /// <summary>
+    ///     NET_VERBOSE=1 turns the per-packet firehose back on. Off by default: once a connection is
+    ///     established the ack/bunch traffic scrolls a console faster than it can be read, which
+    ///     hides exactly the lines worth watching (possession handshake, RPC dispatch, errors).
+    ///     Errors and one-shot milestones are logged with Console.WriteLine directly and are never
+    ///     suppressed by this.
+    /// </summary>
+    public static readonly bool VerboseEnabled = Environment.GetEnvironmentVariable("NET_VERBOSE") == "1";
+
     [ThreadStatic] private static List<string>? _Buffer;
 
     public static void Begin() => _Buffer = new List<string>();
 
     public static void Write(string line) {
+        if (!VerboseEnabled) return;
         if (_Buffer != null) _Buffer.Add(line);
         else Console.WriteLine(line);
     }
