@@ -27,4 +27,114 @@ public class AGameState : AInfo {
     ///     alone was not enough. Defaults to the real engine's own default value.
     /// </summary>
     public FName MatchState { get; set; } = new("EnteringMap");
+
+    // ------------------------------------------------------------------------------------------
+    // AFortGameStateAthena. Handle numbers below are derived by Tools/RepHandles/rep_handles.py
+    // from the Dumper-7 10.40 SDK, reproducing UClass::SetUpRuntimeReplicationData +
+    // FRepLayout::InitFromProperty_r exactly. That derivation independently reproduces every
+    // live-probed handle this project already had (AActor 1-15, AGameStateBase 16-19, MatchState
+    // 20, FortTimeOfDayManager 22, and all of APlayerState 16-50), which is what makes the
+    // Athena-range numbers below trustworthy without a probe of their own.
+    //
+    // The values themselves mirror what raider3.5 (Logic/Game.h, OnReadyToStartMatch) sets on a
+    // real injected 10.40 server - that is a known-good client-facing configuration for a match
+    // that skips the battle bus entirely.
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>AFortGameStateAthena::WarmupCountdownStartTime - wire handle 109.</summary>
+    public float WarmupCountdownStartTime { get; set; }
+
+    /// <summary>AFortGameStateAthena::WarmupCountdownEndTime - wire handle 110. Pushed far into the
+    /// future so the client never counts down out of warmup on its own.</summary>
+    public float WarmupCountdownEndTime { get; set; } = 99999.9f;
+
+    /// <summary>AFortGameStateAthena::AircraftStartTime - wire handle 111. Likewise far future;
+    /// with <see cref="bGameModeWillSkipAircraft"/> set the client should never wait on it.</summary>
+    public float AircraftStartTime { get; set; } = 9999.9f;
+
+    /// <summary>AFortGameStateAthena::TotalPlayers - wire handle 115.</summary>
+    public int TotalPlayers { get; set; } = 1;
+
+    /// <summary>AFortGameStateAthena::PlayersLeft - wire handle 116.</summary>
+    public int PlayersLeft { get; set; } = 1;
+
+    /// <summary>AFortGameStateAthena::CurrentPlaylistId - wire handle 148. 2 is Playlist_DefaultSolo.</summary>
+    public int CurrentPlaylistId { get; set; } = 2;
+
+    /// <summary>
+    ///     AFortGameStateAthena::GamePhase - wire handle 152. A UEnumProperty over EAthenaGamePhase,
+    ///     so UEnumProperty::NetSerializeItem writes CeilLogTwo64(GetMaxEnumValue()) bits; the 10.40
+    ///     enum ends at EAthenaGamePhase_MAX = 7, i.e. 3 bits.
+    /// </summary>
+    public EAthenaGamePhase GamePhase { get; set; } = EAthenaGamePhase.Warmup;
+
+    /// <summary>
+    ///     AFortGameStateAthena::bGameModeWillSkipAircraft - wire handle 156. Tells the client this
+    ///     match has no battle bus at all, so it must not wait to be put into one.
+    /// </summary>
+    public bool bGameModeWillSkipAircraft { get; set; } = true;
+
+    /// <summary>
+    ///     AFortGameStateAthena::CurrentPlaylistInfo.BasePlaylist - a UFortPlaylistAthena asset.
+    ///
+    ///     CurrentPlaylistInfo (FPlaylistPropertyArray) derives from FFastArraySerializer, so it is
+    ///     a Custom Delta property: it consumes RepLayout handles 154/155 but is NEVER sent through
+    ///     the handle stream. It goes out as its own ClassNetCache-indexed field, exactly like an
+    ///     RPC - see UActorChannel.WriteCustomDeltaProperties.
+    ///
+    ///     This is the property the whole in-match UI hangs off. In a working 10.40 capture the
+    ///     client goes OnRep_CurrentPlaylistInfo -> LoadCurrentPlaylistData ->
+    ///     OnPlaylistDataLoadCompleted -> UI state InGame_BR, all within one second; until then its
+    ///     UI state is Invalid, which is one of the Athena loading screen's own listed reasons for
+    ///     refusing to drop.
+    /// </summary>
+    /// <summary>
+    ///     AFortGameState::WorldManager - wire handle 39.
+    ///
+    ///     THIS IS THE LOADING-SCREEN GATE. Disassembling the decrypted
+    ///     UFortUIManagerWidget_NUI::NativeTick out of a live client memory dump
+    ///     (Tools/BinXref/dumpxref.py) shows its in-game branch reading, before it will pick any
+    ///     InGame_* state at all:
+    ///
+    ///         WorldManager = World->GameState->WorldManager;      // GameState+0x390
+    ///         if (WorldManager == nullptr)                 -> leave the UI state alone
+    ///         if (WorldManager->WorldManagerState != 5)    -> leave the UI state alone
+    ///
+    ///     (WorldManager+0x2C8 is EFortWorldManagerState, and 5 is WMS_Running.) With the state left
+    ///     at Invalid the Athena loading screen refuses to drop - "The UI is not ready yet
+    ///     (UIManagerWidget->GetCurrentUIState() == Invalid)".
+    ///
+    ///     WorldManagerState is NOT replicated, so the client's own actor has to reach WMS_Running by
+    ///     itself; all the server owes it is this pointer. Athena_Terrain ships the actor already
+    ///     placed - FortWorldManager "DO_NOT_DELETE_FortWorldManager" in the persistent level - so
+    ///     this is a path reference to the client's own instance, not something we spawn.
+    /// </summary>
+    public UObject? WorldManager { get; set; }
+
+    public UObject? BasePlaylist { get; set; }
+
+    /// <summary>
+    ///     AFortGameStateAthena::GameMemberInfoArray - a Custom Delta (FastArraySerializer) roster of
+    ///     every player's team and squad, keyed by unique id. Receiving it is what makes the client
+    ///     log "NotifyGameMemberAdded: Adding Player state with UniqueId: ..., in team: N, and in
+    ///     squad: N" - one of the last client-side events the working 10.40 capture has and this
+    ///     server did not.
+    /// </summary>
+    public List<FGameMemberInfo> GameMemberInfoArray { get; } = new();
+}
+
+/// <summary>
+///     Enum FortniteGame.EAthenaGamePhase, 10.40. Values (including Count/_MAX) are verbatim from
+///     the SDK dump because <see cref="AGameState.GamePhase"/>'s wire width is CeilLogTwo of the
+///     highest one.
+/// </summary>
+public enum EAthenaGamePhase : byte {
+    None = 0,
+    Setup = 1,
+    Warmup = 2,
+    Aircraft = 3,
+    SafeZones = 4,
+    EndGame = 5,
+    Count = 6,
+    EAthenaGamePhase_MAX = 7
 }

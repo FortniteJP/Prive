@@ -47,6 +47,25 @@ public enum ERepPropertyKind {
     String,
 
     /// <summary>
+    ///     An FUniqueNetIdRepl leaf (APlayerState::UniqueId, PartyOwnerUniqueId, ...). RepLayout
+    ///     special-cases this struct by name into ERepLayoutCmdType::PropertyNetId, so it is exactly
+    ///     one handle, and the value is FUniqueNetIdRepl::NetSerialize's byte blob.
+    /// </summary>
+    NetId,
+
+    /// <summary>
+    ///     A UIntProperty leaf. UIntProperty has no NetSerializeItem override, so UProperty's
+    ///     default runs SerializeItem, i.e. a raw little-endian 32-bit write - one handle.
+    /// </summary>
+    Int32,
+
+    /// <summary>
+    ///     A UFloatProperty leaf - same story as <see cref="Int32"/>: no NetSerializeItem override,
+    ///     so a raw 32-bit IEEE-754 write, one handle.
+    /// </summary>
+    Float,
+
+    /// <summary>
     ///     TEMP diagnostic (2026-08-25): a TArray-typed leaf, sent as an always-empty array - the
     ///     minimal, unambiguous DynamicArray Cmd encoding per RepLayout.cpp's SendProperties_r
     ///     (line ~1998-2033): [handle(packed)][ArrayNum=0 (raw uint16, NOT packed)]
@@ -86,6 +105,15 @@ public sealed class FRepPropertyDef {
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.String"/>.</summary>
     public Func<object, string>? GetStringValue { get; init; }
+
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.NetId"/>.</summary>
+    public Func<object, FUniqueNetIdRepl?>? GetNetIdValue { get; init; }
+
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.Int32"/>.</summary>
+    public Func<object, int>? GetIntValue { get; init; }
+
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.Float"/>.</summary>
+    public Func<object, float>? GetFloatValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ByteEnum"/> - the enum's highest raw value (e.g. ENetRole.ROLE_MAX=4), matching UByteProperty::NetSerializeItem's CeilLogTwo(Enum-&gt;GetMaxEnumValue()).</summary>
     public int EnumMaxValue { get; init; }

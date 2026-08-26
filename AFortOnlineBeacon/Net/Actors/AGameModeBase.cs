@@ -52,7 +52,45 @@ public class AGameModeBase : AInfo {
             GameState.SetRole(ENetRole.ROLE_Authority);
             GameState.SetReplicates(true);
             GameState.bReplicatedHasBegunPlay = true;
-            GameState.MatchState = new FName("InProgress");
+            // The one working 10.40 capture we have flips the client's UI to InGame_BR while
+            // MatchState is still WaitingToStart, and only moves to InProgress 85ms LATER:
+            //   16:58:21.201  MatchState changed previous=EnteringMap current=WaitingToStart
+            //   16:58:21.927  [NativeTick] change state to InGame_BR
+            //   16:58:22.012  MatchState changed previous=WaitingToStart current=InProgress
+            // This server used to jump straight to InProgress, which makes AGameState::OnRep_MatchState
+            // run HandleMatchIsWaitingToStart AND HandleMatchHasStarted back to back (both
+            // HealthSnapshot lines show up in our client log, so it really does take both paths) -
+            // i.e. the client is told the match already started while GamePhase is still Warmup.
+            // MATCH_STATE overrides it without a rebuild.
+            GameState.MatchState = new FName(
+                Environment.GetEnvironmentVariable("MATCH_STATE") is { Length: > 0 } ms ? ms : "WaitingToStart");
+
+            // AFortGameStateAthena's own match configuration. The defaults on AGameState already
+            // match raider3.5's OnReadyToStartMatch (Warmup + no battle bus); GAME_PHASE is here
+            // so a phase can be tried against a live client without a rebuild, since which phase
+            // the client's UI wants is still being narrowed down.
+            var gamePhase = Environment.GetEnvironmentVariable("GAME_PHASE");
+            if (!string.IsNullOrWhiteSpace(gamePhase) && Enum.TryParse<EAthenaGamePhase>(gamePhase, true, out var parsedPhase)) {
+                GameState.GamePhase = parsedPhase;
+            }
+
+            // AFortGameStateAthena::CurrentPlaylistInfo.BasePlaylist. A working 10.40 capture shows
+            // the client's UI state going to InGame_BR within a second of OnRep_CurrentPlaylistInfo
+            // resolving this asset, and staying Invalid (which blocks the loading screen) without it.
+            // The map's own FortWorldManager, found with Tools/MapActorDump: class FortWorldManager,
+            // name DO_NOT_DELETE_FortWorldManager, in Athena_Terrain's persistent level.
+            var worldManagerPath = Environment.GetEnvironmentVariable("WORLD_MANAGER_ACTOR")
+                                   ?? "/Game/Athena/Maps/Athena_Terrain.Athena_Terrain:PersistentLevel.DO_NOT_DELETE_FortWorldManager";
+            GameState.WorldManager = UAssetRegistry.GetOrCreateSubObject(worldManagerPath);
+            Console.WriteLine($"AGameModeBase.InitGameState: WorldManager='{worldManagerPath}' (handle 39)");
+
+            var playlistPath = Environment.GetEnvironmentVariable("PLAYLIST_ASSET")
+                               ?? "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo";
+            GameState.BasePlaylist = UAssetRegistry.GetOrCreate(playlistPath);
+
+            Console.WriteLine($"AGameModeBase.InitGameState: BasePlaylist='{playlistPath}' (handle 155), " +
+                              $"bGameModeWillSkipAircraft={GameState.bGameModeWillSkipAircraft}, " +
+                              $"CurrentPlaylistId={GameState.CurrentPlaylistId}");
 
             // Athena's loading screen blocks on this - see AFortTimeOfDayManager for the evidence.
             // Real UE reaches it through AFortGameStateBase::SetTimeOfDayManager, which the client
@@ -141,8 +179,27 @@ public class AGameModeBase : AInfo {
         if (playerState != null) {
             playerState.SetRole(ENetRole.ROLE_Authority);
             playerState.SetReplicates(true);
+            // Hand the client's own id (from NMT_Login) straight back on the PlayerState - see
+            // APlayerState.UniqueId. Real UE does this in AGameModeBase::Login via
+            // PlayerState->SetUniqueId.
+            playerState.UniqueId = uniqueId;
+            Console.WriteLine($"AGameModeBase.Login: PlayerState UniqueId={uniqueId.ToDebugString()}");
+
+            // Mirror the same player into the GameState's roster. ReplicationIDs must be unique and
+            // non-negative - real UE hands them out from FFastArraySerializer::MarkItemDirty.
+            GameState?.GameMemberInfoArray.Add(new FGameMemberInfo {
+                ReplicationId = GameState.GameMemberInfoArray.Count + 1,
+                SquadId = playerState.SquadId,
+                TeamIndex = playerState.TeamIndex,
+                MemberUniqueId = uniqueId
+            });
             playerState.bHasFinishedLoading = true;
-            playerState.bHasStartedPlaying = true;
+            // FALSE deliberately. In the working capture the server logs "EXPDEBUG: ... Player has
+            // not started playing" at this point - bHasStartedPlaying is what a real Athena server
+            // sets once the player is actually out of the bus and playing, not at join. Sending it
+            // true alongside MatchState=InProgress told the client a story no real server tells.
+            playerState.bHasStartedPlaying =
+                Environment.GetEnvironmentVariable("HAS_STARTED_PLAYING") == "1";
             // AFortPlayerState::HeroType (handle 40, live-probe-confirmed). Athena's quickbars are
             // built from the hero loadout, which makes this the leading candidate for the client's
             // "Quickbars are invalid" stall. Path taken from Erbium's FindObject call; the object
@@ -211,6 +268,9 @@ public class AGameModeBase : AInfo {
         if (world == null) return;
 
         newPlayer.bHasServerFinishedLoading = true;
+        // Real UE flips this in AFortPlayerController's spawn path, which is exactly here: the pawn
+        // is spawned and possessed a few lines below. See APlayerController.bHasInitiallySpawned.
+        newPlayer.bHasInitiallySpawned = true;
 
         // Simplified stand-in for AGameModeBase::RestartPlayer.
         var spawnInfo = new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient };

@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Core.Objects;
+﻿namespace AFortOnlineBeacon.Core.Objects;
 
 /// <summary>
 ///     Models a plain, already-loaded on-disk asset (a UObject inside a /Game package) so it can be
@@ -38,5 +38,37 @@ internal static class UAssetRegistry {
 
         Assets[path] = asset;
         return asset;
+    }
+
+    /// <summary>
+    ///     Same idea as <see cref="GetOrCreate"/> but for an object nested several levels deep, e.g. a
+    ///     net-startup actor placed in a map:
+    ///
+    ///         /Game/Athena/Maps/Athena_Terrain.Athena_Terrain:PersistentLevel.DO_NOT_DELETE_FortWorldManager
+    ///
+    ///     UPackageMapClient.InternalWriteObject exports an object by (name, outer's NetGUID) and
+    ///     recurses on the outer, so the whole chain has to exist as real UObjects here or the client
+    ///     gets a package name it cannot find. That chain is
+    ///     UPackage -> UWorld -> ULevel("PersistentLevel") -> AActor, and the separators in the path
+    ///     ('.' and ':') are both just "next object down".
+    /// </summary>
+    public static UObject GetOrCreateSubObject(string path) {
+        if (Assets.TryGetValue(path, out var existing)) return existing;
+
+        var lastSlash = path.LastIndexOf('/');
+        var firstDot = path.IndexOf('.', lastSlash + 1);
+        if (firstDot < 0) throw new ArgumentException($"UAssetRegistry: '{path}' has no package/object separator", nameof(path));
+
+        UObject outer = UPackageRegistry.GetOrCreate(path[..firstDot]);
+
+        foreach (var component in path[(firstDot + 1)..].Split('.', ':')) {
+            var child = new UObject();
+            child.InitializeObjectProperties(outer, new FName(component));
+            child.SetFlags(EObjectFlags.RF_Public | EObjectFlags.RF_WasLoaded);
+            outer = child;
+        }
+
+        Assets[path] = outer;
+        return outer;
     }
 }

@@ -20,6 +20,29 @@ public class APlayerState : AInfo {
     /// </summary>
     public bool bHasFinishedLoading { get; set; }
 
+    /// <summary>
+    ///     AFortPlayerStateAthena::TeamIndex - wire handle 230, a plain uint8 (8 bits).
+    ///
+    ///     Athena reserves team numbers 0-2, so real players start at 3: the one working 10.40
+    ///     capture we have logs "NotifyGameMemberAdded: Adding Player state with UniqueId: ...,
+    ///     in team: 3, and in squad: 0" on the client just before its UI state becomes InGame_BR.
+    ///     The default 0 is not a legal Athena team at all.
+    /// </summary>
+    /// <summary>
+    ///     APlayerState::UniqueId - wire handle 25. The client sends its own id in NMT_Login and
+    ///     this hands it straight back, which is how every id-keyed system on the client finds this
+    ///     player: the working 10.40 capture logs "HandleZonePlayerStateInitialized: [MCP:5d56...]"
+    ///     and "NotifyGameMemberAdded: Adding Player state with UniqueId: MCP:5d56..., in team: 3",
+    ///     both of which look a PlayerState up BY ID. Until this landed the client's PlayerState had
+    ///     no id at all, so no such lookup could ever match.
+    /// </summary>
+    public FUniqueNetIdRepl? UniqueId { get; set; }
+
+    public byte TeamIndex { get; set; } = 3;
+
+    /// <summary>AFortPlayerStateAthena::SquadId - wire handle 248, a plain uint8. 0 for solo.</summary>
+    public byte SquadId { get; set; }
+
     public bool bHasStartedPlaying { get; set; }
 
     /// <summary>

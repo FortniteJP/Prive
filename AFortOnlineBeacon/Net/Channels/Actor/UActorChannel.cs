@@ -69,9 +69,21 @@ public class UActorChannel : UChannel {
     }
 
     private static HashSet<string> GetInitialReplicatedPropertiesCore(AActor actor) => actor switch {
-        AGameState => new HashSet<string> { "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState", "FortTimeOfDayManager" },
-        APlayerState => new HashSet<string> { "RemoteRole", "Role", "PlayerNamePrivate", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
-            "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]" },
+        // The Athena block (WarmupCountdown*/AircraftStartTime/TotalPlayers/PlayersLeft/
+        // CurrentPlaylistId/GamePhase/bGameModeWillSkipAircraft) mirrors what raider3.5 sets in
+        // Logic/Game.h::OnReadyToStartMatch on a real injected 10.40 server. Until this landed the
+        // client's GameState looked like a match that had never left EAthenaGamePhase::None, with
+        // no playlist id and a battle bus it was still expecting to be put on.
+        AGameState => new HashSet<string> {
+            "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState", "FortTimeOfDayManager",
+            "WorldManager",
+            "WarmupCountdownStartTime", "WarmupCountdownEndTime", "AircraftStartTime",
+            "TotalPlayers", "PlayersLeft", "CurrentPlaylistId", "GamePhase",
+            "CurrentPlaylistInfo.BasePlaylist", "bGameModeWillSkipAircraft"
+        },
+        APlayerState => new HashSet<string> { "RemoteRole", "Role", "UniqueId", "PlayerNamePrivate", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
+            "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]",
+            "TeamIndex", "SquadId" },
         // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
         // FRepLayout at all - see NativeRepLayouts.InventoryProps.
@@ -84,7 +96,7 @@ public class UActorChannel : UChannel {
         // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
         // with no controller and no player state.
         APawn => new HashSet<string> { "RemoteRole", "Role", "Owner", "PlayerState", "Controller" },
-        APlayerController => new HashSet<string> { "RemoteRole", "Role", "bHasServerFinishedLoading", "PlayerState", "Pawn", "WorldInventory" },
+        APlayerController => new HashSet<string> { "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading", "PlayerState", "Pawn", "WorldInventory" },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
 
@@ -283,22 +295,50 @@ public class UActorChannel : UChannel {
     ///     framing here is still the prerequisite for any real item replication later.
     /// </summary>
     private unsafe void WriteCustomDeltaProperties(FNetBitWriter payload) {
-        if (Actor is not AFortInventory || Connection == null) return;
+        if (Connection == null) return;
 
-        var classCache = NativeClassNetCache.Get(Actor);
-        var field = classCache.GetFromName("Inventory");
+        switch (Actor) {
+            case AFortInventory inventory:
+                WriteCustomDeltaField(payload, "Inventory", fieldPayload =>
+                    FFastArraySerializerWriter.WriteItemListDelta(fieldPayload, inventory.Inventory));
+                break;
+
+            // AFortGameStateAthena::GameMemberInfoArray - the team/squad roster the client looks up
+            // by unique id. See FFastArraySerializerWriter.WriteGameMemberInfoArrayDelta.
+            case AGameState gameState when gameState.GameMemberInfoArray.Count > 0:
+                WriteCustomDeltaField(payload, "GameMemberInfoArray", fieldPayload =>
+                    FFastArraySerializerWriter.WriteGameMemberInfoArrayDelta(fieldPayload, gameState.GameMemberInfoArray));
+                break;
+
+            // NOTE: AFortGameStateAthena::CurrentPlaylistInfo is deliberately NOT sent as a custom
+            // delta field. Handle 155 in the ordinary property stream already delivers BasePlaylist
+            // (live-confirmed: the client logs OnRep_CurrentPlaylistInfo -> LoadCurrentPlaylistData
+            // -> OnPlaylistDataLoadCompleted for Playlist_DefaultSolo), and a bare
+            // FFastArraySerializer header on the same property makes the client log
+            // "NetDeltaSerialize - Mismatch read" and permanently mark the field bIncompatible for
+            // the connection (DataReplication.cpp:1058-1068). Whatever Fortnite's hand-written
+            // FPlaylistPropertyArray::NetDeltaSerialize reads, it is not the stock 4-int32 header -
+            // three live runs pinned the reader to consuming fewer bits than that. See
+            // FFastArraySerializerWriter.WritePlaylistPropertyArrayDelta for the measurements.
+        }
+    }
+
+    /// <summary>
+    ///     Writes one Custom Delta property as a ClassNetCache-indexed field. Identical framing to
+    ///     SendRpc's below, which is the point: real UE routes custom delta properties and RPCs
+    ///     through the very same UActorChannel::WriteFieldHeaderAndPayload.
+    /// </summary>
+    private unsafe void WriteCustomDeltaField(FNetBitWriter payload, string fieldName, Action<FNetBitWriter> writeDelta) {
+        var classCache = NativeClassNetCache.Get(Actor!);
+        var field = classCache.GetFromName(fieldName);
         if (field == null) {
-            Console.WriteLine("WriteCustomDeltaProperties: 'Inventory' not found in AFortInventory's ClassNetCache, not sending");
+            Console.WriteLine($"WriteCustomDeltaProperties: '{fieldName}' not found in {Actor!.GetType().Name}'s ClassNetCache, not sending");
             return;
         }
 
-        var inventory = (AFortInventory) Actor;
-        var fieldPayload = new FNetBitWriter(Connection.PackageMap, 256);
-        FFastArraySerializerWriter.WriteItemListDelta(fieldPayload, inventory.Inventory);
+        var fieldPayload = new FNetBitWriter(Connection!.PackageMap, 256);
+        writeDelta(fieldPayload);
 
-        // Identical framing to SendClientRestart's RPC field below, which is the point: real UE
-        // routes custom delta properties and RPCs through the very same
-        // UActorChannel::WriteFieldHeaderAndPayload.
         var fieldIndex = (uint) field.FieldNetIndex;
         payload.SerializeInt(&fieldIndex, (uint) (classCache.GetMaxIndex() + 1));
         var fieldBits = (uint) fieldPayload.GetNumBits();
@@ -306,7 +346,7 @@ public class UActorChannel : UChannel {
         var fieldData = fieldPayload.GetData();
         fixed (byte* p = fieldData) payload.SerializeBits(p, fieldPayload.GetNumBits());
 
-        Console.WriteLine($"WriteCustomDeltaProperties: Inventory fieldIndex={fieldIndex} maxIndex={classCache.GetMaxIndex()} items={inventory.Inventory.Count} fieldBits={fieldBits}");
+        Console.WriteLine($"WriteCustomDeltaProperties: {fieldName} fieldIndex={fieldIndex} maxIndex={classCache.GetMaxIndex()} fieldBits={fieldBits}");
     }
 
     public void SendClientRestart(APawn pawn) => SendPawnRpc("ClientRestart", pawn);

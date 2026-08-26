@@ -8,6 +8,15 @@ public class APlayerController : AController {
     public FVector? LastSpectatorSyncLocation { get; set; }
     public FRotator? LastSpectatorSyncRotation { get; set; }
 
+    /// <summary>
+    ///     AFortPlayerController::bHasInitiallySpawned - wire handle 21, one bit. Real UE sets this
+    ///     in AFortPlayerController's spawn path once the player has actually been put into the
+    ///     zone; nothing on the client can turn it on by itself. Sent alongside
+    ///     bHasServerFinishedLoading (handle 22) since both describe the same "this player is really
+    ///     in the match now" fact and the client checks them in different places.
+    /// </summary>
+    public bool bHasInitiallySpawned { get; set; }
+
     /// <summary>AFortPlayerController's own property - see NativeRepLayouts.PlayerControllerProps for why this matters.</summary>
     public bool bHasServerFinishedLoading { get; set; }
 

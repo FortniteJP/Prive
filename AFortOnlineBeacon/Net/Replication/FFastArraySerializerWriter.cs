@@ -137,6 +137,84 @@ internal static class FFastArraySerializerWriter {
         WriteEmptyArray(payload);  // GenericAttributeValues
     }
 
+    /// <summary>
+    ///     Writes AFortGameStateAthena::CurrentPlaylistInfo (an FPlaylistPropertyArray).
+    ///
+    ///     MEASURED, not guessed. Two live runs against a real 10.40 client, one with BasePlaylist
+    ///     written before the FastArray header and one after, produced two DIFFERENT errors, and
+    ///     only one reader shape explains both. Payload was 137 bits either way
+    ///     (1 flag + 8 NetGUID + 4x32 header):
+    ///
+    ///       base_first  -> "FBitReader::SetOverflowed() called! (ReadLen: 32, Remaining: 8, Max: 137)"
+    ///                      The reader took our 8 NetGUID bits as the start of ArrayReplicationKey,
+    ///                      which shifted the header by one byte and made NumDeletes read as 255;
+    ///                      it then tried to read the first deleted ID (32 bits) at bit 129 with 8
+    ///                      left. Every number in that message is reproduced exactly by that model.
+    ///       array_first -> "NetDeltaSerialize - Mismatch read" (ReceiveCustomDeltaProperty's
+    ///                      Reader.GetBitsLeft() != 0 branch). The reader consumed exactly
+    ///                      1 + 128 = 129 bits and left our 8 trailing NetGUID bits untouched.
+    ///
+    ///     So this struct's reader is the PLAIN FFastArraySerializer path and reads nothing else -
+    ///     BasePlaylist is not in the custom-delta payload at all. It goes through the ordinary
+    ///     RepLayout handle stream instead, at handle 155; see NativeRepLayouts.GameStateProps.
+    ///     (Real UE never sends a custom-delta parent's handles - CompareProperties skips them at
+    ///     RepLayout.cpp:4113/4269 - but the RECEIVE side has no such check: ReceiveProperties_r
+    ///     takes any handle it is given, writes the value, and queues the parent's RepNotify, which
+    ///     for this parent is OnRep_CurrentPlaylistInfo.)
+    ///
+    ///     PropertyOverrides is left empty: overrides are hotfix/LTM tweaks layered on the base
+    ///     playlist, and the client is happy with none.
+    /// </summary>
+    public static void WritePlaylistPropertyArrayDelta(FNetBitWriter payload) {
+        payload.WriteBit(false); // bSupportsFastArrayDelta - see class doc; never true here.
+
+        WriteInt32(payload, 0);  // ArrayReplicationKey - the array has been marked dirty once
+        WriteInt32(payload, -1); // BaseReplicationKey (INDEX_NONE: no previous state)
+        WriteInt32(payload, 0);  // NumDeletes
+        WriteInt32(payload, 0);  // NumChanged - no FPropertyOverride entries
+    }
+
+    /// <summary>
+    ///     Writes AFortGameStateAthena::GameMemberInfoArray (FGameMemberInfoArray, ClassNetCache
+    ///     field 135) with one FGameMemberInfo per player.
+    ///
+    ///     This is what makes the client call AFortGameStateAthena::NotifyGameMemberAdded, whose own
+    ///     format strings give the whole game away:
+    ///         "%s: Adding Player state with UniqueId: %s, in team: %d, and in squad: %d"
+    ///         "%s: Didn't find existing player state with UniqueId: %s, in team: %d, and in squad: %d"
+    ///     i.e. the array is the client's team/squad roster and it is keyed BY UNIQUE ID - which is
+    ///     why APlayerState::UniqueId (handle 25) had to land first.
+    ///
+    ///     Unlike FPlaylistPropertyArray, this struct adds no replicated members of its own beyond
+    ///     Members (OwningGameState is RepSkip), so the stock FFastArraySerializer header should be
+    ///     the whole story here.
+    ///
+    ///     FGameMemberInfo derives from FFastArraySerializerItem, whose three members are all
+    ///     RepSkip, so the item body is just its own three properties in declaration order:
+    ///     SquadId (uint8, 8 bits), TeamIndex (uint8, 8 bits), MemberUniqueId (FUniqueNetIdRepl,
+    ///     one atomic PropertyNetId cmd).
+    /// </summary>
+    public static unsafe void WriteGameMemberInfoArrayDelta(FNetBitWriter payload, IReadOnlyList<FGameMemberInfo> members) {
+        payload.WriteBit(false); // bSupportsFastArrayDelta - see class doc; never true here.
+
+        WriteInt32(payload, 0);              // ArrayReplicationKey - MarkItemDirty has run
+        WriteInt32(payload, -1);             // BaseReplicationKey (INDEX_NONE: no previous state)
+        WriteInt32(payload, 0);              // NumDeletes
+        WriteInt32(payload, members.Count);  // NumChanged
+
+        foreach (var member in members) {
+            WriteInt32(payload, member.ReplicationId);
+
+            var squadId = member.SquadId;
+            payload.SerializeBits(&squadId, 8);
+
+            var teamIndex = member.TeamIndex;
+            payload.SerializeBits(&teamIndex, 8);
+
+            FUniqueNetIdRepl.Write(payload, member.MemberUniqueId ?? new FUniqueNetIdRepl());
+        }
+    }
+
     /// <summary>A dynamic array member inside a struct is a raw uint16 count then the elements - see SerializeProperties_DynamicArray_r.</summary>
     private static unsafe void WriteEmptyArray(FNetBitWriter payload) {
         ushort num = 0;

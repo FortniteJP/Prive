@@ -82,6 +82,40 @@ public sealed class FRepLayout {
                 continue;
             }
 
+            if (cmd.Def.Kind == ERepPropertyKind.NetId) {
+                if (cmd.Def.GetNetIdValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no net-id value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                FUniqueNetIdRepl.Write(payload, cmd.Def.GetNetIdValue(instance) ?? new FUniqueNetIdRepl());
+                continue;
+            }
+
+            if (cmd.Def.Kind is ERepPropertyKind.Int32 or ERepPropertyKind.Float) {
+                // Neither UIntProperty nor UFloatProperty overrides NetSerializeItem, so UProperty's
+                // default SerializeItem runs: a plain 4-byte archive write, which on an FBitWriter is
+                // 32 raw bits.
+                uint rawBits;
+                if (cmd.Def.Kind == ERepPropertyKind.Int32) {
+                    if (cmd.Def.GetIntValue == null) {
+                        throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no int value serializer yet, can't be in a changed set.");
+                    }
+
+                    rawBits = (uint) cmd.Def.GetIntValue(instance);
+                } else {
+                    if (cmd.Def.GetFloatValue == null) {
+                        throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no float value serializer yet, can't be in a changed set.");
+                    }
+
+                    rawBits = BitConverter.SingleToUInt32Bits(cmd.Def.GetFloatValue(instance));
+                }
+
+                payload.SerializeIntPacked(&handle);
+                payload.SerializeBits(&rawBits, 32);
+                continue;
+            }
+
             if (cmd.Def.Kind == ERepPropertyKind.String) {
                 if (cmd.Def.GetStringValue == null) {
                     throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no string value serializer yet, can't be in a changed set.");

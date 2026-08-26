@@ -68,6 +68,45 @@ if (mapPath.StartsWith("find:", StringComparison.OrdinalIgnoreCase)) {
     return 0;
 }
 
+// "grep:<needle>" scans the raw bytes of every .uasset under the ClassFilter prefix for a literal
+// ASCII string. A cooked package's NAME TABLE is plain text, so this finds "which Blueprints
+// reference X" - an import of /Script/FortniteUI.FortAsyncAction_SetUIState, an enum entry name,
+// a function name - without needing to parse or decompile anything. Cheap enough to sweep a whole
+// content subtree, and the only practical way to answer that question here: this build's .text is
+// encrypted, so the native side cannot be disassembled (see Tools/BinXref).
+if (mapPath.StartsWith("grep:", StringComparison.OrdinalIgnoreCase)) {
+    var needle = System.Text.Encoding.ASCII.GetBytes(mapPath["grep:".Length..]);
+    var prefix = classFilter == "PlayerStart" ? "FortniteGame/Content/" : classFilter;
+
+    var candidates = provider.Files.Keys
+        .Where(f => f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase)
+                 && f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    Console.WriteLine($"Scanning {candidates.Count} .uasset under '{prefix}' for '{mapPath["grep:".Length..]}'...");
+
+    var hits = 0;
+    foreach (var f in candidates) {
+        byte[] bytes;
+        try { bytes = provider.SaveAsset(f); } catch { continue; }
+
+        for (var i = 0; i + needle.Length <= bytes.Length; i++) {
+            var ok = true;
+            for (var j = 0; j < needle.Length; j++) {
+                if (bytes[i + j] != needle[j]) { ok = false; break; }
+            }
+            if (!ok) continue;
+            Console.WriteLine("  " + f);
+            hits++;
+            break;
+        }
+    }
+
+    Console.WriteLine($"{hits} hit(s).");
+    return 0;
+}
+
 // A path that is not an exact file is treated as a PREFIX and every .umap under it is scanned.
 // Athena's PlayerStarts do not live in the persistent level - Athena_Terrain.umap is just HLODs plus
 // 19 LevelStreamingAlwaysLoaded references - so scanning the whole Maps directory in one mount is

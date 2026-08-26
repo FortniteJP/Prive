@@ -46,6 +46,14 @@ TARGETS = [
     ("FortPlayerPawnOwnFields",               "FortniteGame", "FortPlayerPawn",               "FortniteGame"),
     ("FortPlayerPawnAthenaOwnFields",         "FortniteGame", "FortPlayerPawnAthena",         "FortniteGame"),
     ("FortInventoryOwnFields",                "FortniteGame", "FortInventory",                "FortniteGame"),
+    ("GameStateBaseOwnFields",                "Engine",       "GameStateBase",                "Engine"),
+    ("GameStateOwnFields",                    "Engine",       "GameState",                    "Engine"),
+    ("FortGameStateBaseOwnFields",            "FortniteGame", "FortGameStateBase",            "FortniteGame"),
+    ("FortGameStateOwnFields",                "FortniteGame", "FortGameState",                "FortniteGame"),
+    ("FortGameState_InGameOwnFields",         "FortniteGame", "FortGameState_InGame",         "FortniteGame"),
+    ("FortGameStateZoneOwnFields",            "FortniteGame", "FortGameStateZone",            "FortniteGame"),
+    ("FortGameStatePvPOwnFields",             "FortniteGame", "FortGameStatePvP",             "FortniteGame"),
+    ("FortGameStateAthenaOwnFields",          "FortniteGame", "FortGameStateAthena",          "FortniteGame"),
 ]
 
 
