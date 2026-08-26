@@ -99,6 +99,15 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         RealTimeSeconds += deltaTime;
         AudioTimeSeconds += deltaTime;
 
+        // AGameStateBase::PostInitializeComponents starts a repeating timer for this on the
+        // authority (GameStateBase.cpp:56-59). There is no timer manager here, so it is driven off
+        // the world tick against the same clock instead.
+        var gameState = _AuthorityGameMode?.GameState;
+        if (gameState != null && TimeSeconds >= _nextServerTimeUpdate) {
+            _nextServerTimeUpdate = TimeSeconds + AGameState.ServerWorldTimeSecondsUpdateFrequency;
+            gameState.UpdateServerTimeSeconds();
+        }
+
         if (NetDriver != null) {
             NetDriver.TickDispatch(deltaTime);
             NetDriver.PostTickDispatch();
@@ -107,6 +116,8 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
             NetDriver.PostTickFlush();
         }
     }
+
+    private float _nextServerTimeUpdate;
 
     public void SetGameInstance(UGameInstance instance) => _OwningGameInstance = instance;
 

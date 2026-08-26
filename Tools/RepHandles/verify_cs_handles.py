@@ -22,11 +22,15 @@ TABLES = [
     ("GameStateProps", ["ActorProps"], "AFortGameStateAthena"),
     ("PlayerStateProps", ["ActorProps"], "AFortPlayerStateAthena"),
     ("PlayerControllerProps", ["ActorProps", "ControllerProps"], "AFortPlayerControllerAthena"),
+    ("PickupProps", ["ActorProps"], "AFortPickupAthena"),
 ]
 
 ENTRY_RE = re.compile(
     r'Reserved\("([^"]+)"'
-    r'|Name = "([^"]+)",[^\n]*\n\s*Kind = ERepPropertyKind\.(\w+)')
+    # Kind may sit on the Name line (compact one-line entries) or on the next one,
+    # with or without a trailing comment between them - a table must not have to be
+    # formatted a particular way to be checkable.
+    r'|Name = "([^"]+)",[^\n]*\s*Kind = ERepPropertyKind\.(\w+)')
 
 
 def cs_names(src, var):

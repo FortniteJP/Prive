@@ -9,6 +9,9 @@
 ///     see AGameModeBase.Login, which does the same here.
 /// </summary>
 public class APlayerState : AInfo {
+
+    /// <summary>APlayerState::APlayerState (PlayerState.cpp:22) - every client needs every player's state (scoreboard, teams).</summary>
+    public APlayerState() => bAlwaysRelevant = true;
     /// <summary>
     ///     AFortPlayerState::bHasFinishedLoading - wire handle 29, the bit immediately before
     ///     bHasStartedPlaying (both live in the bitfield byte at 0x0390: BitIndex 2 and 3, and

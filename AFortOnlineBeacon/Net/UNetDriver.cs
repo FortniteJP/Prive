@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Net;
 
 namespace AFortOnlineBeacon.Net;
@@ -117,7 +117,7 @@ public abstract class UNetDriver {
     /// </summary>
     public virtual void TickFlush(float deltaTime) {
         if (IsServer() && ClientConnections.Count > 0) {
-            // TODO: (When actors are implemented) ServerReplicateActors
+            ServerReplicateActors();
         }
 
         foreach (var connection in ClientConnections) connection.Tick(deltaTime);
@@ -129,6 +129,93 @@ public abstract class UNetDriver {
         }
         
         // TODO: (When actors are implemented) CleanupStaleDormantReplicators
+    }
+
+    /// <summary>
+    ///     Set false by REP_TICK=0. The escape hatch for the whole ongoing-replication pass: before
+    ///     this existed every channel was a one-shot burst at join, so turning it off restores
+    ///     exactly the behaviour every earlier live test ran against.
+    /// </summary>
+    private static readonly bool RepTickEnabled = Environment.GetEnvironmentVariable("REP_TICK") != "0";
+
+    /// <summary>
+    ///     Heavily reduced UNetDriver::ServerReplicateActors. Real UE builds a prioritised,
+    ///     relevancy-filtered list of every network actor per connection and opens/closes channels
+    ///     as actors come and go; Fortnite replaces that wholesale with UReplicationGraph. This
+    ///     project opens its channels by hand in UWorld.SpawnPlayActor and never closes them, so
+    ///     the only part that is actually missing is the last step of the real function: walk the
+    ///     connection's open channels and ask each one to replicate what changed.
+    ///
+    ///     Everything that decides WHETHER to send lives in UActorChannel.ReplicateActorUpdate -
+    ///     the NetUpdateFrequency gate, the diff against the shadow state, and the "changed nothing,
+    ///     send nothing" early out. This just drives it.
+    /// </summary>
+    protected virtual int ServerReplicateActors() {
+        if (!RepTickEnabled) return 0;
+
+        var updated = 0;
+
+        foreach (var connection in ClientConnections) {
+            updated += OpenChannelsForNewlyRelevantActors(connection);
+
+            // Snapshotted because a send can close the connection (a reliable overflow does), which
+            // mutates OpenChannels underneath the walk.
+            foreach (var channel in connection.OpenChannels.ToArray()) {
+                if (channel is not UActorChannel actorChannel) continue;
+
+                if (actorChannel.ReplicateActorUpdate()) updated++;
+
+                // A destroyed actor's channel is closed AFTER its last property update, so a final
+                // state change (a pickup's bPickedUp, say) still gets a chance to go out ahead of
+                // the close. Closing is the only thing that removes the actor from the client -
+                // marking it destroyed server-side is invisible on its own.
+                if (actorChannel.Actor is { } actor && actor.IsPendingKillPending() && !actorChannel.Closing) {
+                    actorChannel.Close(EChannelCloseReason.Destroyed);
+                    updated++;
+                }
+            }
+        }
+
+        return updated;
+    }
+
+    /// <summary>
+    ///     The half of UNetDriver::ServerReplicateActors this project never had: giving a connection
+    ///     a channel for an actor that became relevant AFTER it joined. Until this existed, the only
+    ///     channels that ever opened were the fixed set UWorld.SpawnPlayActor opens by hand during
+    ///     login, so nothing spawned mid-match - a dropped weapon's pickup, a projectile, a second
+    ///     player - could ever reach a client.
+    ///
+    ///     Deliberately does nothing until the connection's own PlayerController has a channel.
+    ///     SpawnPlayActor opens the login channels in a specific ORDER that matters (the
+    ///     TimeOfDayManager before the GameState, so handle 22 has a NetGUID to point at; the
+    ///     inventory before the PlayerController, likewise for WorldInventory) and this pass must
+    ///     not interleave itself into the middle of that.
+    /// </summary>
+    private int OpenChannelsForNewlyRelevantActors(UNetConnection connection) {
+        var viewer = connection.PlayerController;
+        if (viewer == null || connection.FindActorChannel(viewer) == null) return 0;
+
+        var opened = 0;
+
+        foreach (var actor in NetworkObjectList.ToArray()) {
+            if (!actor.bReplicates || actor.IsPendingKillPending()) continue;
+            if (connection.FindActorChannel(actor) != null) continue;
+            if (!actor.IsNetRelevantFor(viewer)) continue;
+
+            var channel = (UActorChannel) connection.CreateChannelByName(
+                EName.Actor, EChannelCreateFlags.OpenedLocally, UnrealConstants.IndexNone);
+
+            channel.SetChannelActor(actor);
+
+            Console.WriteLine($"ServerReplicateActors: opening ChIndex={channel.ChIndex} for newly relevant " +
+                              $"{actor.GetType().Name} '{actor.GetFName()}'");
+
+            channel.ReplicateActor();
+            opened++;
+        }
+
+        return opened;
     }
 
     /// <summary>
@@ -204,26 +291,17 @@ public abstract class UNetDriver {
         };
     }
 
-    public void AddNetworkActor(AActor actor) {
-        // if (!IsDormInitialStartupActor(Actor))
-        // {
-        //     GetNetworkObjectList().FindOrAdd(Actor, this);
-        //     if (ReplicationDriver)
-        //     {
-        //         ReplicationDriver->AddNetworkActor(Actor);
-        //     }
-        // }
-    }
+    /// <summary>
+    ///     FNetworkObjectList - every actor the world has spawned that COULD replicate. Membership is
+    ///     not the same as "replicates": UWorld.SpawnActor adds an actor here before anything calls
+    ///     SetReplicates on it, exactly as real UE does, so the bReplicates test belongs at
+    ///     replication time (ServerReplicateActors) rather than here.
+    /// </summary>
+    public HashSet<AActor> NetworkObjectList { get; } = new();
 
-    public void RemoveNetworkActor(AActor actor) {
-        // Remove from renamed list if destroyed
-        // RenamedStartupActors.Remove(Actor->GetFName());
-        //
-        // if (ReplicationDriver)
-        // {
-        //     ReplicationDriver->RemoveNetworkActor(Actor);
-        // }
-    }
+    public void AddNetworkActor(AActor actor) => NetworkObjectList.Add(actor);
+
+    public void RemoveNetworkActor(AActor actor) => NetworkObjectList.Remove(actor);
 
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

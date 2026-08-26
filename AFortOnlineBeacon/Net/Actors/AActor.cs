@@ -44,6 +44,50 @@ public class AActor : UObject {
     public override bool IsSupportedForNetworking() => true;
 
     /// <summary>
+    ///     AActor::bAlwaysRelevant (Actor.h:158) - "always relevant for network (overrides
+    ///     bOnlyRelevantToOwner)". False on AActor; AGameStateBase and APlayerState set it true.
+    /// </summary>
+    public bool bAlwaysRelevant { get; protected init; }
+
+    /// <summary>
+    ///     AActor::bOnlyRelevantToOwner (Actor.h:154). False on AActor; AController sets it true
+    ///     (Controller.cpp:42), which is what keeps one player's PlayerController off every other
+    ///     player's connection.
+    /// </summary>
+    public bool bOnlyRelevantToOwner { get; protected init; }
+
+    /// <summary>AActor::IsOwnedBy - walks the whole owner chain, not just the immediate owner.</summary>
+    public bool IsOwnedBy(AActor? testOwner) {
+        for (var actor = this; actor != null; actor = actor.Owner) {
+            if (actor == testOwner) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     Reduced AActor::IsNetRelevantFor (ActorReplication.cpp:291). The distance-culling tail of
+    ///     the real function is deliberately absent: nothing here simulates or tracks positions well
+    ///     enough to cull on them, and culling an actor the client should have is far worse than
+    ///     replicating one it does not strictly need. So this answers only the ownership questions,
+    ///     which are the ones that would otherwise leak one player's private actors to another.
+    /// </summary>
+    public virtual bool IsNetRelevantFor(AActor? realViewer) {
+        if (bAlwaysRelevant || IsOwnedBy(realViewer) || this == realViewer) return true;
+
+        return !bOnlyRelevantToOwner;
+    }
+
+    /// <summary>
+    ///     AActor::NetUpdateFrequency (Actor.cpp:106) - how many times a second this actor is
+    ///     considered for replication. UE 4.23 leaves every class in the login path on this default;
+    ///     none of PlayerState/GameState/Pawn/PlayerController overrides it. It is a ceiling, not a
+    ///     rate: the server tick (60Hz here) clamps it, and a pass that finds no changed property
+    ///     sends nothing at all, so the frequency only bounds how quickly a change can go out.
+    /// </summary>
+    public float NetUpdateFrequency { get; set; } = 100.0f;
+
+    /// <summary>
     ///     Set whether this actor replicates to network clients. When this actor is spawned on the server it will be sent to clients as well.
     ///     Properties flagged for replication will update on clients if they change on the server.
     ///     Internally changes the RemoteRole property and handles the cases where the actor needs to be added to the network actor list.
@@ -85,6 +129,20 @@ public class AActor : UObject {
     public bool IsActorInitialized() => bActorInitialized;
 
     public bool IsPendingKillPending() => bActorIsBeingDestroyed || IsPendingKill();
+
+    /// <summary>
+    ///     AActor::Destroy, reduced to the part that matters on the wire. Nothing here tears down
+    ///     components or unregisters from a level - there are none - but flagging the actor is what
+    ///     makes UNetDriver.ServerReplicateActors close its channels, which is what actually removes
+    ///     it from every client: UActorChannel::CleanUp on the receiving end calls
+    ///     DestroyActorAndComponents() for a channel closed with EChannelCloseReason::Destroyed.
+    /// </summary>
+    public void Destroy() {
+        if (bActorIsBeingDestroyed) return;
+
+        bActorIsBeingDestroyed = true;
+        GetWorld()?.NetDriver?.RemoveNetworkActor(this);
+    }
 
     /// <summary>
     ///     AActor::Owner - wire handle 13, live-probe-confirmed. Replicated as a plain ObjectRef, so

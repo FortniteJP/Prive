@@ -9,6 +9,9 @@
 ///     yet, so it's set true as soon as this actor is spawned - see AGameModeBase.InitGameState.
 /// </summary>
 public class AGameState : AInfo {
+
+    /// <summary>AGameStateBase::AGameStateBase (GameStateBase.cpp:23).</summary>
+    public AGameState() => bAlwaysRelevant = true;
     /// <summary>
     ///     AFortGameStateBase::FortTimeOfDayManager - wire handle 22, an ObjectRef. Athena's
     ///     loading screen refuses to drop while this is null ("Waiting for time of day manager"),
@@ -40,6 +43,34 @@ public class AGameState : AInfo {
     // real injected 10.40 server - that is a known-good client-facing configuration for a match
     // that skips the battle bus entirely.
     // ------------------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     AGameStateBase::ReplicatedWorldTimeSeconds - wire handle 19, live-probed. The server's
+    ///     clock, and the only thing that lets the client convert its own time into the server's:
+    ///     AGameStateBase::OnRep_ReplicatedWorldTimeSeconds computes
+    ///     ServerWorldTimeSecondsDelta = ReplicatedWorldTimeSeconds - World->GetTimeSeconds(), and
+    ///     GetServerWorldTimeSeconds() is what every deadline the server sends - WarmupCountdownEndTime,
+    ///     AircraftStartTime - is meant to be compared against. Until this replicated, the client was
+    ///     measuring those against a clock that started when IT loaded the map.
+    ///
+    ///     This is also the first property in the project to be replicated CONTINUOUSLY rather than
+    ///     once at join, so it is what proves UNetDriver.ServerReplicateActors actually works.
+    /// </summary>
+    public float ReplicatedWorldTimeSeconds { get; set; }
+
+    /// <summary>
+    ///     AGameStateBase::UpdateServerTimeSeconds (GameStateBase.cpp:147). Real UE runs this on a
+    ///     repeating timer at ServerWorldTimeSecondsUpdateFrequency (5 seconds, GameStateBase.cpp:33)
+    ///     rather than every frame - the client interpolates in between using its own clock, so the
+    ///     replicated value only has to correct the drift.
+    /// </summary>
+    public void UpdateServerTimeSeconds() {
+        var world = GetWorld();
+        if (world != null) ReplicatedWorldTimeSeconds = world.TimeSeconds;
+    }
+
+    /// <summary>AGameStateBase::ServerWorldTimeSecondsUpdateFrequency - GameStateBase.cpp:33.</summary>
+    public const float ServerWorldTimeSecondsUpdateFrequency = 5.0f;
 
     /// <summary>AFortGameStateAthena::WarmupCountdownStartTime - wire handle 109.</summary>
     public float WarmupCountdownStartTime { get; set; }
@@ -120,7 +151,7 @@ public class AGameState : AInfo {
     ///     squad: N" - one of the last client-side events the working 10.40 capture has and this
     ///     server did not.
     /// </summary>
-    public List<FGameMemberInfo> GameMemberInfoArray { get; } = new();
+    public FFastArraySerializer<FGameMemberInfo> GameMemberInfoArray { get; } = new();
 }
 
 /// <summary>

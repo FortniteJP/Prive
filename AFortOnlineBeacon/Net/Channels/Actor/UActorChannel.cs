@@ -18,6 +18,16 @@ public class UActorChannel : UChannel {
 
         var packageMap = (UPackageMapClient) Connection!.PackageMap!;
         ActorNetGUID = packageMap.GuidCache!.GetOrAssignNetGUID(inActor);
+
+        Connection.ActorChannels[inActor] = this;
+    }
+
+    protected override void CleanUp(bool bForDestroy, EChannelCloseReason closeReason) {
+        base.CleanUp(bForDestroy, closeReason);
+
+        // Leave the map consistent, or ServerReplicateActors would keep believing this connection
+        // still has a channel for the actor and never reopen one.
+        if (Actor != null) Connection?.ActorChannels.Remove(Actor);
     }
 
     /// <summary>
@@ -76,7 +86,7 @@ public class UActorChannel : UChannel {
         // no playlist id and a battle bus it was still expecting to be put on.
         AGameState => new HashSet<string> {
             "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState", "FortTimeOfDayManager",
-            "WorldManager",
+            "WorldManager", "ReplicatedWorldTimeSeconds",
             "WarmupCountdownStartTime", "WarmupCountdownEndTime", "AircraftStartTime",
             "TotalPlayers", "PlayersLeft", "CurrentPlaylistId", "GamePhase",
             "CurrentPlaylistInfo.BasePlaylist", "bGameModeWillSkipAircraft"
@@ -88,6 +98,27 @@ public class UActorChannel : UChannel {
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
         // FRepLayout at all - see NativeRepLayouts.InventoryProps.
         AFortInventory => new HashSet<string> { "RemoteRole", "Role", "Owner", "InventoryType" },
+        // AFortPickup: the whole PrimaryPickupItemEntry struct (handles 17-36, one per member) plus
+        // the two flags that say what kind of pickup it is and that it is already at rest. Every
+        // member has to be listed - RepLayout gave each one its own handle, and the client's
+        // OnRep_PrimaryPickupItemEntry sees whatever arrives, so a missing member is a zero.
+        AFortPickup => new HashSet<string> {
+            "RemoteRole", "Role",
+            "PrimaryPickupItemEntry.Count", "PrimaryPickupItemEntry.ItemDefinition",
+            "PrimaryPickupItemEntry.OrderIndex", "PrimaryPickupItemEntry.Durability",
+            "PrimaryPickupItemEntry.Level", "PrimaryPickupItemEntry.LoadedAmmo",
+            "PrimaryPickupItemEntry.ItemGuid.A", "PrimaryPickupItemEntry.ItemGuid.B",
+            "PrimaryPickupItemEntry.ItemGuid.C", "PrimaryPickupItemEntry.ItemGuid.D",
+            "PrimaryPickupItemEntry.StateValues", "PrimaryPickupItemEntry.AlterationInstances",
+            "PrimaryPickupItemEntry.GenericAttributeValues",
+            "PickupLocationData.LootInitialPosition", "PickupLocationData.LootFinalPosition",
+            "PickupLocationData.FinalTossRestLocation", "PickupLocationData.TossState",
+            "bTossedFromContainer", "bServerStoppedSimulation",
+            // Not sent as true at spawn - it is the per-tick diff that carries it, once
+            // ServerHandlePickup flips it. That makes this the first property in the project
+            // whose whole purpose is to change after the initial burst.
+            "bPickedUp"
+        },
         // WorldInventory maps to handle 34 as a plain ObjectRef - CONFIRMED live by the truncated
         // name probe, which reported "Property=WorldInventory, Parent=25, Cmd=53, ReadHandle=34"
         // with ReadLen=8, i.e. a packed NetGUID byte, matching PlayerState's own ObjectRef read at
@@ -96,7 +127,12 @@ public class UActorChannel : UChannel {
         // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
         // with no controller and no player state.
         APawn => new HashSet<string> { "RemoteRole", "Role", "Owner", "PlayerState", "Controller" },
-        APlayerController => new HashSet<string> { "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading", "PlayerState", "Pawn", "WorldInventory" },
+        APlayerController => new HashSet<string> {
+            "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
+            "PlayerState", "Pawn", "WorldInventory",
+            // Without this the client's inventory capacity is zero and it refuses every pickup.
+            "OverriddenBackpackSize"
+        },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
 
@@ -168,7 +204,7 @@ public class UActorChannel : UChannel {
             Console.WriteLine($"ReplicateActor: REPLAYOUT_PROBE_HANDLE={probeHandle} on {Actor.GetType().Name} - sending TRUNCATED name probe (RemoteRole anchor + bare handle, no value bits, no terminator) instead of the normal layout");
             HandleProbe.WriteTruncatedNameProbe(payload, Actor, probeHandle);
         } else {
-            NativeRepLayouts.Get(Actor).WriteChangedProperties(payload, Actor, GetInitialReplicatedProperties(Actor));
+            NativeRepLayouts.Get(Actor).WriteChangedProperties(payload, Actor, ReplicatedProperties);
             WriteCustomDeltaProperties(payload);
         }
 
@@ -185,6 +221,183 @@ public class UActorChannel : UChannel {
         foreach (var subobject in GetInitialReplicatedSubobjects(Actor)) ReplicateSubobject(subobject, bunch);
 
         SendBunch(bunch, false);
+
+        // Everything the burst just wrote is now the client's view of this actor, so record it -
+        // otherwise the first ReplicateActorUpdate would resend all of it as "changed".
+        NativeRepLayouts.Get(Actor).SeedShadowState(Actor, ReplicatedProperties, _shadowState);
+    }
+
+    /// <summary>
+    ///     The candidate property set for this channel's actor, resolved once. Doubles as the
+    ///     initial burst's changed set and as the set the per-tick diff walks - a property the
+    ///     server would never send at join is not one it should start sending later either.
+    ///
+    ///     Cached because GetInitialReplicatedProperties has side effects (the REP_DISABLE report
+    ///     writes to the console and to a file), and the diff pass runs every tick.
+    /// </summary>
+    private HashSet<string>? _replicatedProperties;
+
+    private HashSet<string> ReplicatedProperties =>
+        _replicatedProperties ??= GetInitialReplicatedProperties(Actor!);
+
+    /// <summary>
+    ///     What this channel has already put on the wire, per property name. Stands in for real UE's
+    ///     shadow buffer (FRepState::StaticBuffer) - see FRepLayout.GetComparableValue.
+    /// </summary>
+    private readonly Dictionary<string, object?> _shadowState = new();
+
+    /// <summary>
+    ///     Time, on the driver's clock, at which this channel is next allowed to consider the actor
+    ///     for replication. Real UE keeps the equivalent on the actor as
+    ///     AActor::NetUpdateTime/NetUpdateFrequency; it lives here because this project has one
+    ///     channel per actor per connection and no ServerReplicateActors prioritisation pass.
+    /// </summary>
+    private float _nextUpdateTime;
+
+    /// <summary>
+    ///     The ongoing half of UActorChannel::ReplicateActor - the branch real UE takes when
+    ///     OpenPacketId is already set (DataChannel.cpp:227-155): no spawn header, no bNetInitial,
+    ///     and an UNRELIABLE bunch. Unreliable matters here more than in real UE: this project's
+    ///     reliable queue is 256 entries deep and closes the connection when it overflows, so
+    ///     property updates at gameplay rate must never take that path. A dropped update is
+    ///     harmless - the property still differs from the shadow next tick, so it is simply sent
+    ///     again.
+    ///
+    ///     Sends nothing at all when nothing changed, which is the normal case.
+    /// </summary>
+    public unsafe bool ReplicateActorUpdate() {
+        if (Actor == null || Connection == null || Closing || Broken) return false;
+
+        // Not yet opened on the wire - the initial burst has not run, and there is nothing to diff
+        // against. ReplicateActor is what opens it.
+        if (OpenPacketId.First == UnrealConstants.IndexNone) return false;
+
+        // Wait for the open to be ACKED, not merely sent. These updates are unreliable and UDP is
+        // unordered, so one could otherwise overtake the reliable open bunch and reach a client that
+        // has no channel for it yet - UActorChannel::ProcessBunch drops those silently ("New actor
+        // channel received non-open packet"). Silently is the problem: the packet WAS delivered, so
+        // no NAK ever arrives to re-dirty the shadow, and the property would stay stale forever.
+        if (!OpenAcked) return false;
+
+        var driverTime = Connection.Driver!.GetElapsedTime();
+        if (driverTime < _nextUpdateTime) return false;
+
+        var frequency = Actor.NetUpdateFrequency > 0.0f ? Actor.NetUpdateFrequency : 1.0f;
+        _nextUpdateTime = driverTime + 1.0f / frequency;
+
+        var layout = NativeRepLayouts.Get(Actor);
+        var changed = layout.CompareProperties(Actor, ReplicatedProperties, _shadowState);
+
+        // Custom deltas go in their own bunch, so an actor with no changed RepLayout property can
+        // still have a changed fast array.
+        var wroteSomething = ReplicateCustomDeltaUpdate();
+
+        if (changed.Count == 0) return wroteSomething;
+
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = false;
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 64);
+        layout.WriteChangedProperties(payload, Actor, changedNames);
+
+        bunch.WriteBit(true); // bHasRepLayout
+        bunch.WriteBit(true); // bIsActor
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"ReplicateActorUpdate: {Actor.GetType().Name} ChIndex={ChIndex} " +
+                          $"changed=[{string.Join(", ", changedNames)}] numPayloadBits={numPayloadBits} " +
+                          $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        var packetRange = SendBunch(bunch, false);
+
+        // Only now, after the bunch is away - a shadow updated ahead of a send that never happened
+        // would make the property look unchanged forever.
+        FRepLayout.CommitShadowState(changed, _shadowState);
+
+        // ...but "away" is not "arrived". These bunches are unreliable, so remember what rode in
+        // which packet; a NAK has to undo the shadow update or the property is stale forever.
+        if (packetRange.First != UnrealConstants.IndexNone) _unackedUpdates[packetRange.First] = changed;
+
+        // Anything at or below the last delivered packet id has been resolved one way or the other -
+        // ack and nak are consumed strictly in order, so this watermark only moves forward.
+        if (_unackedUpdates.Count > 1) {
+            var acked = Connection.OutAckPacketId;
+            foreach (var packetId in _unackedUpdates.Keys.Where(id => id <= acked).ToArray()) {
+                _unackedUpdates.Remove(packetId);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Sends the actor's changed fast arrays as a content block of their own - bHasRepLayout
+    ///     false, which real UE also produces whenever RepLayout wrote nothing
+    ///     (DataReplication.cpp:1588); the client then skips ReceiveProperties and goes straight to
+    ///     the field loop.
+    ///
+    ///     Deliberately a SEPARATE, RELIABLE bunch rather than riding along in the unreliable
+    ///     property update. Real UE puts both in one content block and absorbs loss through
+    ///     FObjectReplicator::ReceivedNak rolling the custom delta base state back; this port has no
+    ///     such rollback, and a lost fast-array delta is unrecoverable - the base state has already
+    ///     advanced, so the change is never reconsidered and the client's inventory is permanently
+    ///     wrong. Reliability is affordable here in a way it is not for per-tick properties: fast
+    ///     arrays change on events (an item picked up, ammo spent), not every frame.
+    /// </summary>
+    private unsafe bool ReplicateCustomDeltaUpdate() {
+        using var payload = new FNetBitWriter(Connection!.PackageMap, 256);
+
+        if (!WriteCustomDeltaProperties(payload)) return false;
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        bunch.WriteBit(false); // bHasRepLayout - no property stream in this block
+        bunch.WriteBit(true);  // bIsActor
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"ReplicateCustomDeltaUpdate: {Actor!.GetType().Name} ChIndex={ChIndex} " +
+                          $"numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        SendBunch(bunch, false);
+
+        return true;
+    }
+
+    /// <summary>Property updates sent in an unreliable bunch, keyed by the packet that carried them.</summary>
+    private readonly Dictionary<int, List<(string Name, object? Value)>> _unackedUpdates = new();
+
+    /// <summary>
+    ///     Real UE re-dirties unreliable properties through FObjectReplicator::ReceivedNak /
+    ///     FRepChangedPropertyTracker. This is the same idea with this port's much simpler shadow:
+    ///     forget what the lost packet claimed to have delivered, so the next compare sees those
+    ///     properties as changed again and resends them.
+    ///
+    ///     Without this, a single dropped packet leaves a property permanently stale - it matches
+    ///     the shadow forever and is never reconsidered. Reliable bunches do not need it; the base
+    ///     implementation resends those outright.
+    /// </summary>
+    public override void ReceivedNak(int nakPacketId) {
+        base.ReceivedNak(nakPacketId);
+
+        if (!_unackedUpdates.Remove(nakPacketId, out var lost)) return;
+
+        foreach (var (name, _) in lost) _shadowState.Remove(name);
+
+        Console.WriteLine($"UActorChannel.ReceivedNak: ChIndex={ChIndex} packet {nakPacketId} was lost, " +
+                          $"re-dirtying [{string.Join(", ", lost.Select(entry => entry.Name))}]");
     }
 
     /// <summary>
@@ -306,20 +519,48 @@ public class UActorChannel : UChannel {
     ///     HandleInventoryLocalUpdate. Unconfirmed; if this does not move the client on, the field
     ///     framing here is still the prerequisite for any real item replication later.
     /// </summary>
-    private unsafe void WriteCustomDeltaProperties(FNetBitWriter payload) {
-        if (Connection == null) return;
+    /// <summary>
+    ///     What this connection was last sent for each of the actor's fast arrays, keyed by
+    ///     ClassNetCache field name. See FNetFastTArrayBaseState for why an accurate base key is
+    ///     load-bearing rather than cosmetic.
+    /// </summary>
+    private readonly Dictionary<string, FNetFastTArrayBaseState> _fastArrayBaseStates = new();
+
+    private FNetFastTArrayBaseState BaseStateFor(string fieldName) {
+        if (!_fastArrayBaseStates.TryGetValue(fieldName, out var state)) {
+            state = new FNetFastTArrayBaseState();
+            _fastArrayBaseStates[fieldName] = state;
+        }
+
+        return state;
+    }
+
+    /// <summary>
+    ///     Writes every custom delta field whose array has moved since this connection last saw it.
+    ///     Called both from the initial burst (where every base state is empty, so everything is
+    ///     "changed") and from the per-tick pass - the delta computation is identical, which is the
+    ///     point: the first send is just a delta against nothing.
+    ///
+    ///     Returns true when at least one field was written.
+    /// </summary>
+    private unsafe bool WriteCustomDeltaProperties(FNetBitWriter payload) {
+        if (Connection == null) return false;
+
+        var wroteSomething = false;
 
         switch (Actor) {
             case AFortInventory inventory:
-                WriteCustomDeltaField(payload, "Inventory", fieldPayload =>
-                    FFastArraySerializerWriter.WriteItemListDelta(fieldPayload, inventory.Inventory));
+                wroteSomething |= WriteCustomDeltaField(payload, "Inventory", fieldPayload =>
+                    FFastArraySerializerWriter.WriteDelta(fieldPayload, inventory.Inventory, BaseStateFor("Inventory"),
+                        FFastArraySerializerWriter.WriteItemEntry));
                 break;
 
             // AFortGameStateAthena::GameMemberInfoArray - the team/squad roster the client looks up
-            // by unique id. See FFastArraySerializerWriter.WriteGameMemberInfoArrayDelta.
+            // by unique id. See FFastArraySerializerWriter.WriteGameMemberInfo.
             case AGameState gameState when gameState.GameMemberInfoArray.Count > 0:
-                WriteCustomDeltaField(payload, "GameMemberInfoArray", fieldPayload =>
-                    FFastArraySerializerWriter.WriteGameMemberInfoArrayDelta(fieldPayload, gameState.GameMemberInfoArray));
+                wroteSomething |= WriteCustomDeltaField(payload, "GameMemberInfoArray", fieldPayload =>
+                    FFastArraySerializerWriter.WriteDelta(fieldPayload, gameState.GameMemberInfoArray, BaseStateFor("GameMemberInfoArray"),
+                        FFastArraySerializerWriter.WriteGameMemberInfo));
                 break;
 
             // NOTE: AFortGameStateAthena::CurrentPlaylistInfo is deliberately NOT sent as a custom
@@ -333,6 +574,8 @@ public class UActorChannel : UChannel {
             // three live runs pinned the reader to consuming fewer bits than that. See
             // FFastArraySerializerWriter.WritePlaylistPropertyArrayDelta for the measurements.
         }
+
+        return wroteSomething;
     }
 
     /// <summary>
@@ -340,16 +583,22 @@ public class UActorChannel : UChannel {
     ///     SendRpc's below, which is the point: real UE routes custom delta properties and RPCs
     ///     through the very same UActorChannel::WriteFieldHeaderAndPayload.
     /// </summary>
-    private unsafe void WriteCustomDeltaField(FNetBitWriter payload, string fieldName, Action<FNetBitWriter> writeDelta) {
+    /// <summary>
+    ///     Wraps one custom delta payload in its ClassNetCache field header. <paramref name="writeDelta"/>
+    ///     returns false when the array has not moved for this connection, in which case NOTHING is
+    ///     written - an unchanged fast array must be absent from the bunch, not present as an empty
+    ///     header, or the client re-runs its whole PostReceiveCleanup and RepNotify for no reason.
+    /// </summary>
+    private unsafe bool WriteCustomDeltaField(FNetBitWriter payload, string fieldName, Func<FNetBitWriter, bool> writeDelta) {
         var classCache = NativeClassNetCache.Get(Actor!);
         var field = classCache.GetFromName(fieldName);
         if (field == null) {
             Console.WriteLine($"WriteCustomDeltaProperties: '{fieldName}' not found in {Actor!.GetType().Name}'s ClassNetCache, not sending");
-            return;
+            return false;
         }
 
-        var fieldPayload = new FNetBitWriter(Connection!.PackageMap, 256);
-        writeDelta(fieldPayload);
+        using var fieldPayload = new FNetBitWriter(Connection!.PackageMap, 256);
+        if (!writeDelta(fieldPayload)) return false;
 
         var fieldIndex = (uint) field.FieldNetIndex;
         payload.SerializeInt(&fieldIndex, (uint) (classCache.GetMaxIndex() + 1));
@@ -359,6 +608,8 @@ public class UActorChannel : UChannel {
         fixed (byte* p = fieldData) payload.SerializeBits(p, fieldPayload.GetNumBits());
 
         Console.WriteLine($"WriteCustomDeltaProperties: {fieldName} fieldIndex={fieldIndex} maxIndex={classCache.GetMaxIndex()} fieldBits={fieldBits}");
+
+        return true;
     }
 
     public void SendClientRestart(APawn pawn) => SendPawnRpc("ClientRestart", pawn);

@@ -120,6 +120,18 @@ public abstract class UNetConnection : UPlayer {
     public UPackageMap? PackageMap { get; private set; }
     
     public List<UChannel> OpenChannels { get; }
+
+    /// <summary>
+    ///     UNetConnection::ActorChannels - which actors this connection already has a channel for.
+    ///     UNetDriver.ServerReplicateActors needs this to answer "does this connection know about
+    ///     that actor yet?" without scanning every open channel each tick, and to be sure it never
+    ///     opens a second channel for an actor the join burst already covered.
+    ///
+    ///     Maintained by UActorChannel.SetChannelActor and cleared in its CleanUp.
+    /// </summary>
+    public Dictionary<AActor, UActorChannel> ActorChannels { get; } = new();
+
+    public UActorChannel? FindActorChannel(AActor actor) => ActorChannels.GetValueOrDefault(actor);
     
     /// <summary>
     ///     Maximum packet size.

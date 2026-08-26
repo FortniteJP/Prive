@@ -53,11 +53,18 @@ public class FBitWriter : FArchive {
 
         if (writer.Data.Length > 0) {
             _UsesPool = writer._UsesPool;
-            
-            if (_UsesPool) Data = Pool.Rent(writer.Data.Length);
-            else Data = new byte[writer.Data.Length];
-            
-            Buffer.BlockCopy(writer.Data, 0, Data, 0, writer.Data.Length);
+
+            // Sized from Max (the logical cap this copy inherits) rather than from the source's
+            // physical array, so the copy keeps the invariant AllowAppend relies on: the buffer is
+            // never bigger than Max implies. Copying the source's physical length instead would
+            // hand the copy a buffer its own Max cannot account for - and would drag along the
+            // slack past Num, which on a pooled array is some other writer's leftovers.
+            var usedBytes = (int) ((writer.Num + 7) >> 3);
+            var byteCount = Math.Max(usedBytes, (int) ((writer.Max + 7) >> 3));
+
+            Data = _UsesPool ? Pool.Rent(byteCount) : new byte[byteCount];
+
+            Buffer.BlockCopy(writer.Data, 0, Data, 0, usedBytes);
         } else Data = Array.Empty<byte>();
     }
 
@@ -224,7 +231,19 @@ public class FBitWriter : FArchive {
                 // and cause this block to be executed, as well as constantly zeroing out memory inside AddZeroes (though the memory would be allocated
                 // in chunks).
                 Max = Math.Max(Max << 1, Num + lengthBits);
-                var byteMax = (Max + 7) >> 3;
+
+                // Never shrink. Max is the LOGICAL cap and Data.Length the PHYSICAL one, and
+                // they are not the same number: ArrayPool rounds every rental up to a bucket
+                // size, so a writer created with 64 bits is handed 16 bytes, not 8. Sizing the
+                // new buffer from Max alone can therefore ask for LESS than we already hold,
+                // and the copy below then has nowhere to put it - which is exactly how this
+                // threw "Offset and length were out of bounds for the array".
+                var byteMax = Math.Max((Max + 7) >> 3, Data.Length);
+
+                // Copy only the bytes actually in use. The old code copied Data.Length, i.e.
+                // the whole physical array including the slack past Num - bytes that belong to
+                // nothing, and on a pooled array are another writer's leftovers.
+                var usedBytes = (int) ((Num + 7) >> 3);
                 
                 if (!_UsesPool) {
                     var dataTemp = Data;
@@ -232,7 +251,18 @@ public class FBitWriter : FArchive {
                     Data = dataTemp;
                 } else {
                     var newData = Pool.Rent((int) byteMax);
-                    Buffer.BlockCopy(Data, 0, newData, 0, Data.Length);
+
+                    // The condition the old code crashed on. It should now be unreachable -
+                    // byteMax is floored at Data.Length above - so if it ever fires, something
+                    // handed this writer a buffer inconsistent with its Max, and the stack is
+                    // the only way to find out who.
+                    if (newData.Length < Data.Length) {
+                        Console.WriteLine($"FBitWriter.AllowAppend: shrinking buffer! Num={Num} Max={Max} " +
+                                          $"Data.Length={Data.Length} byteMax={byteMax} newData.Length={newData.Length}" +
+                                          Environment.NewLine + Environment.StackTrace);
+                    }
+
+                    Buffer.BlockCopy(Data, 0, newData, 0, usedBytes);
                     Pool.Return(Data, true);
                     Data = newData;
                 }

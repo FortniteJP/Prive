@@ -1,6 +1,9 @@
 ﻿namespace AFortOnlineBeacon.Net.Actors;
 
 public class AController : AActor {
+
+    /// <summary>AController::AController (Controller.cpp:42) - a controller belongs to one player and reaches nobody else.</summary>
+    public AController() => bOnlyRelevantToOwner = true;
     public APawn? Pawn { get; private set; }
     public APlayerState? PlayerState { get; set; }
 

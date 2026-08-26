@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Rpc;
+﻿namespace AFortOnlineBeacon.Net.Rpc;
 
 /// <summary>
 ///     Reads RPC call parameters off the wire. Real UE's non-InternalAck RPC receive path
@@ -21,6 +21,9 @@ public static class FRpcReader {
                 ERpcParamKind.Bool => bunch.ReadBit(),
                 ERpcParamKind.Byte => bunch.ReadByte(),
                 ERpcParamKind.UInt32 => bunch.ReadUInt32(),
+                ERpcParamKind.Int32 => bunch.ReadInt32(),
+                ERpcParamKind.Guid => ReadGuid(bunch),
+                ERpcParamKind.Object => ReadObject(bunch),
                 ERpcParamKind.Float => bunch.ReadFloat(),
                 ERpcParamKind.Vector => FVector.NetSerializeRead(bunch),
                 ERpcParamKind.VectorQuantize10 => FVector.NetSerializeReadQuantized(bunch, 10, 24),
@@ -32,5 +35,30 @@ public static class FRpcReader {
         }
 
         return values;
+    }
+
+    /// <summary>
+    ///     Reads a packed NetGUID and resolves it. Returns null when the archive carries no package
+    ///     map or the id names nothing - the handler must treat that the same way real UE treats an
+    ///     unmapped object reference, i.e. as "the caller meant nothing I can act on".
+    /// </summary>
+    private static unsafe UObject? ReadObject(FArchive bunch) {
+        var netGuid = new FNetworkGUID();
+        netGuid.NetSerialize(bunch);
+
+        if (bunch.IsError() || bunch is not FNetBitReader { PackageMap: UPackageMapClient packageMap }) return null;
+
+        return packageMap.GuidCache?.GetObjectFromNetGUID(netGuid);
+    }
+
+    /// <summary>Mirrors FFastArraySerializerWriter's GuidToAbcd - four int32s in A/B/C/D order.</summary>
+    private static Guid ReadGuid(FArchive bunch) {
+        var bytes = new byte[16];
+
+        for (var part = 0; part < 4; part++) {
+            BitConverter.GetBytes(bunch.ReadInt32()).CopyTo(bytes, part * 4);
+        }
+
+        return new Guid(bytes);
     }
 }

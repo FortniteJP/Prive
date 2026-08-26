@@ -159,13 +159,35 @@ public class AGameModeBase : AInfo {
             // Starting inventory. A real PR3.0 capture (packet #253) shows a working server sends
             // the pickaxe plus BuildingItemData_Wall/Floor/Stair_W/RoofS and EditTool here; this
             // starts with just the pickaxe, the minimum that should make the client build its
-            // quickbars at all. ReplicationIDs must be unique and non-negative - real UE hands them
-            // out from FFastArraySerializer::MarkItemDirty.
+            // quickbars at all. Add() runs MarkItemDirty, which is what assigns the ReplicationID
+            // and moves the array's replication key - never set the id by hand, or MarkItemDirty
+            // skips its own counter and the next item collides with this one.
             worldInventory.Inventory.Add(new FFortItemEntry {
-                ReplicationId = 1,
                 ItemDefinition = UAssetRegistry.GetOrCreate("/Game/Athena/Items/Weapons/WID_Harvest_Pickaxe_Athena_C_T01.WID_Harvest_Pickaxe_Athena_C_T01"),
+                Count = 1
+            });
+
+            // A common Assault Rifle. Two reasons it is here rather than just the pickaxe:
+            //
+            // 1. A match needs a weapon, and this is a real asset a real match hands out.
+            // 2. The pickaxe CANNOT be dropped, so it can never exercise the fast-array delete path.
+            //    Confirmed from the cooked asset rather than assumed - Tools/MapActorDump
+            //    "props:" over Athena/Items/Weapons shows WID_Harvest_Pickaxe_Athena_C_T01 with
+            //    bCanBeDropped=False (and bNeverPersisted=True) written explicitly. A cooked asset
+            //    omits default-valued properties, so an explicit False means the native default on
+            //    UFortWorldItemDefinition is True and the 133 Athena WIDs that never mention the
+            //    flag - this rifle among them - are the droppable ones.
+            //
+            // This is also a second consumer of the must-be-mapped GUID work: unlike the pickaxe,
+            // the client does not have this loaded at spawn, so the channel has to hold its bunches
+            // while the asset streams in.
+            worldInventory.Inventory.Add(new FFortItemEntry {
+                ItemDefinition = UAssetRegistry.GetOrCreate(
+                    Environment.GetEnvironmentVariable("STARTING_WEAPON") is { Length: > 0 } weapon
+                        ? weapon
+                        : "/Game/Athena/Items/Weapons/WID_Assault_Auto_Athena_C_Ore_T02.WID_Assault_Auto_Athena_C_Ore_T02"),
                 Count = 1,
-                ParentInventory = worldInventory
+                LoadedAmmo = 30
             });
 
             newPlayerController.WorldInventory = worldInventory;
@@ -185,10 +207,9 @@ public class AGameModeBase : AInfo {
             playerState.UniqueId = uniqueId;
             Console.WriteLine($"AGameModeBase.Login: PlayerState UniqueId={uniqueId.ToDebugString()}");
 
-            // Mirror the same player into the GameState's roster. ReplicationIDs must be unique and
-            // non-negative - real UE hands them out from FFastArraySerializer::MarkItemDirty.
+            // Mirror the same player into the GameState's roster. Add() hands out the ReplicationID
+            // via MarkItemDirty - see the inventory call above.
             GameState?.GameMemberInfoArray.Add(new FGameMemberInfo {
-                ReplicationId = GameState.GameMemberInfoArray.Count + 1,
                 SquadId = playerState.SquadId,
                 TeamIndex = playerState.TeamIndex,
                 MemberUniqueId = uniqueId
@@ -235,20 +256,34 @@ public class AGameModeBase : AInfo {
     /// <summary>
     ///     Where to place a newly spawned pawn, as "X,Y,Z" in SPAWN_LOCATION.
     ///
-    ///     The default is a real FortPlayerStartWarmup taken out of
-    ///     /Game/Athena/Maps/POI/Athena_POI_Lobby_004 with Tools/MapActorDump - the same actor class
-    ///     Project-Reboot-3.0 looks up with GetAllActorsOfClass(FortPlayerStartWarmup), except read
-    ///     from the cooked .umap because this server is external and has no loaded map to query.
-    ///     That map holds 121 of them; any is as good as another. Coordinates are world coordinates:
-    ///     every LevelStreaming entry in Athena_Terrain carries LevelTransform=identity (verified -
-    ///     a cooked asset omits default-valued properties, and none of the 21 serialise one), so
-    ///     sublevel-local and world space coincide here.
+    ///     The default USED TO BE a FortPlayerStartWarmup out of
+    ///     /Game/Athena/Maps/POI/Athena_POI_Lobby_004 (6816,2420,92) - the same actor class
+    ///     Project-Reboot-3.0 finds with GetAllActorsOfClass(FortPlayerStartWarmup). It is the right
+    ///     class and the coordinates were read correctly, but the pawn fell straight through it:
+    ///     a live run had the player at Z=-5042.85 with X/Y unchanged, standing on the ocean plane
+    ///     under the map. Athena_POI_Lobby_004 is NOT one of Athena_Terrain's always-loaded
+    ///     sublevels, so there was nothing there to stand on.
     ///
-    ///     Re-run the tool to pick a different one:
-    ///         dotnet run --project Tools/MapActorDump -- &lt;PaksDir&gt; &lt;AesKeyHex&gt;     ///             FortniteGame/Content/Athena/Maps PlayerStart
+    ///     The default is now a BP_BGACSpawner out of /Game/Athena/Maps/Athena_ForagedItems, which
+    ///     IS always loaded. Those are foraged-item spawners - bushes and the like - so they sit ON
+    ///     the terrain, which makes their Z a direct sample of ground height. 352,-9512,2624 is the
+    ///     most central of the 38 that carry an explicit location; the default adds ~150 so the pawn
+    ///     drops the last bit onto the ground rather than starting inside it.
+    ///
+    ///     Coordinates are world coordinates: every LevelStreaming entry in Athena_Terrain carries
+    ///     LevelTransform=identity (verified - a cooked asset omits default-valued properties, and
+    ///     none of the 21 serialise one), so sublevel-local and world space coincide here.
+    ///
+    ///     Re-run the tool to sample other ground heights:
+    ///         dotnet run --project Tools/MapActorDump -- &lt;PaksDir&gt; &lt;AesKeyHex&gt;
+    ///             FortniteGame/Content/Athena/Maps/Athena_ForagedItems BP_BGACSpawner_C
+    ///
+    ///     If the pawn STILL ends up on the ocean plane, the coordinate is not the problem: it means
+    ///     the terrain around it had not streamed in before the pawn started falling, and the fix is
+    ///     level streaming (ServerUpdateLevelVisibility is still undecoded), not another location.
     /// </summary>
     private static readonly FVector SpawnLocation = ParseSpawnLocation(
-        Environment.GetEnvironmentVariable("SPAWN_LOCATION") ?? "6816,2420,92");
+        Environment.GetEnvironmentVariable("SPAWN_LOCATION") ?? "352,-9512,2774");
 
     private static FVector ParseSpawnLocation(string value) {
         var parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     AFortTimeOfDayManager - the actor Athena's loading screen is waiting for.
@@ -23,4 +23,10 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     merely existing and being pointed at is the whole job.
 /// </summary>
 public class AFortTimeOfDayManager : AInfo {
+
+    /// <summary>
+    ///     Not an engine default - AInfo sets neither flag - but the GameState points every client at
+    ///     this actor through handle 22, so it has to reach all of them.
+    /// </summary>
+    public AFortTimeOfDayManager() => bAlwaysRelevant = true;
 }

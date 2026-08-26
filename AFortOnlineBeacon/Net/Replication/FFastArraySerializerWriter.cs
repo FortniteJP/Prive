@@ -67,29 +67,70 @@ internal static class FFastArraySerializerWriter {
     }
 
     /// <summary>
-    ///     Writes a delta that adds every entry in <paramref name="items"/> as a changed element.
+    ///     The write half of FFastArraySerializer::FastArrayDeltaSerialize (NetSerialization.h:1242-1317)
+    ///     against a per-connection base state: what changed since this connection was last sent
+    ///     this array.
     ///
-    ///     Each element is a raw int32 ReplicationID (explicitly NOT packed - NetSerialization.h:1305
-    ///     comments "Dont pack this, want property to be byte aligned") followed by the item struct's
-    ///     body, written by <see cref="WriteItemEntry"/>.
+    ///     An element counts as changed when its ReplicationKey differs from the one the base state
+    ///     recorded, or when its id is absent from the base state entirely (it is new). An id the
+    ///     base state knows about but the array no longer contains is a delete.
     ///
-    ///     ArrayReplicationKey is 0 here rather than INDEX_NONE: a list that has had items added has
-    ///     been through MarkItemDirty, which runs IncrementArrayReplicationKey and moves the key off
-    ///     INDEX_NONE. BaseReplicationKey stays INDEX_NONE because an actor channel's first
-    ///     replication has no previous state to diff against.
+    ///     Returns false when there is nothing to say, which the caller must treat as "write no
+    ///     field at all" - not as "write an empty header". Real UE takes the same early-out
+    ///     (ConditionalCreateNewDeltaState, NetSerialization.h:1263) whenever ArrayReplicationKey
+    ///     matches the base. Note this is only valid once a base state EXISTS: the very first send
+    ///     always goes out, even for an empty array, because the client needs the key pair before it
+    ///     can reason about deletes at all.
+    ///
+    ///     <paramref name="baseState"/> is updated in place to describe what this delta just put on
+    ///     the wire, so the caller must only call this when it is actually going to send the result.
     /// </summary>
-    public static void WriteItemListDelta(FNetBitWriter payload, IReadOnlyList<FFortItemEntry> items) {
+    public static bool WriteDelta<T>(
+        FNetBitWriter payload,
+        FFastArraySerializer<T> array,
+        FNetFastTArrayBaseState baseState,
+        Action<FNetBitWriter, T> writeItemBody) where T : class, IFastArrayItem {
+
+        var isFirstSend = baseState.ArrayReplicationKey == UnrealConstants.IndexNone && baseState.IdToKey.Count == 0;
+        if (!isFirstSend && baseState.ArrayReplicationKey == array.ArrayReplicationKey) return false;
+
+        var changed = new List<T>();
+        var newIdToKey = new Dictionary<int, int>();
+
+        foreach (var item in array.Items) {
+            if (item.ReplicationId == UnrealConstants.IndexNone) {
+                // Real UE calls MarkItemDirty here rather than shipping an unidentified element.
+                array.MarkItemDirty(item);
+            }
+
+            newIdToKey[item.ReplicationId] = item.ReplicationKey;
+
+            if (baseState.IdToKey.TryGetValue(item.ReplicationId, out var sentKey) && sentKey == item.ReplicationKey) continue;
+
+            changed.Add(item);
+        }
+
+        var deleted = baseState.IdToKey.Keys.Where(id => !newIdToKey.ContainsKey(id)).ToArray();
+
         payload.WriteBit(false); // bSupportsFastArrayDelta - see class doc; never true here.
 
-        WriteInt32(payload, 0);            // ArrayReplicationKey
-        WriteInt32(payload, -1);           // BaseReplicationKey (INDEX_NONE: no previous state)
-        WriteInt32(payload, 0);            // NumDeletes
-        WriteInt32(payload, items.Count);  // NumChanged
+        WriteInt32(payload, array.ArrayReplicationKey);
+        WriteInt32(payload, baseState.ArrayReplicationKey); // what this connection last received
+        WriteInt32(payload, deleted.Length);
+        WriteInt32(payload, changed.Count);
 
-        foreach (var item in items) {
-            WriteInt32(payload, item.ReplicationId);
-            WriteItemEntry(payload, item);
+        foreach (var id in deleted) WriteInt32(payload, id);
+
+        foreach (var item in changed) {
+            WriteInt32(payload, item.ReplicationId); // raw, NOT packed - NetSerialization.h:1305
+            writeItemBody(payload, item);
         }
+
+        baseState.ArrayReplicationKey = array.ArrayReplicationKey;
+        baseState.IdToKey.Clear();
+        foreach (var (id, key) in newIdToKey) baseState.IdToKey[id] = key;
+
+        return true;
     }
 
     /// <summary>
@@ -108,7 +149,7 @@ internal static class FFastArraySerializerWriter {
     ///     (SerializeProperties_DynamicArray_r), then that many elements - all three arrays here are
     ///     always empty, so each is just the count.
     /// </summary>
-    private static unsafe void WriteItemEntry(FNetBitWriter payload, FFortItemEntry item) {
+    public static unsafe void WriteItemEntry(FNetBitWriter payload, FFortItemEntry item) {
         WriteInt32(payload, item.Count);
         ((UPackageMapClient) payload.PackageMap!).SerializeObject(payload, item.ItemDefinition);
 
@@ -175,8 +216,8 @@ internal static class FFastArraySerializerWriter {
     }
 
     /// <summary>
-    ///     Writes AFortGameStateAthena::GameMemberInfoArray (FGameMemberInfoArray, ClassNetCache
-    ///     field 135) with one FGameMemberInfo per player.
+    ///     One element body of AFortGameStateAthena::GameMemberInfoArray (FGameMemberInfoArray,
+    ///     ClassNetCache field 135) - the delta header around it is written by WriteDelta.
     ///
     ///     This is what makes the client call AFortGameStateAthena::NotifyGameMemberAdded, whose own
     ///     format strings give the whole game away:
@@ -186,33 +227,22 @@ internal static class FFastArraySerializerWriter {
     ///     why APlayerState::UniqueId (handle 25) had to land first.
     ///
     ///     Unlike FPlaylistPropertyArray, this struct adds no replicated members of its own beyond
-    ///     Members (OwningGameState is RepSkip), so the stock FFastArraySerializer header should be
-    ///     the whole story here.
+    ///     Members (OwningGameState is RepSkip), so the stock FFastArraySerializer header is the
+    ///     whole story here.
     ///
     ///     FGameMemberInfo derives from FFastArraySerializerItem, whose three members are all
     ///     RepSkip, so the item body is just its own three properties in declaration order:
     ///     SquadId (uint8, 8 bits), TeamIndex (uint8, 8 bits), MemberUniqueId (FUniqueNetIdRepl,
     ///     one atomic PropertyNetId cmd).
     /// </summary>
-    public static unsafe void WriteGameMemberInfoArrayDelta(FNetBitWriter payload, IReadOnlyList<FGameMemberInfo> members) {
-        payload.WriteBit(false); // bSupportsFastArrayDelta - see class doc; never true here.
+    public static unsafe void WriteGameMemberInfo(FNetBitWriter payload, FGameMemberInfo member) {
+        var squadId = member.SquadId;
+        payload.SerializeBits(&squadId, 8);
 
-        WriteInt32(payload, 0);              // ArrayReplicationKey - MarkItemDirty has run
-        WriteInt32(payload, -1);             // BaseReplicationKey (INDEX_NONE: no previous state)
-        WriteInt32(payload, 0);              // NumDeletes
-        WriteInt32(payload, members.Count);  // NumChanged
+        var teamIndex = member.TeamIndex;
+        payload.SerializeBits(&teamIndex, 8);
 
-        foreach (var member in members) {
-            WriteInt32(payload, member.ReplicationId);
-
-            var squadId = member.SquadId;
-            payload.SerializeBits(&squadId, 8);
-
-            var teamIndex = member.TeamIndex;
-            payload.SerializeBits(&teamIndex, 8);
-
-            FUniqueNetIdRepl.Write(payload, member.MemberUniqueId ?? new FUniqueNetIdRepl());
-        }
+        FUniqueNetIdRepl.Write(payload, member.MemberUniqueId ?? new FUniqueNetIdRepl());
     }
 
     /// <summary>A dynamic array member inside a struct is a raw uint16 count then the elements - see SerializeProperties_DynamicArray_r.</summary>

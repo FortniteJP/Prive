@@ -93,6 +93,85 @@ internal static class NativeRepLayouts {
         Reserved("Instigator") // live-probed handle 15
     };
 
+    /// <summary>
+    ///     AFortPickupAthena - a dropped item lying in the world. Derived with
+    ///     `python Tools/RepHandles/rep_handles.py AFortPickupAthena`, which reports 56 handles and
+    ///     shows AFortPickupAthena itself contributing NONE of them: everything comes from
+    ///     AFortPickup, so the Athena subclass is a spawn-class choice, not a layout change.
+    ///
+    ///     PrimaryPickupItemEntry is the interesting part. It is an ordinary Net struct with no
+    ///     native NetSerialize, so InitFromProperty_r recurses and gives every member its OWN wire
+    ///     handle (17-36) - the exact opposite of how the same FFortItemEntry is written inside
+    ///     AFortInventory::Inventory, where the FastArray serializes it as a bare struct body with
+    ///     no handles at all. Same struct, two framings; what decides it is whether the parent
+    ///     property is a custom delta.
+    ///
+    ///     PickupLocationData (38-47) is left reserved. It drives the toss arc; the actor's spawn
+    ///     transform already says where the item is and bServerStoppedSimulation (53) says it is at
+    ///     rest, which is all this server can honestly claim without simulating the toss.
+    /// </summary>
+    private static readonly FRepPropertyDef[] PickupProps = ActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("bRandomRotation"), // 16
+
+        // 17-36: PrimaryPickupItemEntry, one handle per member, in the struct's declaration order.
+        new() { Name = "PrimaryPickupItemEntry.Count", Kind = ERepPropertyKind.Int32, GetIntValue = obj => Entry(obj).Count },
+        new() { Name = "PrimaryPickupItemEntry.ItemDefinition", Kind = ERepPropertyKind.ObjectRef, GetObjectValue = obj => Entry(obj).ItemDefinition },
+        new() { Name = "PrimaryPickupItemEntry.OrderIndex", Kind = ERepPropertyKind.Int16, GetIntValue = obj => Entry(obj).OrderIndex },
+        new() { Name = "PrimaryPickupItemEntry.Durability", Kind = ERepPropertyKind.Float, GetFloatValue = obj => Entry(obj).Durability },
+        new() { Name = "PrimaryPickupItemEntry.Level", Kind = ERepPropertyKind.Int32, GetIntValue = obj => Entry(obj).Level },
+        new() { Name = "PrimaryPickupItemEntry.LoadedAmmo", Kind = ERepPropertyKind.Int32, GetIntValue = obj => Entry(obj).LoadedAmmo },
+        // FGuid is not one of RepLayout's atomic special cases, so its four int32s are four handles.
+        new() { Name = "PrimaryPickupItemEntry.ItemGuid.A", Kind = ERepPropertyKind.Int32, GetIntValue = obj => GuidPart(obj, 0) },
+        new() { Name = "PrimaryPickupItemEntry.ItemGuid.B", Kind = ERepPropertyKind.Int32, GetIntValue = obj => GuidPart(obj, 1) },
+        new() { Name = "PrimaryPickupItemEntry.ItemGuid.C", Kind = ERepPropertyKind.Int32, GetIntValue = obj => GuidPart(obj, 2) },
+        new() { Name = "PrimaryPickupItemEntry.ItemGuid.D", Kind = ERepPropertyKind.Int32, GetIntValue = obj => GuidPart(obj, 3) },
+        new() { Name = "PrimaryPickupItemEntry.inventory_overflow_date", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (Entry(obj).InventoryOverflowDate ? 1 : 0) },
+        new() { Name = "PrimaryPickupItemEntry.bWasGifted", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (Entry(obj).bWasGifted ? 1 : 0) },
+        new() { Name = "PrimaryPickupItemEntry.bIsReplicatedCopy", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (Entry(obj).bIsReplicatedCopy ? 1 : 0) },
+        new() { Name = "PrimaryPickupItemEntry.bIsDirty", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (Entry(obj).bIsDirty ? 1 : 0) },
+        new() { Name = "PrimaryPickupItemEntry.bUpdateStatsOnCollection", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (Entry(obj).bUpdateStatsOnCollection ? 1 : 0) },
+        new() { Name = "PrimaryPickupItemEntry.StateValues", Kind = ERepPropertyKind.EmptyDynamicArray },
+        new() { Name = "PrimaryPickupItemEntry.ParentInventory", Kind = ERepPropertyKind.ObjectRef, GetObjectValue = obj => Entry(obj).ParentInventory },
+        new() { Name = "PrimaryPickupItemEntry.GameplayAbilitySpecHandle", Kind = ERepPropertyKind.Int32, GetIntValue = obj => Entry(obj).GameplayAbilitySpecHandle },
+        new() { Name = "PrimaryPickupItemEntry.AlterationInstances", Kind = ERepPropertyKind.EmptyDynamicArray },
+        new() { Name = "PrimaryPickupItemEntry.GenericAttributeValues", Kind = ERepPropertyKind.EmptyDynamicArray },
+
+        Reserved("MultiItemPickupEntries", ERepPropertyKind.EmptyDynamicArray), // 37
+
+        // 38-47: PickupLocationData - see the doc comment for why none of it is sent.
+        Reserved("PickupLocationData.PickupTarget"),
+        Reserved("PickupLocationData.CombineTarget"),
+        Reserved("PickupLocationData.ItemOwner"),
+        new() { Name = "PickupLocationData.LootInitialPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
+        new() { Name = "PickupLocationData.LootFinalPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
+        Reserved("PickupLocationData.FlyTime", ERepPropertyKind.Float),
+        Reserved("PickupLocationData.StartDirection", ERepPropertyKind.StructAtomic),
+        new() { Name = "PickupLocationData.FinalTossRestLocation", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
+        // EFortPickupTossState_MAX = 3 -> CeilLogTwo(3) = 2 bits.
+        new() { Name = "PickupLocationData.TossState", Kind = ERepPropertyKind.ByteEnum, EnumMaxValue = (int) EFortPickupTossState.EFortPickupTossState_MAX, GetByteValue = obj => (byte) ((AFortPickup) obj).TossState },
+        Reserved("PickupLocationData.bPlayPickupSound"),
+
+        Reserved("OptionalOwnerID", ERepPropertyKind.Int32), // 48
+        new() { Name = "bPickedUp", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (((AFortPickup) obj).bPickedUp ? 1 : 0) },                            // 49
+        new() { Name = "bTossedFromContainer", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (((AFortPickup) obj).bTossedFromContainer ? 1 : 0) },      // 50
+        Reserved("bForceHideMinimapIndicator"),                                                                                                                      // 51
+        Reserved("bCombinePickupsWhenTossCompletes"),                                                                                                                // 52
+        new() { Name = "bServerStoppedSimulation", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (((AFortPickup) obj).bServerStoppedSimulation ? 1 : 0) }, // 53
+        Reserved("ServerImpactSoundFlash", ERepPropertyKind.ByteEnum),                                                                                               // 54
+        Reserved("PawnWhoDroppedPickup"),                                                                                                                            // 55
+        Reserved("SpecialActorID", ERepPropertyKind.Name)                                                                                                            // 56
+    }).ToArray();
+
+    private static FFortItemEntry Entry(object obj) =>
+        ((AFortPickup) obj).PrimaryPickupItemEntry
+        ?? throw new InvalidOperationException("AFortPickup.PrimaryPickupItemEntry is null - nothing to replicate.");
+
+    /// <summary>FGuid's four int32 members A/B/C/D, in declaration order.</summary>
+    private static int GuidPart(object obj, int index) {
+        var bytes = Entry(obj).ItemGuid.ToByteArray();
+        return BitConverter.ToInt32(bytes, index * 4);
+    }
+
     private static readonly FRepPropertyDef[] ControllerProps = ActorProps.Concat(new FRepPropertyDef[] {
         new() {
             // Handle 16 (ActorProps' 15 + 1) - not independently live-probed, but PlayerController's
@@ -216,11 +295,48 @@ internal static class NativeRepLayouts {
                 Name = "WorldInventory",
                 Kind = ERepPropertyKind.ObjectRef,
                 GetObjectValue = obj => ((APlayerController) obj).WorldInventory
+            },
+
+            // 35-51 are only here to carry the handle numbering as far as 52. Derived with
+            // `python Tools/RepHandles/rep_handles.py AFortPlayerControllerAthena --from 33 --to 54`;
+            // LatestRewardReport is one FFortRewardReport that recurses into six handles, and the
+            // seven cheat bools at 45-51 are three separate offsets' worth of bitfield.
+            Reserved("OutpostInventory"),                       // 35, 0x1648 - AFortInventory*
+            Reserved("LatestRewardReport.MissionName"),         // 36, FText
+            Reserved("LatestRewardReport.TheaterName"),         // 37, FText
+            Reserved("LatestRewardReport.Difficulty"),          // 38, FText
+            Reserved("LatestRewardReport.DifficultyValue", ERepPropertyKind.Float),   // 39
+            Reserved("LatestRewardReport.RewardActivities", ERepPropertyKind.EmptyDynamicArray), // 40
+            Reserved("LatestRewardReport.bIsFinalized"),        // 41
+            Reserved("UpdatedObjectiveStats", ERepPropertyKind.EmptyDynamicArray),    // 42
+            Reserved("bHasUnsavedPrimaryMissionProgress"),      // 43
+            Reserved("TutorialCompletedState", ERepPropertyKind.ByteEnum),            // 44
+            Reserved("bCheatGhost"),                            // 45
+            Reserved("bInfiniteAmmo"),                          // 46
+            Reserved("bInfiniteDurability"),                    // 47
+            Reserved("bNoCoolDown"),                            // 48
+            Reserved("bCheatFly"),                              // 49
+            Reserved("bEnableShotLogging"),                     // 50
+            Reserved("bIsNearActiveEncounters"),                // 51
+
+            new FRepPropertyDef {
+                // 52, 0x1B58. Live-probe confirmed on 2026-08-25 and re-derived from the SDK.
+                //
+                // The client's inventory capacity, and the reason it refused every pickup with
+                // "inventory full" while holding a single item: this is a Net property that was
+                // never sent, so the client read the zero it was constructed with. Items the SERVER
+                // pushes into the inventory land regardless - the capacity check only runs when the
+                // client tries to pick something up, which is exactly the shape of the symptom.
+                //
+                // Both reference servers set it explicitly in their login path:
+                // Project-Reboot-3.0 (FortGameModeAthena.cpp:1768) uses 5, raider3.5 (Hooks.h:75)
+                // uses 100. 5 is Battle Royale's real backpack.
+                Name = "OverriddenBackpackSize",
+                Kind = ERepPropertyKind.Int32,
+                GetIntValue = obj => ((APlayerController) obj).OverriddenBackpackSize
             }
         })
-        // Nothing past handle 34 is declared: this project never sends OutpostInventory (35),
-        // LatestRewardReport (36-41, six handles - FFortRewardReport recurses into 3 FText + float +
-        // TArray + bool) or anything after them, so no Cmd needs to exist for them.
+        // Nothing past handle 52 is declared - this project sends none of it.
     ).ToArray();
 
     /// <summary>
@@ -261,7 +377,13 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.Bool,
             GetByteValue = obj => (byte) (((AGameState) obj).bReplicatedHasBegunPlay ? 1 : 0)
         },
-        Reserved("ReplicatedWorldTimeSeconds"), // live-probed handle 19
+        new FRepPropertyDef {
+            // 19, live-probed. AGameStateBase::ReplicatedWorldTimeSeconds - see AGameState for why
+            // the client cannot evaluate any of the server's deadlines without it.
+            Name = "ReplicatedWorldTimeSeconds",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AGameState) obj).ReplicatedWorldTimeSeconds
+        },
         new() {
             // 20, offset 0x258 - live-probed.
             Name = "MatchState",
@@ -939,8 +1061,10 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout PlayerState = new(PlayerStateProps);
 
     public static readonly FRepLayout Inventory = new(InventoryProps);
+    public static readonly FRepLayout Pickup = new(PickupProps);
 
     public static FRepLayout Get(AActor actor) => actor switch {
+        AFortPickup => Pickup,
         AFortInventory => Inventory,
         APlayerController => PlayerController,
         AController => Controller,

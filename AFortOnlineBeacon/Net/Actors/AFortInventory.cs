@@ -18,6 +18,13 @@
 ///     machinery needed since a dynamically-spawned actor is never name-stable.
 /// </summary>
 public class AFortInventory : AActor {
+
+    /// <summary>
+    ///     One player's inventory is nobody else's business. Ownership alone would not be enough:
+    ///     without this flag IsNetRelevantFor falls through to "relevant", and every connection
+    ///     would get a channel for every other player's inventory.
+    /// </summary>
+    public AFortInventory() => bOnlyRelevantToOwner = true;
     /// <summary>
     ///     EFortInventoryType - handle 16, the first property after AActor's 15. Always World for
     ///     the actor behind AFortPlayerController::WorldInventory (Outpost is what OutpostInventory,
@@ -36,5 +43,5 @@ public class AFortInventory : AActor {
     ///     edit tool - precisely what fills an Athena quickbar, which is why this is what the
     ///     client's "Quickbars are invalid" stall is waiting on.
     /// </summary>
-    public List<FFortItemEntry> Inventory { get; } = new();
+    public FFastArraySerializer<FFortItemEntry> Inventory { get; } = new();
 }

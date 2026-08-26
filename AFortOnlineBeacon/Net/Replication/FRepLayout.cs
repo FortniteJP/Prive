@@ -42,6 +42,103 @@ public sealed class FRepLayout {
     }
 
     /// <summary>
+    ///     Sentinel returned by <see cref="GetComparableValue"/> for a Cmd whose value this port
+    ///     cannot snapshot (a reserved property with no getter, or a Kind with no scalar value such
+    ///     as StructAtomic). Such a property is simply never considered changed, so it is sent on
+    ///     the initial burst - where the caller names it explicitly - and never again.
+    /// </summary>
+    public static readonly object NotComparable = new();
+
+    /// <summary>
+    ///     Snapshots one Cmd's current value in a form that can be compared with Equals against the
+    ///     previously-sent value. This is this port's stand-in for real UE's shadow buffer: UE keeps
+    ///     a raw byte copy of the last-sent property block and memcmps it in
+    ///     FRepLayout::CompareProperties, which it can do because it has the real UProperty offsets.
+    ///     Here the values come from the same getters FRepLayout already uses to serialize them, so
+    ///     the two can never disagree about what was sent.
+    ///
+    ///     Reference types are normalised to something with value equality wherever holding the
+    ///     reference would be wrong: an FName or an FUniqueNetIdRepl can be rebuilt with the same
+    ///     contents and must still compare equal. An ObjectRef deliberately keeps the reference,
+    ///     because a NetGUID reference IS identity - pointing at a different actor with the same
+    ///     name is a real change.
+    /// </summary>
+    public static object? GetComparableValue(FRepLayoutCmd cmd, object instance) {
+        var def = cmd.Def;
+
+        switch (def.Kind) {
+            case ERepPropertyKind.Bool:
+            case ERepPropertyKind.ByteEnum:
+                return def.GetByteValue == null ? NotComparable : def.GetByteValue(instance);
+            case ERepPropertyKind.Int32:
+            case ERepPropertyKind.Int16:
+                return def.GetIntValue == null ? NotComparable : def.GetIntValue(instance);
+            case ERepPropertyKind.Float:
+                return def.GetFloatValue == null ? NotComparable : def.GetFloatValue(instance);
+            case ERepPropertyKind.String:
+                return def.GetStringValue == null ? NotComparable : def.GetStringValue(instance);
+            case ERepPropertyKind.Name:
+                return def.GetNameValue == null ? NotComparable : def.GetNameValue(instance).ToString();
+            case ERepPropertyKind.NetId:
+                return def.GetNetIdValue == null ? NotComparable : def.GetNetIdValue(instance)?.ToDebugString();
+            case ERepPropertyKind.ObjectRef:
+                return def.GetObjectValue == null ? NotComparable : def.GetObjectValue(instance);
+            case ERepPropertyKind.VectorQuantize10:
+                // Compared by string: FVector is a mutable reference type here, so holding the
+                // instance would compare a value with itself after the actor moved it.
+                return def.GetVectorValue == null ? NotComparable : def.GetVectorValue(instance).ToString();
+            default:
+                return NotComparable;
+        }
+    }
+
+    /// <summary>
+    ///     FRepLayout::CompareProperties. Walks the candidate properties, snapshots each one, and
+    ///     reports the ones whose value differs from what was last sent on this channel.
+    ///
+    ///     <paramref name="shadow"/> is NOT updated here. Real UE separates comparison from the
+    ///     bookkeeping that says "the client has this now" for the same reason: the send can still
+    ///     fail (a saturated channel, a bunch that overflows), and a shadow updated ahead of a send
+    ///     that never happened silently drops that property forever - the value would never differ
+    ///     again. The caller commits with <see cref="CommitShadowState"/> once the bunch is away.
+    /// </summary>
+    public List<(string Name, object? Value)> CompareProperties(
+        object instance, IReadOnlySet<string> candidateNames, IReadOnlyDictionary<string, object?> shadow) {
+        var changed = new List<(string, object?)>();
+
+        foreach (var cmd in _cmds) {
+            if (!candidateNames.Contains(cmd.Def.Name)) continue;
+
+            var value = GetComparableValue(cmd, instance);
+            if (ReferenceEquals(value, NotComparable)) continue;
+
+            if (shadow.TryGetValue(cmd.Def.Name, out var previous) && Equals(previous, value)) continue;
+
+            changed.Add((cmd.Def.Name, value));
+        }
+
+        return changed;
+    }
+
+    /// <summary>Records what a successful send just put on the wire, so it is not sent again unchanged.</summary>
+    public static void CommitShadowState(IEnumerable<(string Name, object? Value)> sent, Dictionary<string, object?> shadow) {
+        foreach (var (name, value) in sent) shadow[name] = value;
+    }
+
+    /// <summary>
+    ///     Seeds the shadow with everything the initial burst wrote. Uses the same getters, so an
+    ///     initially-sent property is only re-sent once it genuinely changes afterwards.
+    /// </summary>
+    public void SeedShadowState(object instance, IReadOnlySet<string> sentNames, Dictionary<string, object?> shadow) {
+        foreach (var cmd in _cmds) {
+            if (!sentNames.Contains(cmd.Def.Name)) continue;
+
+            var value = GetComparableValue(cmd, instance);
+            if (!ReferenceEquals(value, NotComparable)) shadow[cmd.Def.Name] = value;
+        }
+    }
+
+    /// <summary>
     ///     Writes [handle(packed)][value bits] for every leaf named in <paramref name="changedNames"/>,
     ///     in ascending handle order, followed by the handle-0 terminator - the same minimal wire
     ///     shape as FRepLayout::SendProperties for a set of always-active, non-array properties.
@@ -73,7 +170,7 @@ public sealed class FRepLayout {
                 continue;
             }
 
-            if (cmd.Def.Kind == ERepPropertyKind.EmptyDynamicArrayProbe) {
+            if (cmd.Def.Kind == ERepPropertyKind.EmptyDynamicArray) {
                 payload.SerializeIntPacked(&handle);
                 ushort arrayNum = 0;
                 payload.SerializeBits(&arrayNum, 16);
@@ -89,6 +186,27 @@ public sealed class FRepLayout {
 
                 payload.SerializeIntPacked(&handle);
                 FUniqueNetIdRepl.Write(payload, cmd.Def.GetNetIdValue(instance) ?? new FUniqueNetIdRepl());
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.VectorQuantize10) {
+                if (cmd.Def.GetVectorValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no vector value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                cmd.Def.GetVectorValue(instance).NetSerializeWriteQuantized(payload, 10, 24);
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.Int16) {
+                if (cmd.Def.GetIntValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no int value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                var int16Bits = (ushort) cmd.Def.GetIntValue(instance);
+                payload.SerializeBits(&int16Bits, 16);
                 continue;
             }
 

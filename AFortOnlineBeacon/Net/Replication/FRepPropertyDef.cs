@@ -66,17 +66,31 @@ public enum ERepPropertyKind {
     Float,
 
     /// <summary>
-    ///     TEMP diagnostic (2026-08-25): a TArray-typed leaf, sent as an always-empty array - the
-    ///     minimal, unambiguous DynamicArray Cmd encoding per RepLayout.cpp's SendProperties_r
-    ///     (line ~1998-2033): [handle(packed)][ArrayNum=0 (raw uint16, NOT packed)]
-    ///     [terminator=0 (packed)]. Used to test whether handle 50/51 (previously assumed to be a
-    ///     plain ObjectRef for WorldInventory) is actually a DynamicArray Cmd on the real client -
-    ///     a plain ObjectRef write there produced "Invalid property terminator handle" regardless of
-    ///     which object was referenced (even AController.PlayerState, already proven-good
-    ///     elsewhere), which rules out the referenced object/class and points at a Cmd-type
-    ///     mismatch instead. See NativeRepLayouts.PlayerControllerProps.
+    ///     An FVector_NetQuantize10 leaf - one handle, written by WritePackedVector&lt;10, 24&gt;
+    ///     (NetSerialization.h:1688), the same encoding SerializeNewActor already uses for an actor's
+    ///     spawn location. RepLayout special-cases this struct as atomic by name, so it never
+    ///     recurses into X/Y/Z.
     /// </summary>
-    EmptyDynamicArrayProbe
+    VectorQuantize10,
+
+    /// <summary>
+    ///     A UInt16Property / UInt16 leaf (e.g. FFortItemEntry::OrderIndex) - no NetSerializeItem
+    ///     override, so UProperty's default SerializeItem runs: 16 raw little-endian bits.
+    /// </summary>
+    Int16,
+
+    /// <summary>
+    ///     A TArray-typed leaf sent as an always-empty array - the minimal, self-terminating
+    ///     DynamicArray Cmd encoding from RepLayout.cpp's SendProperties_r (line ~1998-2033):
+    ///     [handle(packed)][ArrayNum=0 (raw uint16, NOT packed)][terminator=0 (packed)]. Note the
+    ///     element count is deliberately NOT packed while both handles are.
+    ///
+    ///     Originally added as a diagnostic to prove handle 50/51 on APlayerController really was a
+    ///     DynamicArray Cmd rather than a plain ObjectRef (it was), but the encoding is the genuine
+    ///     one for an empty array, which is what the three TArray members inside
+    ///     AFortPickup::PrimaryPickupItemEntry need.
+    /// </summary>
+    EmptyDynamicArray
 }
 
 /// <summary>
@@ -109,11 +123,14 @@ public sealed class FRepPropertyDef {
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.NetId"/>.</summary>
     public Func<object, FUniqueNetIdRepl?>? GetNetIdValue { get; init; }
 
-    /// <summary>Only meaningful for <see cref="ERepPropertyKind.Int32"/>.</summary>
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.Int32"/> and <see cref="ERepPropertyKind.Int16"/>.</summary>
     public Func<object, int>? GetIntValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Float"/>.</summary>
     public Func<object, float>? GetFloatValue { get; init; }
+
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.VectorQuantize10"/>.</summary>
+    public Func<object, FVector>? GetVectorValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ByteEnum"/> - the enum's highest raw value (e.g. ENetRole.ROLE_MAX=4), matching UByteProperty::NetSerializeItem's CeilLogTwo(Enum-&gt;GetMaxEnumValue()).</summary>
     public int EnumMaxValue { get; init; }

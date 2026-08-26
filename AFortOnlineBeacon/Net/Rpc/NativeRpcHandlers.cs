@@ -47,6 +47,52 @@ internal static class NativeRpcHandlers {
             (actor, values) => { if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerChangeName on {actor.GetFName()} S={values[0]}"); }
         ),
 
+        // AFortPlayerController::ServerAttemptInventoryDrop(FGuid ItemGuid, int32 Count) - the
+        // player dropping an item from the inventory UI, and the first client action in this project
+        // that changes replicated state on the server.
+        //
+        // Real UE also spawns an AFortPickup where the item landed; that is not implemented, so the
+        // item simply leaves the inventory. What DOES happen is the whole point: MarkItemDirty /
+        // MarkArrayDirty move the fast array's replication key, and the next
+        // UActorChannel.ReplicateCustomDeltaUpdate sends the delta - a removal as an explicit
+        // delete, a partial drop as a changed element.
+        ["ServerAttemptInventoryDrop"] = new FRpcDef(
+            "ServerAttemptInventoryDrop",
+            new[] { new FRpcParamDef("ItemGuid", ERpcParamKind.Guid), new FRpcParamDef("Count", ERpcParamKind.Int32) },
+            (actor, values) => {
+                if (actor is not APlayerController pc || pc.WorldInventory is not { } inventory) return;
+
+                // A missing parameter means the caller left it zero-constructed - an all-zero FGuid
+                // matches nothing, and Count 0 is "drop nothing".
+                if (values[0] is not Guid itemGuid) return;
+                var count = values[1] as int? ?? 0;
+
+                var item = inventory.Inventory.Items.FirstOrDefault(entry => entry.ItemGuid == itemGuid);
+                if (item == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptInventoryDrop for unknown ItemGuid={itemGuid}, ignoring");
+                    return;
+                }
+
+                int droppedCount;
+
+                if (count <= 0 || count >= item.Count) {
+                    droppedCount = item.Count;
+                    inventory.Inventory.Remove(item);
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptInventoryDrop removed ItemGuid={itemGuid} " +
+                                      $"(ReplicationId={item.ReplicationId}), {inventory.Inventory.Count} item(s) left, " +
+                                      $"ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
+                } else {
+                    droppedCount = count;
+                    item.Count -= count;
+                    inventory.Inventory.MarkItemDirty(item);
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptInventoryDrop dropped {count} of ItemGuid={itemGuid}, " +
+                                      $"{item.Count} left, ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
+                }
+
+                SpawnDroppedPickup(pc, item, droppedCount);
+            }
+        ),
+
         // No-op / log-only: real gameplay behavior (spectator pawn swap, AI logging toggle, level
         // travel restart, etc.) isn't implemented yet, but decoding these (trivial - they take no
         // parameters) means they show up in the log as what they are instead of a raw field skip.
@@ -68,6 +114,87 @@ internal static class NativeRpcHandlers {
         // the match, so it is worth naming rather than skipping as an unknown field.
         ["ServerReadyToStartMatch"] = NoParams("ServerReadyToStartMatch")
     };
+
+    /// <summary>
+    ///     Puts the dropped item on the ground as an AFortPickup, which is what makes a drop visible
+    ///     to anyone (including the player who dropped it) rather than just making the item vanish.
+    ///
+    ///     No channel is opened here. That is the whole point of
+    ///     UNetDriver.ServerReplicateActors' dynamic pass: the actor simply exists and is relevant,
+    ///     and every connection that does not already have a channel for it gets one on the next
+    ///     tick. This is the first actor in the project to arrive that way.
+    ///
+    ///     Real UE tosses the pickup along an arc driven by PickupLocationData and a
+    ///     UProjectileMovementComponent. There is no physics here, so it is placed directly at the
+    ///     pawn and declared already at rest (bServerStoppedSimulation) - see
+    ///     NativeRepLayouts.PickupProps.
+    /// </summary>
+    /// <summary>How far in front of the pawn a dropped item lands, in Unreal units (~1.5m).</summary>
+    private const float TossDistance = 150.0f;
+
+    /// <summary>Slightly above the pawn's origin so the item is not half-buried in the ground.</summary>
+    private const float TossHeight = 40.0f;
+
+    private static void SpawnDroppedPickup(APlayerController pc, FFortItemEntry item, int count) {
+        var world = pc.GetWorld();
+        if (world == null) return;
+
+        var pawn = pc.Pawn;
+        if (pawn == null) {
+            Console.WriteLine("NativeRpcHandlers: SpawnDroppedPickup - no pawn to drop from, skipping the world pickup");
+            return;
+        }
+
+        var pickup = world.SpawnActor<AFortPickup>(GUClassArray.StaticClass<AFortPickup>(), new FActorSpawnParameters {
+            ObjectFlags = EObjectFlags.RF_Transient
+        });
+
+        if (pickup == null) return;
+
+        // In front of the player, not inside them. Real UE tosses the item along an arc; with no
+        // toss to simulate, the least this server can do is not bury the pickup in the pawn's own
+        // capsule, where the client's interaction query cannot see it and the player cannot walk
+        // onto it. Yaw comes from the last move the client sent (APawn.LastClientViewRotation) -
+        // the pawn's own Rotation is never updated, so that is the only heading available.
+        var yawRadians = (pawn.LastClientViewRotation?.Yaw ?? 0.0f) * MathF.PI / 180.0f;
+        var origin = pawn.GetActorLocation();
+        var restLocation = new FVector {
+            X = origin.X + MathF.Cos(yawRadians) * TossDistance,
+            Y = origin.Y + MathF.Sin(yawRadians) * TossDistance,
+            Z = origin.Z + TossHeight
+        };
+
+        pickup.SetActorLocation(restLocation);
+        pickup.RestLocation = restLocation;
+        pickup.SetRole(ENetRole.ROLE_Authority);
+
+        // Set BEFORE SetReplicates, deliberately. SetReplicates is what makes
+        // ServerReplicateActors consider this actor, and every getter in
+        // NativeRepLayouts.PickupProps reads through PrimaryPickupItemEntry - a replication pass
+        // that caught it null would throw from inside the world tick and take the server down.
+        // Ordering it this way means the window never exists.
+        //
+        // A fresh entry rather than the one that was in the inventory: it is a different thing now,
+        // owned by nobody, and a partial drop leaves the original behind with the rest of the stack.
+        //
+        // Deliberately a NEW ItemGuid too. The guid identifies an inventory item instance, and the
+        // client has just been told the old one no longer exists; handing the same guid straight
+        // back on a world pickup asks it to re-add something it believes it removed. A real server
+        // does not carry it across either - Erbium's SpawnPickup copies only ItemDefinition, Count,
+        // LoadedAmmo and Level onto the pickup's own freshly made entry.
+        pickup.PrimaryPickupItemEntry = new FFortItemEntry {
+            ItemDefinition = item.ItemDefinition,
+            Count = count,
+            Durability = item.Durability,
+            Level = item.Level,
+            LoadedAmmo = item.LoadedAmmo
+        };
+
+        pickup.SetReplicates(true);
+
+        Console.WriteLine($"NativeRpcHandlers: SpawnDroppedPickup at {pickup.GetActorLocation()} " +
+                          $"count={count} guid={item.ItemGuid} - waiting for ServerReplicateActors to open its channel");
+    }
 
     private static readonly FRpcParamDef[] ServerMoveTimeStampPrefix = {
         new FRpcParamDef("TimeStamp", ERpcParamKind.Float)
@@ -98,6 +225,65 @@ internal static class NativeRpcHandlers {
     ///     nothing until that class hierarchy's real field list replaces the current placeholder.
     /// </summary>
     private static readonly Dictionary<string, FRpcDef> PawnRpcs = new() {
+        // AFortPlayerPawn::ServerHandlePickup(AFortPickup*, float InFlyTime, FVector InStartDirection,
+        // bool bPlayPickupSound) - declared on the PAWN, not the PlayerController, so it arrives as
+        // an ordinary content-block field on the pawn's channel.
+        //
+        // This is the ADD side of fast array replication, the counterpart to the delete that
+        // ServerAttemptInventoryDrop exercises: the item goes back into the inventory, MarkItemDirty
+        // moves the array key, and the next tick sends a delta with one changed element.
+        //
+        // InFlyTime/InStartDirection describe the arc the client wants the item to travel while it
+        // flies into the player - purely cosmetic, and nothing here simulates it.
+        ["ServerHandlePickup"] = new FRpcDef(
+            "ServerHandlePickup",
+            new[] {
+                new FRpcParamDef("Pickup", ERpcParamKind.Object),
+                new FRpcParamDef("InFlyTime", ERpcParamKind.Float),
+                new FRpcParamDef("InStartDirection", ERpcParamKind.Vector),
+                new FRpcParamDef("bPlayPickupSound", ERpcParamKind.Bool)
+            },
+            (actor, values) => {
+                if (actor is not APawn pawn) return;
+
+                if (values[0] is not AFortPickup pickup) {
+                    Console.WriteLine("NativeRpcHandlers: ServerHandlePickup named an object that is not a pickup, ignoring");
+                    return;
+                }
+
+                if (pickup.bPickedUp) return; // already claimed - a second client racing for it
+
+                if (pawn.Controller is not APlayerController pc || pc.WorldInventory is not { } inventory) {
+                    Console.WriteLine("NativeRpcHandlers: ServerHandlePickup - pawn has no controller with an inventory, ignoring");
+                    return;
+                }
+
+                var entry = pickup.PrimaryPickupItemEntry;
+                if (entry == null) return;
+
+                // A fresh entry again: this one belongs to an inventory now, and the pickup's copy
+                // keeps whatever ReplicationId/Key it was given as a pickup - reusing it would carry
+                // that state into a completely different fast array.
+                inventory.Inventory.Add(new FFortItemEntry {
+                    ItemDefinition = entry.ItemDefinition,
+                    Count = entry.Count,
+                    Durability = entry.Durability,
+                    Level = entry.Level,
+                    LoadedAmmo = entry.LoadedAmmo
+                });
+
+                // Handle 49 - what drives the client's pickup feedback. It is NOT what removes the
+                // world actor: OnRep_bPickedUp only hides it. The actor goes away when its channel
+                // closes, which Destroy() below arranges via ServerReplicateActors.
+                pickup.bPickedUp = true;
+                pickup.Destroy();
+
+                Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup guid={entry.ItemGuid} count={entry.Count} -> " +
+                                  $"inventory now {inventory.Inventory.Count} item(s), " +
+                                  $"ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
+            }
+        ),
+
         ["ServerMoveNoBase"] = new FRpcDef(
             "ServerMoveNoBase",
             new[] {
@@ -116,6 +302,7 @@ internal static class NativeRpcHandlers {
                 actor.SetActorLocation(clientLoc);
 
                 var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
+                if (view != null && actor is APawn viewPawn) viewPawn.LastClientViewRotation = view;
                 if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerMoveNoBase on {actor.GetFName()} TimeStamp={values[0]} ClientLoc={clientLoc} CompressedMoveFlags={values[3]} ClientRoll={values[4]} View={view} ClientMovementMode={values[6]}");
             }
         ),

@@ -21,6 +21,15 @@ public class APlayerController : AController {
     public bool bHasServerFinishedLoading { get; set; }
 
     /// <summary>
+    ///     AFortPlayerController::OverriddenBackpackSize - wire handle 52. How many inventory slots
+    ///     the client believes it has. Zero until told otherwise, which is why every pickup was
+    ///     refused as "inventory full". 5 is Battle Royale's real backpack size and what
+    ///     Project-Reboot-3.0 sets; raider3.5 uses 100. BACKPACK_SIZE overrides it.
+    /// </summary>
+    public int OverriddenBackpackSize { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("BACKPACK_SIZE"), out var size) && size > 0 ? size : 5;
+
+    /// <summary>
     ///     AFortPlayerController::WorldInventory - see AFortInventory's doc comment for why
     ///     ClientRestart_Implementation needs this to resolve to something non-null client-side.
     /// </summary>

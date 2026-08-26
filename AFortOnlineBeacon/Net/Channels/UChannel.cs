@@ -621,6 +621,30 @@ public abstract class UChannel {
         return outBunch;
     }
 
+    /// <summary>
+    ///     UChannel::Close (DataChannel.cpp). An empty RELIABLE bunch whose only content is the
+    ///     bClose flag and a reason. Reliable because a lost close leaves the actor on the client
+    ///     forever, with nothing to retry it.
+    ///
+    ///     The local side is NOT cleaned up here: real UE waits for the close to be acked, and
+    ///     ReceivedAcks' bCleanup tail calls ConditionalCleanUp. Tearing the channel down early
+    ///     would drop the very bunch that has to be acked.
+    /// </summary>
+    public void Close(EChannelCloseReason reason) {
+        if (Connection == null || Closing || Connection.Channels[ChIndex] != this) return;
+
+        using var closeBunch = new FOutBunch(this, true) {
+            bReliable = true,
+            CloseReason = reason
+        };
+
+        if (closeBunch.IsError()) return;
+
+        Console.WriteLine($"UChannel.Close: ChIndex={ChIndex} reason={reason}");
+
+        SendBunch(closeBunch, false);
+    }
+
     private void SetClosingFlag() => Closing = true;
 
     public bool IsPendingKill { get; private set; }

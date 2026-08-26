@@ -1,6 +1,14 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 public class APawn : AActor {
+    /// <summary>
+    ///     The view rotation the client last sent with a move (the packed "View" parameter of
+    ///     ServerMove*). Real UE feeds this into AController::ControlRotation; here it is kept only
+    ///     so the server knows which way the player is facing - a dropped item has to land in front
+    ///     of them to be reachable, and the pawn's own Rotation is never updated by the move RPCs.
+    /// </summary>
+    public FRotator? LastClientViewRotation { get; set; }
+
     /// <summary>APawn::Controller - wire handle 18, an ObjectRef.</summary>
     public AController? Controller { get; private set; }
 

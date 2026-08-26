@@ -90,6 +90,14 @@ public class FNetGUIDCache {
         return AssignNewNetGUID_Server(obj);
     }
 
+    /// <summary>
+    ///     FNetGUIDCache::GetObjectFromNetGUID, reduced to the one case a server needs: a client
+    ///     naming an object the server itself assigned an id to. There is no path-resolve or
+    ///     async-load branch here - a GUID the server never handed out simply has no object.
+    /// </summary>
+    public UObject? GetObjectFromNetGUID(FNetworkGUID netGuid) =>
+        ObjectLookup.TryGetValue(netGuid, out var cacheObject) ? cacheObject.Object : null;
+
     public FNetworkGUID GetNetGUID(UObject? obj) {
         if (obj == null) return new FNetworkGUID();
         return NetGUIDLookup.GetValueOrDefault(obj, new FNetworkGUID());

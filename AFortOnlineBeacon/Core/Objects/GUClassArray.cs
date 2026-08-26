@@ -48,32 +48,39 @@ public class GUClassArray {
         // live client confirmed this is really an ACTOR class ("Sub-object cannot be actor class"
         // rejecting the sub-object-content-block approach) - see AFortInventory's doc comment.
         [typeof(AFortInventory)] = "/Script/FortniteGame.FortInventory",
-        // The native TimeOfDayManager. Override with TODM_CLASS - see below for why the Battle
-        // Royale Blueprint is not the default yet.
+        // AFortPickupAthena : AFortPickup : AActor - the Battle Royale dropped-item actor. Native,
+        // so it is always resident on the client; AFortPickupAthena adds no replicated properties
+        // of its own, so NativeRepLayouts.PickupProps is really AFortPickup's layout.
+        [typeof(AFortPickup)] = "/Script/FortniteGame.FortPickupAthena",
+        // Athena's real TimeOfDayManager Blueprint - its CDO carries the SkyboxFog*/day-phase
+        // settings, so this is what makes the match look like daytime rather than the native
+        // defaults' permanent dark. Override with TODM_CLASS
+        // (/Script/FortniteGame.FortTimeOfDayManager is the always-resident fallback).
         //
-        // /Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C is the "right" class (its CDO carries the
-        // SkyboxFog*/day-phase settings) and was tried first, but the client does not preload it,
-        // and a path export only NAMES an asset - it does not stream one. The client's log:
+        // This used to be impossible. A path export NAMES an asset, it does not stream one, and the
+        // client does not preload TODM_BR, so the archetype was still loading when the spawn header
+        // arrived and the actor was simply dropped:
         //
-        //   GetObjectFromNetGUID: Async loading package. Path: /Game/TimeOfDay/TODM/BR/TODM_BR
         //   Error: UPackageMapClient::SerializeNewActor. Unresolved Archetype GUID.
         //           Path: Default__TODM_BR_C, NetGUID: 3.
-        //   Error: UPackageMapClient::SerializeNewActor Unable to read Archetype for NetGUID 2 / 3
         //
-        // i.e. the actor was never spawned, because the archetype was still loading when the spawn
-        // header arrived. The missing piece was on THIS side, not the client's: the client already
-        // has UActorChannel::ProcessQueuedBunches, but it only queues a channel's bunches when the
-        // bunch announces the GUIDs it is waiting on, and this server never announced any. It does
-        // now - see UChannel.AppendMustBeMappedGuids - so the race should be survivable.
+        // The missing piece was on THIS side. The client has always had
+        // UActorChannel::ProcessQueuedBunches, but it only holds a channel's bunches when the bunch
+        // announces which GUIDs it is waiting on, and this server announced none. Now that
+        // UChannel.AppendMustBeMappedGuids does, the client rides out the load - live-confirmed
+        // 2026-08-27, the channel queued one bunch for 74ms and then flushed it:
         //
-        // Still defaulting to the native class because that combination is live-confirmed working
-        // and the announcement path is not yet: a native class is always resident, so it cannot
-        // lose the race at all. Lighting is native defaults rather than Athena's; the loading
-        // screen only needs the GameState's FortTimeOfDayManager to be non-null. To try the real
-        // one: TODM_CLASS=/Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C
+        //   GetObjectFromNetGUID: Async loading package. Path: /Game/TimeOfDay/TODM/BR/TODM_BR
+        //   AFortTimeOfDayManager::PostInitializeComponents: World is "Athena_Terrain",
+        //           this is "TODM_BR_C_2147478934"
+        //   ProcessQueuedBunches: Flushing queued bunches. ChIndex: 2,
+        //           Actor: ...TODM_BR_C_2147478934, Queued: 1
+        //   SetupTimeOfDayCallbacks: ... FortTimeOfDayManager is "TODM_BR_C_2147478934"
+        //
+        // The same now goes for any other Blueprint class the client has not already loaded.
         [typeof(AFortTimeOfDayManager)] = Environment.GetEnvironmentVariable("TODM_CLASS") is { Length: > 0 } todm
             ? todm
-            : "/Script/FortniteGame.FortTimeOfDayManager"
+            : "/Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C"
     };
 
     public static UClass StaticClass<T>() => StaticClass(typeof(T));
