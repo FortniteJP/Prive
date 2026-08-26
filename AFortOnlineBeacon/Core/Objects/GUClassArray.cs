@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Core.Objects;
+﻿namespace AFortOnlineBeacon.Core.Objects;
 
 public class GUClassArray {
     private static readonly Dictionary<Type, UClass> Classes = new();
@@ -47,7 +47,27 @@ public class GUClassArray {
         // ObjectsDump.txt listing "/Script/FortniteGame.FortInventory" as a real native class. A
         // live client confirmed this is really an ACTOR class ("Sub-object cannot be actor class"
         // rejecting the sub-object-content-block approach) - see AFortInventory's doc comment.
-        [typeof(AFortInventory)] = "/Script/FortniteGame.FortInventory"
+        [typeof(AFortInventory)] = "/Script/FortniteGame.FortInventory",
+        // The native TimeOfDayManager, deliberately NOT the Battle Royale Blueprint.
+        //
+        // /Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C is the "right" class (its CDO carries the
+        // SkyboxFog*/day-phase settings) and was tried first, but the client does not preload it,
+        // and a path export only NAMES an asset - it does not stream one. The client's log:
+        //
+        //   GetObjectFromNetGUID: Async loading package. Path: /Game/TimeOfDay/TODM/BR/TODM_BR
+        //   Error: UPackageMapClient::SerializeNewActor. Unresolved Archetype GUID.
+        //           Path: Default__TODM_BR_C, NetGUID: 3.
+        //   Error: UPackageMapClient::SerializeNewActor Unable to read Archetype for NetGUID 2 / 3
+        //
+        // i.e. the actor was never spawned, because the archetype was still loading when the spawn
+        // header arrived. Real UE survives this via UActorChannel::ProcessQueuedBunches, which holds
+        // the channel's bunches until the GUID resolves; this project has that as a TODO.
+        //
+        // A native class is always resident, so it cannot lose that race. Lighting will be whatever
+        // the native defaults are rather than Athena's, but the loading screen only needs the
+        // GameState's FortTimeOfDayManager to be non-null. Switch back to TODM_BR_C once queued
+        // bunches exist.
+        [typeof(AFortTimeOfDayManager)] = "/Script/FortniteGame.FortTimeOfDayManager"
     };
 
     public static UClass StaticClass<T>() => StaticClass(typeof(T));

@@ -9,6 +9,17 @@
 ///     see AGameModeBase.Login, which does the same here.
 /// </summary>
 public class APlayerState : AInfo {
+    /// <summary>
+    ///     AFortPlayerState::bHasFinishedLoading - wire handle 29, the bit immediately before
+    ///     bHasStartedPlaying (both live in the bitfield byte at 0x0390: BitIndex 2 and 3, and
+    ///     "bHasFinishedLoading" sorts first under FCompareUFieldOffsets' name tie-break). Unlike
+    ///     bHasStartedPlaying it has no RepNotify - the client just reads the value.
+    ///
+    ///     Every working Fortnite server implementation sets this and bHasStartedPlaying together;
+    ///     this project had the handle reserved but never sent it.
+    /// </summary>
+    public bool bHasFinishedLoading { get; set; }
+
     public bool bHasStartedPlaying { get; set; }
 
     /// <summary>

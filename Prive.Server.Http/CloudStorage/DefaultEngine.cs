@@ -117,6 +117,14 @@ public class DefaultEngine : CloudStorageFile {
         new() {
             Section = "Core.Log",
             Elements = new() {
+                // FLogSuppressionImplementation treats "Global" specially: it is the default
+                // verbosity for every category not named explicitly below. This build has 751 log
+                // categories and this file only ever named ~127 of them, so anything that could
+                // explain why the Athena loading screen never dismisses was most likely in one of
+                // the 600+ we never touched - including whatever the (silent) LogFortLoadingScreen
+                // is actually waiting on. Noisy by design; drop back to Display once the gate is
+                // identified.
+                new IniElementKeyValue("Global", "Verbose"),
                 new IniElementKeyValue("LogAnalytics", "All"),
                 new IniElementKeyValue("LogBattlEye", "All"),
                 new IniElementKeyValue("LogBeacon", "All"),
@@ -142,7 +150,14 @@ public class DefaultEngine : CloudStorageFile {
                 // Default verbosity is Warning, which is why nothing inventory-related has ever appeared in the client log.
                 new IniElementKeyValue("LogFortInventory", "All"),
                 new IniElementKeyValue("LogFortInventoryUI", "All"),
+                // The loading screen never dismissing is the current blocker, so raise every
+                // category that could name what it is still waiting on. LogFortLoadingScreen was
+                // already here and stayed silent, which is itself a hint that the gate is not in
+                // the loading-screen code but in whatever it polls - hence the HUD ones too.
                 new IniElementKeyValue("LogFortLoadingScreen", "All"),
+                new IniElementKeyValue("LogFortniteEngineLoadingScreen", "All"),
+                new IniElementKeyValue("LogLoadingSplash", "All"),
+                new IniElementKeyValue("LogAthenaHUDContext", "All"),
                 new IniElementKeyValue("LogFortLogin", "All"),
                 new IniElementKeyValue("LogFortLoot", "All"),
                 new IniElementKeyValue("LogFortMemory", "All"),

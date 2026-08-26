@@ -256,9 +256,25 @@ internal static class NativeRepLayouts {
         },
         Reserved("ReplicatedWorldTimeSeconds"), // live-probed handle 19
         new() {
+            // 20, offset 0x258 - live-probed.
             Name = "MatchState",
             Kind = ERepPropertyKind.Name,
             GetNameValue = obj => ((AGameState) obj).MatchState
+        },
+        Reserved("ElapsedTime"), // 21, offset 0x268 - AGameState's other property. Reserved entries only
+                                // hold a handle number; their Kind never reaches the wire.
+        new() {
+            // 22, offset 0x2A0. AFortGameStateBase (the class directly above AGameState in
+            // Fortnite's chain) has exactly TWO net properties - FortTimeOfDayManager @0x2A0 and
+            // StormShield @0x2A8 - so under the offset-ascending rule they are simply 22 and 23.
+            // The four AGameStateBase handles above (16-19) and MatchState (20) are all live-probed
+            // and match this derivation exactly, which is what makes 22 trustworthy without its own
+            // probe.
+            //
+            // This is the property Athena's loading screen blocks on - see AFortTimeOfDayManager.
+            Name = "FortTimeOfDayManager",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).FortTimeOfDayManager
         }
     }).ToArray();
 
@@ -299,9 +315,19 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.String,
             GetStringValue = obj => ((APlayerState) obj).PlayerNamePrivate
         },
-        Reserved("bIsGameSessionOwner"),    // 27 | offset 856
+        Reserved("bIsGameSessionOwner"),    // 27 | offset 856 (0x358), two bools only
         Reserved("bIsWorldDataOwner"),      // 28 |
-        Reserved("bHasFinishedLoading"),    // 29 |
+        new FRepPropertyDef {
+            // 29, offset 912. First of the 0x390 bitfield byte under the name tie-break, i.e. the
+            // bit immediately before bHasStartedPlaying - confirmed against the real 10.40 SDK,
+            // where 0x390 holds bIsGameSessionAdmin/bIsReadyToContinue/bHasFinishedLoading/
+            // bHasStartedPlaying/bShowHeroBackpack/bShowHeroHeadAccessories/bRepFlag1 and sorting
+            // those by name reproduces handles 29-35 exactly as numbered here. (An earlier comment
+            // filed this one under offset 856; the handle was right, the attribution was not.)
+            Name = "bHasFinishedLoading",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APlayerState) obj).bHasFinishedLoading ? 1 : 0)
+        },
         new FRepPropertyDef {
             // 30, offset 912. Unchanged by the ordering correction above.
             Name = "bHasStartedPlaying",

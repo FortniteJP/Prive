@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     Simplified port of AGameStateBase - just enough to replicate bReplicatedHasBegunPlay, the
@@ -9,6 +9,13 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     yet, so it's set true as soon as this actor is spawned - see AGameModeBase.InitGameState.
 /// </summary>
 public class AGameState : AInfo {
+    /// <summary>
+    ///     AFortGameStateBase::FortTimeOfDayManager - wire handle 22, an ObjectRef. Athena's
+    ///     loading screen refuses to drop while this is null ("Waiting for time of day manager"),
+    ///     and the client cannot fill it in itself - see AFortTimeOfDayManager.
+    /// </summary>
+    public AFortTimeOfDayManager? FortTimeOfDayManager { get; set; }
+
     public bool bReplicatedHasBegunPlay { get; set; }
 
     /// <summary>

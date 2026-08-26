@@ -53,6 +53,19 @@ public class AGameModeBase : AInfo {
             GameState.SetReplicates(true);
             GameState.bReplicatedHasBegunPlay = true;
             GameState.MatchState = new FName("InProgress");
+
+            // Athena's loading screen blocks on this - see AFortTimeOfDayManager for the evidence.
+            // Real UE reaches it through AFortGameStateBase::SetTimeOfDayManager, which the client
+            // binary confirms is authority-only, so the server has to spawn one and let the
+            // GameState's replicated FortTimeOfDayManager (handle 22) carry the reference across.
+            var timeOfDayManager = world.SpawnActor<AFortTimeOfDayManager>(
+                GUClassArray.StaticClass<AFortTimeOfDayManager>(), spawnInfo);
+
+            if (timeOfDayManager != null) {
+                timeOfDayManager.SetRole(ENetRole.ROLE_Authority);
+                timeOfDayManager.SetReplicates(true);
+                GameState.FortTimeOfDayManager = timeOfDayManager;
+            }
         }
     }
 
@@ -128,6 +141,7 @@ public class AGameModeBase : AInfo {
         if (playerState != null) {
             playerState.SetRole(ENetRole.ROLE_Authority);
             playerState.SetReplicates(true);
+            playerState.bHasFinishedLoading = true;
             playerState.bHasStartedPlaying = true;
             // AFortPlayerState::HeroType (handle 40, live-probe-confirmed). Athena's quickbars are
             // built from the hero loadout, which makes this the leading candidate for the client's
@@ -161,6 +175,37 @@ public class AGameModeBase : AInfo {
         return newPlayerController;
     }
 
+    /// <summary>
+    ///     Where to place a newly spawned pawn, as "X,Y,Z" in SPAWN_LOCATION.
+    ///
+    ///     The default is a real FortPlayerStartWarmup taken out of
+    ///     /Game/Athena/Maps/POI/Athena_POI_Lobby_004 with Tools/MapActorDump - the same actor class
+    ///     Project-Reboot-3.0 looks up with GetAllActorsOfClass(FortPlayerStartWarmup), except read
+    ///     from the cooked .umap because this server is external and has no loaded map to query.
+    ///     That map holds 121 of them; any is as good as another. Coordinates are world coordinates:
+    ///     every LevelStreaming entry in Athena_Terrain carries LevelTransform=identity (verified -
+    ///     a cooked asset omits default-valued properties, and none of the 21 serialise one), so
+    ///     sublevel-local and world space coincide here.
+    ///
+    ///     Re-run the tool to pick a different one:
+    ///         dotnet run --project Tools/MapActorDump -- &lt;PaksDir&gt; &lt;AesKeyHex&gt;     ///             FortniteGame/Content/Athena/Maps PlayerStart
+    /// </summary>
+    private static readonly FVector SpawnLocation = ParseSpawnLocation(
+        Environment.GetEnvironmentVariable("SPAWN_LOCATION") ?? "6816,2420,92");
+
+    private static FVector ParseSpawnLocation(string value) {
+        var parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 3
+            || !float.TryParse(parts[0], out var x)
+            || !float.TryParse(parts[1], out var y)
+            || !float.TryParse(parts[2], out var z)) {
+            Console.WriteLine($"AGameModeBase: SPAWN_LOCATION='{value}' is not \"X,Y,Z\" - falling back to the origin.");
+            return new FVector();
+        }
+
+        return new FVector { X = x, Y = y, Z = z };
+    }
+
     public void PostLogin(APlayerController newPlayer) {
         var world = GetWorld();
         if (world == null) return;
@@ -175,6 +220,15 @@ public class AGameModeBase : AInfo {
             pawn.SetRole(ENetRole.ROLE_Authority);
             pawn.SetReplicates(true);
             pawn.SetAutonomousProxy(true); // possessed by newPlayer's own connection
+
+            // Stand-in for AGameModeBase::RestartPlayerAtPlayerStart, which spawns the pawn at a
+            // PlayerStart actor found in the level. This server has no map data at all - a real
+            // server (and Project-Reboot-3.0, which is injected into the running game) calls
+            // GetAllActorsOfClass(FortPlayerStartWarmup) to find them. Nothing here needs the map
+            // otherwise: the client owns collision and we simply accept the ClientLoc it reports in
+            // ServerMoveNoBase, so the only thing actually missing was a starting point.
+            pawn.SetActorLocation(SpawnLocation);
+
             newPlayer.Possess(pawn);
         }
     }

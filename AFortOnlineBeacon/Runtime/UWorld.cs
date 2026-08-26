@@ -407,6 +407,29 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         (Environment.GetEnvironmentVariable("CLIENT_INIT_RPCS") ?? "ClientOnGenericPlayerInitialization")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+    /// <summary>
+    ///     AGameModeBase::HUDClass for Athena - the class ClientSetHUD tells the client to
+    ///     SpawnActor&lt;AHUD&gt;.
+    ///
+    ///     It MUST be an AHUD subclass. The first attempt used
+    ///     /Game/Athena/HUD/AthenaHUD.AthenaHUD_C because the client loads that during map load, but
+    ///     the client's own log gave it away: "InternalLoadObject loaded
+    ///     WidgetBlueprintGeneratedClass /Game/Athena/HUD/AthenaHUD.AthenaHUD_C" - that asset is a UMG
+    ///     *widget*, not a HUD actor, so SpawnActor&lt;AHUD&gt; returned null and nothing appeared. The
+    ///     RPC itself was fine: it was received and the object resolved.
+    ///
+    ///     The real chain in this build is AHUD -&gt; AFortUIBaseClass -&gt; AFortUIZone -&gt;
+    ///     AFortUIPvP, and AFortUIPvP is final with no subclasses - it is the only concrete Fortnite
+    ///     HUD actor class ("PvP" is Battle Royale here, as opposed to Save the World). Athena_GameMode_C
+    ///     does not override HUDClass (checked its CDO - it sets GameStateClass/PlayerControllerClass/
+    ///     SpectatorClass and not this), so the value comes from the native AFortGameModeAthena
+    ///     default, which this is.
+    ///
+    ///     Overridable via HUD_CLASS.
+    /// </summary>
+    private static readonly string HudClassPath =
+        Environment.GetEnvironmentVariable("HUD_CLASS") ?? "/Script/FortniteGame.FortUIPvP";
+
     private APlayerController? SpawnPlayActor(UPlayer newPlayer, ENetRole remoteRole, FUrl inURL, FUniqueNetIdRepl uniqueId, out string error, byte inNetPlayerIndex = 0) {
         error = string.Empty;
         
@@ -436,6 +459,11 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
             // connection's own PlayerController (and Pawn, once PostLogin possesses one). No ongoing
             // per-tick property replication happens yet - see AFortOnlineBeacon.Net.UPackageMapClient.
             if (newPlayer is UNetConnection ownerConnection) {
+                // Before the GameState, so its NetGUID is already assigned when the GameState's own
+                // property push references it at handle 22 - same ordering rule as WorldInventory
+                // below.
+                if (gameMode.GameState?.FortTimeOfDayManager != null)
+                    OpenActorChannelFor(ownerConnection, gameMode.GameState.FortTimeOfDayManager);
                 if (gameMode.GameState != null) OpenActorChannelFor(ownerConnection, gameMode.GameState);
                 if (newPlayerController.PlayerState != null) OpenActorChannelFor(ownerConnection, newPlayerController.PlayerState);
                 // See AFortInventory's doc comment - a real actor with its own channel, opened before
@@ -464,6 +492,34 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // ClientForceWorldInventoryUpdate, also parameterless, which drives
                 // HandleWorldInventoryLocalUpdate.
                 foreach (var rpcName in ClientInitRpcs) pcChannel.SendParameterlessRpc(rpcName);
+
+                // AGameModeBase::InitializeHUDForPlayer - the OTHER half of GenericPlayerInitialization:
+                //
+                //     void AGameModeBase::InitializeHUDForPlayer_Implementation(APlayerController* NewPlayer)
+                //     { NewPlayer->ClientSetHUD(HUDClass); }
+                //
+                // and APlayerController::ClientSetHUD_Implementation is what actually spawns the HUD
+                // actor client-side (PlayerController.cpp:1241 - SpawnActor<AHUD>(NewHUDClass)).
+                // Confirmed missing from a 675k-line client log of a stuck join: zero occurrences of
+                // ClientSetHUD, and zero AthenaHUD_C instances - the client had the class loaded and
+                // was never told to spawn it, so it sat on the loading screen with possession and
+                // movement both already working.
+                //
+                // TSubclassOf<AHUD> is just an object reference to a UClass on the wire, so this goes
+                // out the same way HeroType does: a path-exported static asset (UAssetRegistry).
+                pcChannel.SendObjectRpc("ClientSetHUD", UAssetRegistry.GetOrCreate(HudClassPath));
+
+                // The rest of GenericPlayerInitialization / PostLogin's client-facing calls
+                // (GameModeBase.cpp:914-986). Neither does much on its own -
+                // ClientEnableNetworkVoice_Implementation is just ToggleSpeaking(bEnable), and
+                // ClientCapBandwidth_Implementation only stores ClientCap - but they are part of the
+                // sequence a real client is written against, and sending nothing at all is exactly
+                // the class of omission that hid ClientSetHUD.
+                //
+                // AGameSession::RequiresPushToTalk() defaults to true, so the real argument here is
+                // false; NetSpeed matches UNetConnection's own default.
+                pcChannel.SendBoolRpc("ClientEnableNetworkVoice", false);
+                pcChannel.SendIntRpc("ClientCapBandwidth", newPlayerController.Player?.CurrentNetSpeed ?? 10000);
 
                 if (newPlayerController.Pawn != null) {
                     OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);

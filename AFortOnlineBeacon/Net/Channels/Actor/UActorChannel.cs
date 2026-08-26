@@ -69,8 +69,8 @@ public class UActorChannel : UChannel {
     }
 
     private static HashSet<string> GetInitialReplicatedPropertiesCore(AActor actor) => actor switch {
-        AGameState => new HashSet<string> { "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState" },
-        APlayerState => new HashSet<string> { "RemoteRole", "Role", "PlayerNamePrivate", "bHasStartedPlaying", "HeroId", "HeroType",
+        AGameState => new HashSet<string> { "RemoteRole", "Role", "bReplicatedHasBegunPlay", "MatchState", "FortTimeOfDayManager" },
+        APlayerState => new HashSet<string> { "RemoteRole", "Role", "PlayerNamePrivate", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
             "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]" },
         // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
@@ -467,10 +467,18 @@ public class UActorChannel : UChannel {
         }, reliable: false);
     }
 
-    private void SendPawnRpc(string fieldName, APawn pawn) =>
+    private void SendPawnRpc(string fieldName, APawn pawn) => SendObjectRpc(fieldName, pawn);
+
+    /// <summary>
+    ///     A server-&gt;client RPC taking exactly one object reference. Covers ClientRestart /
+    ///     ClientRetryClientRestart (an APawn*) and ClientSetHUD (a TSubclassOf&lt;AHUD&gt;, which is
+    ///     just an object reference to a UClass on the wire, so a path-exported UAssetRegistry entry
+    ///     serves as well as a spawned actor does).
+    /// </summary>
+    public void SendObjectRpc(string fieldName, UObject obj) =>
         SendRpc(fieldName, writer => {
-            writer.WriteBit(true); // NewPawn is present (non-bool RPC param protocol - see FRpcReader)
-            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, pawn);
+            writer.WriteBit(true); // the parameter is present (non-bool RPC param protocol - see FRpcReader)
+            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, obj);
         });
 
     /// <summary>
@@ -479,6 +487,23 @@ public class UActorChannel : UChannel {
     ///     of 0, which is all the client's ReadFieldHeaderAndPayload needs to dispatch the call.
     /// </summary>
     public void SendParameterlessRpc(string fieldName) => SendRpc(fieldName, static _ => {});
+
+    /// <summary>
+    ///     A server-&gt;client RPC taking one int32 - APlayerController::ClientCapBandwidth(int32 Cap),
+    ///     which AGameModeBase::PostLogin sends right after GenericPlayerInitialization.
+    /// </summary>
+    public void SendIntRpc(string fieldName, int value) =>
+        SendRpc(fieldName, writer => {
+            writer.WriteBit(true); // the parameter is present (non-bool RPC param protocol - see FRpcReader)
+            writer.WriteInt32(value);
+        });
+
+    /// <summary>
+    ///     A server-&gt;client RPC taking one bool. Bools carry NO presence bit - the value bit is the
+    ///     whole encoding (FRepLayout::SendPropertiesForRPC, mirrored by FRpcReader on the way in).
+    /// </summary>
+    public void SendBoolRpc(string fieldName, bool value) =>
+        SendRpc(fieldName, writer => writer.WriteBit(value));
 
     /// <param name="reliable">
     ///     Must match the UFUNCTION's own declaration. Getting this wrong is not cosmetic: an

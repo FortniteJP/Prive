@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net;
+﻿namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Simplified, server-only port of UPackageMapClient. Implements just the write/export path
@@ -53,16 +53,27 @@ public class UPackageMapClient : UPackageMap {
         // ActorLevel: sending "no object" (GUID 0) tells the client to use its own current level.
         SerializeObject(bunch, null);
 
-        // We don't have a transform/component system yet, so every actor spawns at the origin -
-        // this matches real UE's own wire-format optimization for actors at the default transform.
-        var bSerializeLocation = false;
-        var bSerializeRotation = false;
-        var bSerializeScale = false;
-        var bSerializeVelocity = false;
-
+        // SerializeCompressedInitial (PackageMapClient.cpp:444-503). Each flag is IMMEDIATELY followed
+        // by its value when set - they are not four flags up front. Writing all four as false, as this
+        // used to, produces a byte-identical stream to the real thing for an actor at the default
+        // transform, which is why it went unnoticed; it just could not express anything else.
+        //
+        // Location matters because the client spawns the pawn wherever we say and then runs its own
+        // physics: with nothing sent, a real client put the pawn at the origin and it fell to
+        // Z=-5042, below the landscape (which sits at Z=-1692). Rotation/Scale/Velocity are still
+        // left at their defaults - there is no component system here to source them from.
+        var location = actor.GetActorLocation();
+        var bSerializeLocation = !location.IsNearlyZero();
         bunch.SerializeBits(&bSerializeLocation, 1);
+        if (bSerializeLocation) location.NetSerializeWriteQuantized(bunch, 10, 24); // FVector_NetQuantize10
+
+        var bSerializeRotation = false;
         bunch.SerializeBits(&bSerializeRotation, 1);
+
+        var bSerializeScale = false;
         bunch.SerializeBits(&bSerializeScale, 1);
+
+        var bSerializeVelocity = false;
         bunch.SerializeBits(&bSerializeVelocity, 1);
     }
 
