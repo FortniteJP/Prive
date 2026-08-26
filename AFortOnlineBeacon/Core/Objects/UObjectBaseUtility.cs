@@ -43,6 +43,17 @@ public class UObjectBaseUtility : UObjectBase {
     }
     
     public T? GetTypedOuter<T>() where T : UObject => (T?)GetTypedOuter(GUClassArray.StaticClass<T>());
+
+    /// <summary>
+    ///     UObjectBaseUtility::GetOutermost - walks to the top of the outer chain, which is by
+    ///     construction the object's UPackage. Returns this object when it has no outer (a package
+    ///     itself), matching the real implementation.
+    /// </summary>
+    public UObject GetOutermost() {
+        var top = (UObject) this;
+        for (var next = GetOuter(); next != null; next = next.GetOuter()) top = next;
+        return top;
+    }
     
     /*
      * Class

@@ -48,7 +48,8 @@ public class GUClassArray {
         // live client confirmed this is really an ACTOR class ("Sub-object cannot be actor class"
         // rejecting the sub-object-content-block approach) - see AFortInventory's doc comment.
         [typeof(AFortInventory)] = "/Script/FortniteGame.FortInventory",
-        // The native TimeOfDayManager, deliberately NOT the Battle Royale Blueprint.
+        // The native TimeOfDayManager. Override with TODM_CLASS - see below for why the Battle
+        // Royale Blueprint is not the default yet.
         //
         // /Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C is the "right" class (its CDO carries the
         // SkyboxFog*/day-phase settings) and was tried first, but the client does not preload it,
@@ -60,14 +61,19 @@ public class GUClassArray {
         //   Error: UPackageMapClient::SerializeNewActor Unable to read Archetype for NetGUID 2 / 3
         //
         // i.e. the actor was never spawned, because the archetype was still loading when the spawn
-        // header arrived. Real UE survives this via UActorChannel::ProcessQueuedBunches, which holds
-        // the channel's bunches until the GUID resolves; this project has that as a TODO.
+        // header arrived. The missing piece was on THIS side, not the client's: the client already
+        // has UActorChannel::ProcessQueuedBunches, but it only queues a channel's bunches when the
+        // bunch announces the GUIDs it is waiting on, and this server never announced any. It does
+        // now - see UChannel.AppendMustBeMappedGuids - so the race should be survivable.
         //
-        // A native class is always resident, so it cannot lose that race. Lighting will be whatever
-        // the native defaults are rather than Athena's, but the loading screen only needs the
-        // GameState's FortTimeOfDayManager to be non-null. Switch back to TODM_BR_C once queued
-        // bunches exist.
-        [typeof(AFortTimeOfDayManager)] = "/Script/FortniteGame.FortTimeOfDayManager"
+        // Still defaulting to the native class because that combination is live-confirmed working
+        // and the announcement path is not yet: a native class is always resident, so it cannot
+        // lose the race at all. Lighting is native defaults rather than Athena's; the loading
+        // screen only needs the GameState's FortTimeOfDayManager to be non-null. To try the real
+        // one: TODM_CLASS=/Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C
+        [typeof(AFortTimeOfDayManager)] = Environment.GetEnvironmentVariable("TODM_CLASS") is { Length: > 0 } todm
+            ? todm
+            : "/Script/FortniteGame.FortTimeOfDayManager"
     };
 
     public static UClass StaticClass<T>() => StaticClass(typeof(T));

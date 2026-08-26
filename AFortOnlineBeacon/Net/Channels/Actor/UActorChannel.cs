@@ -136,6 +136,18 @@ public class UActorChannel : UChannel {
         bunch.bReliable = true;
 
         var packageMap = (UPackageMapClient) Connection.PackageMap!;
+
+        // DataChannel.cpp:2825. The must-be-mapped list is per-connection and is supposed to be
+        // drained by the SendBunch of whichever bunch referenced those objects. Anything still in it
+        // here belongs to an earlier bunch that never flushed it, and would be prepended to THIS
+        // actor's bunch instead - worse, if it ever leaked onto a control-channel bunch the client
+        // would never strip the prefix, since only UActorChannel::ReceivedBunch reads it.
+        if (packageMap.GetMustBeMappedGuidsInLastBunch().Count != 0) {
+            Console.WriteLine("ReplicateActor: MustBeMappedGuidsInLastBunch is not empty at the start of " +
+                              $"replication ({packageMap.GetMustBeMappedGuidsInLastBunch().Count} leftover) - " +
+                              "some earlier bunch serialized objects without flushing them.");
+        }
+
         packageMap.SerializeNewActor(bunch, this, Actor);
         Actor.OnSerializeNewActor(bunch);
 

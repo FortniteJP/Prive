@@ -15,6 +15,7 @@ public class UPackageMapClient : UPackageMap {
     private readonly List<FNetworkGUID> _currentExportNetGuids = new();
     private readonly List<FOutBunch> _exportBunches = new();
     private readonly HashSet<uint> _exportedGuids = new();
+    private readonly List<FNetworkGUID> _mustBeMappedGuidsInLastBunch = new();
 
     public void Initialize(UNetConnection connection, FNetGUIDCache guidCache) {
         Connection = connection;
@@ -22,6 +23,13 @@ public class UPackageMapClient : UPackageMap {
     }
 
     public bool IsNetGUIDAuthority() => GuidCache?.IsNetGUIDAuthority() ?? true;
+
+    /// <summary>
+    ///     UPackageMapClient::GetMustBeMappedGuidsInLastBunch. GUIDs referenced since the last bunch
+    ///     was flushed that name an asset the client may still have to load. UChannel.SendBunch
+    ///     drains this into the front of the outgoing bunch - see UChannel.AppendMustBeMappedGuids.
+    /// </summary>
+    public List<FNetworkGUID> GetMustBeMappedGuidsInLastBunch() => _mustBeMappedGuidsInLastBunch;
 
     /// <summary>Writes a reference to `obj` (assigning it a NetGUID if it doesn't have one yet), exporting its path the first time it's referenced.</summary>
     public FNetworkGUID SerializeObject(FArchive ar, UObject? obj) {
@@ -78,6 +86,21 @@ public class UPackageMapClient : UPackageMap {
     }
 
     private unsafe void InternalWriteObject(FArchive ar, FNetworkGUID netGuid, UObject? obj, string objectPathName, UObject? objectOuter) {
+        // PackageMapClient.cpp:645-655. Any static GUID the client is capable of loading by path has
+        // to be announced ahead of the bunch that uses it, so the client can hold that channel's
+        // bunches until the async load finishes instead of processing a reference it cannot resolve
+        // yet. Skipping this is what produced "Unresolved Archetype GUID. Path: Default__TODM_BR_C"
+        // on the first attempt at spawning a Blueprint actor the client had not already loaded: a
+        // path export NAMES an asset, it does not stream one, and without the announcement the
+        // client had no reason to wait for it.
+        //
+        // Deliberately not done while writing the export bunch itself (those GUIDs are the
+        // announcement) nor for anything CanClientLoadObject rejects.
+        if (GuidCache!.ShouldAsyncLoad() && IsNetGUIDAuthority() && !GuidCache.IsExportingNetGUIDBunch
+            && GuidCache.CanClientLoadObject(obj, netGuid) && !_mustBeMappedGuidsInLastBunch.Contains(netGuid)) {
+            _mustBeMappedGuidsInLastBunch.Add(netGuid);
+        }
+
         netGuid.NetSerialize(ar);
 
         if (!netGuid.IsValid()) return;

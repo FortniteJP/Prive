@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net;
+﻿namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Server-side bookkeeping for a single tracked object: the info the client needs in order to
@@ -30,6 +30,40 @@ public class FNetGUIDCache {
     private readonly uint[] _uniqueNetIds = new uint[2]; // index 0 = dynamic, index 1 = static
 
     public bool IsNetGUIDAuthority() => Driver.IsServer();
+
+    /// <summary>
+    ///     FNetGUIDCache::ShouldAsyncLoad (PackageMapClient.cpp:3324). Real UE resolves this through
+    ///     AsyncLoadMode / the net.AllowAsyncLoading CVar; the value that matters here is the
+    ///     CLIENT's, because UActorChannel::ReceivedBunch drops every must-be-mapped GUID it reads
+    ///     when its own ShouldAsyncLoad() is false. The 10.40 client's is on - it logs
+    ///     "GetObjectFromNetGUID: Async loading package. Path: /Game/TimeOfDay/TODM/BR/TODM_BR",
+    ///     a line that only exists inside a ShouldAsyncLoad() branch - so announcing these GUIDs
+    ///     actually buys us the client-side bunch queueing. NET_ASYNC_LOAD=0 turns it back off.
+    /// </summary>
+    public bool ShouldAsyncLoad() => Environment.GetEnvironmentVariable("NET_ASYNC_LOAD") != "0";
+
+    /// <summary>
+    ///     FNetGUIDCache::CanClientLoadObject (PackageMapClient.cpp:610-639). Answers "could the
+    ///     client pull this object in by itself, given only its path?" - which decides whether the
+    ///     server may announce it as a must-be-mapped GUID and let the client stall the channel
+    ///     until the load finishes.
+    ///
+    ///     No for dynamic GUIDs (runtime-spawned objects exist only because we told the client to
+    ///     spawn them), and no for anything inside a map package (the client resolves those only by
+    ///     travelling to the map). Everything else - Blueprint classes, item definitions, playlists -
+    ///     is a normal asset it can async-load on demand.
+    /// </summary>
+    public bool CanClientLoadObject(UObject? obj, FNetworkGUID netGuid) {
+        if (!netGuid.IsValid() || netGuid.IsDynamic()) return false;
+
+        if (obj != null) return obj.GetOutermost() is not UPackage { bContainsMap: true };
+
+        // Object already gone: fall back to whatever we decided when the GUID was registered.
+        return !IsGUIDNoLoad(netGuid);
+    }
+
+    public bool IsGUIDNoLoad(FNetworkGUID netGuid) =>
+        ObjectLookup.TryGetValue(netGuid, out var cacheObject) && cacheObject.bNoLoad;
 
     public bool IsDynamicObject(UObject obj) => !obj.IsFullNameStableForNetworking();
 
@@ -78,7 +112,7 @@ public class FNetGUIDCache {
             Object = obj,
             OuterGUID = GetOrAssignNetGUID(obj.GetOuter()),
             PathName = obj.GetFName(),
-            bNoLoad = netGuid.IsDynamic()
+            bNoLoad = !CanClientLoadObject(obj, netGuid)
         };
 
         ObjectLookup[netGuid] = cacheObject;

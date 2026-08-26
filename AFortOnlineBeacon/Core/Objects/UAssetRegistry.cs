@@ -59,9 +59,16 @@ internal static class UAssetRegistry {
         var firstDot = path.IndexOf('.', lastSlash + 1);
         if (firstDot < 0) throw new ArgumentException($"UAssetRegistry: '{path}' has no package/object separator", nameof(path));
 
-        UObject outer = UPackageRegistry.GetOrCreate(path[..firstDot]);
+        var package = UPackageRegistry.GetOrCreate(path[..firstDot]);
+        UObject outer = package;
 
         foreach (var component in path[(firstDot + 1)..].Split('.', ':')) {
+            // "PersistentLevel" only ever exists as a subobject of a UWorld, so a path that walks
+            // through one is by definition a path into a map package. That matters on the wire: see
+            // UPackage.bContainsMap and FNetGUIDCache.CanClientLoadObject - the client must never be
+            // asked to wait on a GUID it can only resolve by loading a map.
+            if (component == "PersistentLevel") package.bContainsMap = true;
+
             var child = new UObject();
             child.InitializeObjectProperties(outer, new FName(component));
             child.SetFlags(EObjectFlags.RF_Public | EObjectFlags.RF_WasLoaded);

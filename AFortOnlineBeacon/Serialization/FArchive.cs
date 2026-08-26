@@ -117,6 +117,8 @@ public abstract class FArchive : IDisposable {
 
     public virtual unsafe void WriteUInt32(uint value) => ByteOrderSerialize(&value, sizeof(uint));
 
+    public virtual unsafe void WriteUInt16(ushort value) => ByteOrderSerialize(&value, sizeof(ushort));
+
     public virtual unsafe int ReadInt32() {
         int value;
         ByteOrderSerialize(&value, sizeof(int));

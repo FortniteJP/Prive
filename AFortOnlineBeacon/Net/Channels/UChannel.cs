@@ -320,6 +320,46 @@ public abstract class UChannel {
 
     protected abstract void ReceivedBunch(FInBunch bunch);
 
+    /// <summary>
+    ///     UChannel::AppendMustBeMappedGuids (DataChannel.cpp:796). Rewrites the bunch with the list
+    ///     of GUIDs the client may still need to load in front of it:
+    ///
+    ///         [uint16 count][packed guid] x count][the original bunch bits]
+    ///
+    ///     plus the bHasMustBeMappedGUIDs header bit, which is what tells the client's
+    ///     UActorChannel::ReceivedBunch to read that prefix at all. Having read it, the client holds
+    ///     every later bunch on this channel until those GUIDs resolve, instead of failing to
+    ///     resolve a reference mid-payload.
+    ///
+    ///     No queueing counterpart to UActorChannel::QueuedMustBeMappedGuidsInLastBunch is needed
+    ///     here: real UE accumulates RPCs into a RemoteFunctions bunch that is flushed much later,
+    ///     so it has to carry the GUIDs along separately, whereas UActorChannel.SendRpc in this
+    ///     project builds a bunch and sends it immediately - the package map's list is still intact
+    ///     when we get here.
+    /// </summary>
+    protected virtual void AppendMustBeMappedGuids(FOutBunch bunch) {
+        var mustBeMappedGuids = ((UPackageMapClient) Connection!.PackageMap!).GetMustBeMappedGuidsInLastBunch();
+
+        if (mustBeMappedGuids.Count == 0) return;
+
+        // Rewrite the bunch with the unique guids in front.
+        using var tempBunch = new FOutBunch(bunch);
+
+        bunch.Reset();
+
+        bunch.WriteUInt16((ushort) mustBeMappedGuids.Count);
+        foreach (var netGuid in mustBeMappedGuids) netGuid.NetSerialize(bunch);
+
+        bunch.SerializeBits(tempBunch.GetData(), tempBunch.GetNumBits());
+
+        bunch.bHasMustBeMappedGUIDs = true;
+
+        Console.WriteLine($"UChannel.AppendMustBeMappedGuids: ChIndex={ChIndex} count={mustBeMappedGuids.Count} " +
+                          $"guids=[{string.Join(",", mustBeMappedGuids)}]");
+
+        mustBeMappedGuids.Clear();
+    }
+
     public virtual FPacketIdRange SendBunch(FOutBunch bunch, bool merge) {
         if (Connection == null || Connection.Driver == null) throw new UnrealNetException();
         
@@ -391,7 +431,7 @@ public abstract class UChannel {
 
         if (Connection.Driver.IsServer()) {
             // Append any "must be mapped" guids to front of bunch from the packagemap
-            // TODO: AppendMustBeMappedGuids
+            AppendMustBeMappedGuids(bunch);
 
             if (bunch.bHasMustBeMappedGUIDs) {
                 merge = false;
