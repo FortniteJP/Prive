@@ -49,6 +49,18 @@ internal static partial class FortWeaponNetCaches {
         return For(chain, actorCache);
     }
 
+    /// <summary>
+    ///     Whether this weapon class descends from AFortWeaponRanged - i.e. whether it has a
+    ///     magazine at all. Read off the same generated chain table the ClassNetCache uses rather
+    ///     than guessed from the asset name, so a pickaxe can never be handed a reload ability.
+    /// </summary>
+    public static bool IsRanged(AFortWeapon weapon) {
+        var className = ClassNameOf(weapon);
+        return className != null
+               && Chains.TryGetValue(className, out var chain)
+               && chain.Contains("FortWeaponRanged");
+    }
+
     private static FClassNetCache For(string[] chain, FClassNetCache actorCache) {
         var key = string.Join('/', chain);
         if (Built.TryGetValue(key, out var existing)) return existing;

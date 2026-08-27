@@ -54,4 +54,23 @@ public class AFortWeapon : AActor {
     ///     (raider3.5 Inventory.h:290, `Instance->ItemEntry.LoadedAmmo = Weapon->AmmoCount`).
     /// </summary>
     public int AmmoCount { get; set; }
+
+    /// <summary>
+    ///     The FGameplayAbilitySpec this weapon's fire ability was granted as, or INDEX_NONE.
+    ///
+    ///     Kept so unequipping can take the grant back. Real UE does this in
+    ///     UAbilitySystemComponent::ClearAbility; without it, every weapon swap leaves a dead spec
+    ///     in ActivatableAbilities forever - and each one is a handle the client could still try to
+    ///     activate for a weapon that no longer exists.
+    /// </summary>
+    public int GrantedAbilitySpecHandle { get; set; } = -1;
+
+    /// <summary>
+    ///     AFortWeapon::ReloadAbilitySpecHandle - wire handle 33, and the other half of a usable
+    ///     magazine. A real server grants UFortGameplayAbility_Reload alongside the fire ability
+    ///     when a weapon is equipped; the Project-Reboot-3.0 capture shows both exported together
+    ///     the moment a rifle goes into the player's hands
+    ///     (Default__GA_Ranged_GenericDamage_C and Default__FortGameplayAbility_Reload, packet 1922).
+    /// </summary>
+    public int ReloadAbilitySpecHandle { get; set; } = -1;
 }

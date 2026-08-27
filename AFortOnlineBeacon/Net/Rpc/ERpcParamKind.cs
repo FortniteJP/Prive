@@ -28,5 +28,11 @@ public enum ERpcParamKind {
     VectorQuantize10,
     VectorQuantize100,
     Rotator,
-    String
+    String,
+
+    /// <summary>
+    ///     GameplayAbilities' FPredictionKey - a conditional bit layout rather than a fixed-size
+    ///     value. See FPredictionKey for the shape and the measurement that confirmed it.
+    /// </summary>
+    PredictionKey
 }

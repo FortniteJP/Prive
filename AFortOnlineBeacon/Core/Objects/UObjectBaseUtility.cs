@@ -81,7 +81,15 @@ public class UObjectBaseUtility : UObjectBase {
     ///     True for objects the server can hand a fresh (dynamic) NetGUID to and have the client spawn
     ///     on demand - i.e. actors. False by default; only overridden where UE itself overrides it.
     /// </summary>
-    public virtual bool IsSupportedForNetworking() => false;
+    /// <summary>
+    ///     UObject::IsSupportedForNetworking (Obj.cpp:4532) - `return IsFullNameStableForNetworking()`.
+    ///     Objects this returns false for can never be given a NetGUID at all
+    ///     (FNetGUIDCache::SupportsObject), so a reference to one goes out as the invalid guid 0.
+    ///     Subclasses that ARE networkable despite an unstable path have to say so: AActor does,
+    ///     and so does any replicated component (UActorComponent::IsSupportedForNetworking is
+    ///     `GetIsReplicated() || IsNameStableForNetworking()`).
+    /// </summary>
+    public virtual bool IsSupportedForNetworking() => IsFullNameStableForNetworking();
 
     public bool IsFullNameStableForNetworking() {
         if (!IsNameStableForNetworking()) return false;

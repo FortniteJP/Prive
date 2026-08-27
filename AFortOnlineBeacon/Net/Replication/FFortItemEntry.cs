@@ -39,7 +39,12 @@ public sealed class FFortItemEntry : IFastArrayItem {
     public float Durability { get; init; } = 1.0f;
 
     public int Level { get; init; }
-    public int LoadedAmmo { get; init; }
+    /// <summary>
+    ///     Settable: firing empties the magazine, and the inventory row is where that has to be
+    ///     recorded - the weapon actor is destroyed and rebuilt on every swap, so an ammo count kept
+    ///     only there would silently refill itself.
+    /// </summary>
+    public int LoadedAmmo { get; set; }
 
     /// <summary>FGuid is NOT one of the structs RepLayout special-cases as atomic, so it recurses into its four int32s (A/B/C/D).</summary>
     public Guid ItemGuid { get; init; } = Guid.NewGuid();

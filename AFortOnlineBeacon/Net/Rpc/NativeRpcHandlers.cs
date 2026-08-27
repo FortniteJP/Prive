@@ -131,6 +131,10 @@ internal static class NativeRpcHandlers {
                     return;
                 }
 
+                Console.WriteLine($"NativeRpcHandlers: ServerExecuteInventoryItem ItemGuid={itemGuid} " +
+                                  $"('{item.ItemDefinition.GetFName()}'), currently holding " +
+                                  $"{(pawn.CurrentWeapon is { } held ? held.ItemEntryGuid.ToString() : "nothing")}");
+
                 pawn.EquipInventoryItem(item);
             }
         ),
@@ -359,6 +363,10 @@ internal static class NativeRpcHandlers {
 
                 actor.SetActorLocation(clientLoc);
 
+                if (actor is APawn trackedPawn && actor.GetWorld()?.NetDriver is { } driver) {
+                    trackedPawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
+                }
+
                 var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
                 if (view != null && actor is APawn viewPawn) viewPawn.LastClientViewRotation = view;
                 if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerMoveNoBase on {actor.GetFName()} TimeStamp={values[0]} ClientLoc={clientLoc} CompressedMoveFlags={values[3]} ClientRoll={values[4]} View={view} ClientMovementMode={values[6]}");
@@ -398,6 +406,205 @@ internal static class NativeRpcHandlers {
             if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()} PendingAckGoodMoveTimeStamp={pawn.PendingAckGoodMoveTimeStamp}");
         }
     );
+
+    /// <summary>
+    ///     UAbilitySystemComponent's server RPCs. These arrive on the OWNER'S actor channel inside a
+    ///     sub-object content block, not on a channel of their own - a component never gets one.
+    ///
+    ///     Field indices come from the component's own ClassNetCache (GetMaxIndex 53, so a 6-bit
+    ///     index): ServerTryActivateAbility is 47, ServerSetReplicatedTargetData 45. Both were read
+    ///     straight off a real Project-Reboot-3.0 capture before any of this was written.
+    /// </summary>
+    private static readonly Dictionary<string, FRpcDef> AbilitySystemComponentRpcs = new() {
+        // 54 bits, fixed. Derived from FRepLayout::SendPropertiesForRPC (every non-bool parameter
+        // carries a leading "send" bit; bools do not) plus FPredictionKey::NetSerialize:
+        //   1 send + 32 handle + 1 InputPressed + 1 send + 3 PK flags + 16 PK Current = 54.
+        ["ServerTryActivateAbility"] = new FRpcDef(
+            "ServerTryActivateAbility",
+            new[] {
+                // FGameplayAbilitySpecHandle wraps one int32 and is NOT a NetSerialize struct, so it
+                // is read as that bare member - the 54-bit total only closes this way.
+                new FRpcParamDef("AbilityToActivate", ERpcParamKind.Int32),
+                new FRpcParamDef("InputPressed", ERpcParamKind.Bool),
+                new FRpcParamDef("PredictionKey", ERpcParamKind.PredictionKey)
+            },
+            (actor, values) => {
+                Console.WriteLine($"NativeRpcHandlers: ServerTryActivateAbility on {actor.GetFName()} " +
+                                  $"Handle={values[0]} InputPressed={values[1]} PredictionKey=[{values[2]}]");
+
+                if (actor is not APlayerState { AbilitySystemComponent: { } abilitySystem } playerState) return;
+                if (values[0] is not int handle) return;
+
+                var spec = abilitySystem.ActivatableAbilities.Items.FirstOrDefault(item => item.Handle == handle);
+                if (spec == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerTryActivateAbility for unknown spec handle {handle}, ignoring");
+                    return;
+                }
+
+                // Accept it. Real UE runs the ability's own CanActivate/cost/cooldown checks here and
+                // may answer ClientActivateAbilityFailed instead; this server has no ability
+                // instances to run, so the honest thing it CAN do is confirm the prediction the
+                // client already played - which is what unblocks the client from asking again.
+                var predictionKey = values[2] as FPredictionKey ?? new FPredictionKey();
+                playerState.GetWorld()?.NetDriver?.SendClientActivateAbilitySucceed(
+                    playerState, abilitySystem, handle, predictionKey);
+            }
+        ),
+
+        // The client reporting where a shot went - one per bullet, and the only honest "a round
+        // left the barrel" signal this server has. Real Fortnite spends ammo through the ability's
+        // cost GameplayEffect, which needs ability instances to run; nothing here can run one, and
+        // neither reference server has anything to copy because on an injected server the native
+        // GAS does it.
+        //
+        // Only the FIRST parameter is declared. UActorChannel.ReadContentBlockFields always resyncs
+        // to the field's own declared bit count afterwards, so stopping early cannot desync the
+        // bunch - the same trick ServerMove's tail relies on. That matters here because the rest is
+        // an FGameplayAbilityTargetDataHandle, whose contents this project cannot read yet.
+        ["ServerSetReplicatedTargetData"] = new FRpcDef(
+            "ServerSetReplicatedTargetData",
+            new[] { new FRpcParamDef("AbilityHandle", ERpcParamKind.Int32) },
+            (actor, values) => OnShotReported(actor, values[0], "ServerSetReplicatedTargetData")
+        ),
+
+        // The BATCHED form, and the one Fortnite's ranged fire ability actually uses. UE's
+        // FScopedServerAbilityRPCBatcher folds an activation, its target data and its end into a
+        // single FServerAbilityRPCBatch instead of three RPCs - so a weapon that batches never sends
+        // ServerSetReplicatedTargetData at all. A live capture of our own server made that plain:
+        // 41 ServerAbilityRPCBatch and 40 ServerEndAbility, against 2 loose ServerTryActivateAbility
+        // and zero target data.
+        //
+        // FServerAbilityRPCBatch's members, in order: AbilitySpecHandle (an int32), PredictionKey,
+        // TargetData, InputPressed, Ended (Started is RepSkip). Only the handle is declared here.
+        // Careful: the ONE "send" bit belongs to the whole BatchInfo parameter, not to its members -
+        // declaring a second parameter would read a presence bit that is not on the wire and desync
+        // the read. The field's own bit count resyncs afterwards regardless.
+        ["ServerAbilityRPCBatch"] = new FRpcDef(
+            "ServerAbilityRPCBatch",
+            new[] { new FRpcParamDef("AbilitySpecHandle", ERpcParamKind.Int32) },
+            (actor, values) => OnShotReported(actor, values[0], "ServerAbilityRPCBatch")
+        )
+    };
+
+    /// <summary>
+    ///     One reported shot, from either the loose or the batched path - UE sends one or the other
+    ///     per activation, never both, so this cannot double-count.
+    /// </summary>
+    private static void OnShotReported(AActor actor, object? handleValue, string source) {
+        if (actor is not APlayerState playerState) {
+            Console.WriteLine($"NativeRpcHandlers: {source} arrived on {actor.GetType().Name}, not a PlayerState");
+            return;
+        }
+
+        if (handleValue is not int abilityHandle) {
+            Console.WriteLine($"NativeRpcHandlers: {source} - AbilitySpecHandle absent (its 'send' bit was 0), " +
+                              "cannot tell which ability fired");
+            return;
+        }
+
+        var pawn = playerState.GetOwningPawn();
+        if (pawn == null) {
+            Console.WriteLine($"NativeRpcHandlers: {source} handle={abilityHandle} - no pawn reachable from " +
+                              $"{playerState.GetFName()} (Owner={playerState.Owner?.GetFName().ToString() ?? "null"})");
+            return;
+        }
+
+        if (pawn.CurrentWeapon is not { } weapon) {
+            Console.WriteLine($"NativeRpcHandlers: {source} handle={abilityHandle} - pawn holds no weapon");
+            return;
+        }
+
+        // The same batch RPC carries a RELOAD activation, told apart by which spec it names.
+        if (weapon.ReloadAbilitySpecHandle == abilityHandle) {
+            Reload(pawn, weapon);
+            return;
+        }
+
+        // The batch arrives for whatever ability produced it. Only the held weapon's own fire
+        // ability spends its magazine.
+        if (weapon.GrantedAbilitySpecHandle != abilityHandle) {
+            Console.WriteLine($"NativeRpcHandlers: {source} handle={abilityHandle} does not match the held " +
+                              $"weapon's granted spec {weapon.GrantedAbilitySpecHandle}, ignoring");
+            return;
+        }
+
+        ConsumeAmmo(pawn, weapon);
+    }
+
+    /// <summary>
+    ///     Refills the magazine from the reserve. Two things the server owes the client here, and
+    ///     without either one the reload looks like it works and changes nothing: the weapon's
+    ///     AmmoCount has to go up, and the reserve ammo ITEM has to go down.
+    ///
+    ///     ClipSize comes from the weapon's stat-table row (see FortWeaponActorClasses) - guessing
+    ///     it would make every weapon behave like a rifle. ReloadWholeClip is the only reload type
+    ///     modelled: the magazine is topped up in one go, which is what every Athena weapon in the
+    ///     table uses.
+    /// </summary>
+    private static void Reload(APawn pawn, AFortWeapon weapon) {
+        if (pawn.Controller is not APlayerController { WorldInventory: { } inventory }) return;
+
+        var clipSize = FortWeaponActorClasses.ClipSizeFor(weapon.WeaponData);
+        if (clipSize <= 0) return;
+
+        var wanted = clipSize - weapon.AmmoCount;
+        if (wanted <= 0) return; // already full - a real server has nothing to do either
+
+        var ammoDefinition = FortWeaponActorClasses.AmmoItemFor(weapon.WeaponData);
+        if (ammoDefinition == null) return;
+
+        var reserve = inventory.Inventory.Items.FirstOrDefault(item => item.ItemDefinition == ammoDefinition);
+        if (reserve == null || reserve.Count <= 0) {
+            Console.WriteLine($"NativeRpcHandlers: Reload - no {ammoDefinition.GetFName()} in the inventory, nothing to load");
+            return;
+        }
+
+        var loaded = Math.Min(wanted, reserve.Count);
+        weapon.AmmoCount += loaded;
+        reserve.Count -= loaded;
+
+        if (reserve.Count > 0) inventory.Inventory.MarkItemDirty(reserve);
+        else inventory.Inventory.Remove(reserve);
+
+        var entry = inventory.Inventory.Items.FirstOrDefault(item => item.ItemGuid == weapon.ItemEntryGuid);
+        if (entry != null) {
+            entry.LoadedAmmo = weapon.AmmoCount;
+            inventory.Inventory.MarkItemDirty(entry);
+        }
+
+        Console.WriteLine($"NativeRpcHandlers: reloaded {weapon.GetFName()} +{loaded} -> {weapon.AmmoCount}/{clipSize}, " +
+                          $"{reserve.Count} spare left");
+    }
+
+    /// <summary>
+    ///     Spends one round. The count lives in two places that have to agree: the weapon actor
+    ///     (AFortWeapon::AmmoCount, what the client reads to draw the counter) and the inventory row
+    ///     (FFortItemEntry::LoadedAmmo, what survives a weapon swap - the actor does not, it is
+    ///     destroyed and rebuilt every time).
+    ///
+    ///     Nothing reloads yet, so a magazine simply runs dry and stays there.
+    /// </summary>
+    private static void ConsumeAmmo(APawn pawn, AFortWeapon weapon) {
+        if (weapon.AmmoCount <= 0) return;
+
+        weapon.AmmoCount--;
+
+        if (pawn.Controller is APlayerController { WorldInventory: { } inventory }) {
+            var entry = inventory.Inventory.Items.FirstOrDefault(item => item.ItemGuid == weapon.ItemEntryGuid);
+            if (entry != null) {
+                entry.LoadedAmmo = weapon.AmmoCount;
+                inventory.Inventory.MarkItemDirty(entry);
+            }
+        }
+
+        Console.WriteLine($"NativeRpcHandlers: shot fired - {weapon.GetFName()} ammo now {weapon.AmmoCount}");
+    }
+
+    /// <summary>The RPC table for a replicated sub-object, keyed by what the sub-object actually is.</summary>
+    public static Dictionary<string, FRpcDef>? GetForSubObject(UObject subObject) => subObject switch {
+        UFortAbilitySystemComponent => AbilitySystemComponentRpcs,
+        _ => null
+    };
 
     public static Dictionary<string, FRpcDef>? Get(AActor actor) => actor switch {
         APlayerController => PlayerControllerRpcs,

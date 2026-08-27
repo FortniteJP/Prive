@@ -90,7 +90,14 @@ internal static class NativeRepLayouts {
             EnumMaxValue = (int) ENetRole.ROLE_MAX,
             GetByteValue = obj => (byte) ((AActor) obj).Role
         },
-        Reserved("Instigator") // live-probed handle 15
+        new FRepPropertyDef {
+            // Live-probed handle 15. Promoted from a Reserved slot once a real client proved it is
+            // load-bearing: a weapon whose Instigator never arrives makes AFortWeaponRanged log
+            // "The instigator pawn is null when it shouldn't be!" every frame and never works.
+            Name = "Instigator",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AActor) obj).GetInstigator()
+        }
     };
 
     /// <summary>
@@ -471,7 +478,32 @@ internal static class NativeRepLayouts {
         new() { Name = "ItemEntryGuid.D", Kind = ERepPropertyKind.Int32, GetIntValue = obj => WeaponGuidPart(obj, 3) },
 
         new() { Name = "WeaponLevel", Kind = ERepPropertyKind.Int32, GetIntValue = obj => ((AFortWeapon) obj).WeaponLevel }, // 27, 0x0724
-        new() { Name = "AmmoCount", Kind = ERepPropertyKind.Int32, GetIntValue = obj => ((AFortWeapon) obj).AmmoCount }      // 28, 0x0728
+        new() { Name = "AmmoCount", Kind = ERepPropertyKind.Int32, GetIntValue = obj => ((AFortWeapon) obj).AmmoCount },     // 28, 0x0728
+
+        Reserved("ChargeStatusPack", ERepPropertyKind.Int16), // 29, 0x0754
+        Reserved("ActiveAbility"),                            // 30, 0x0770 - class UFortGameplayAbility*
+        new() {
+            // 31, 0x0778 - FGameplayAbilitySpecHandle, i.e. one bare int32. NOT an atomic
+            // NetSerialize struct: the engine source has no WithNetSerializer for it, and the
+            // 54-bit ServerTryActivateAbility measured off a real capture only adds up if this
+            // recurses to its single member.
+            //
+            // This is the link that makes a weapon fireable: it indexes the ASC's
+            // ActivatableAbilities, so without it the client holds a weapon that knows no ability.
+            Name = "PrimaryAbilitySpecHandle",
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((AFortWeapon) obj).GrantedAbilitySpecHandle
+        },
+
+        Reserved("SecondaryAbilitySpecHandle"), // 32, 0x077C - int32
+        new() {
+            // 33, 0x0780. Same shape as 31: one bare int32 indexing ActivatableAbilities. Without
+            // it the client has a magazine it can empty and no way to refill - the reload input has
+            // no ability to reach.
+            Name = "ReloadAbilitySpecHandle",
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((AFortWeapon) obj).ReloadAbilitySpecHandle
+        }
     }).ToArray();
 
     /// <summary>AFortWeapon::ItemEntryGuid's four int32 members A/B/C/D, in declaration order.</summary>
@@ -1174,6 +1206,145 @@ internal static class NativeRepLayouts {
         Reserved("Inventory"),  // handle 17 - Custom Delta, see above; never sendable via FRepLayout
         Reserved("ReplayPawn")  // handle 18
     }).ToArray();
+
+    /// <summary>
+    ///     UFortAbilitySystemComponentAthena's RepLayout - the first COMPONENT layout in this
+    ///     project. Components chain off UObject, not AActor, so this does NOT start from ActorProps:
+    ///     handle 1 is UActorComponent's own first property.
+    ///
+    ///     DERIVED by `python Tools/RepHandles/rep_handles.py UFortAbilitySystemComponentAthena`.
+    ///     Declared only as far as AvatarActor (8) - nothing past it is sent.
+    ///
+    ///     Handles 7 and 8 are why a player could fire but only crawl. Fortnite drives walk speed
+    ///     from GameplayAttributes, and those only reach a pawn's CharacterMovement once the ASC
+    ///     knows which actor it belongs to (OwnerActor) and which one it acts through (AvatarActor)
+    ///     - UAbilitySystemComponent::InitAbilityActorInfo. Without them the client had healthy
+    ///     attributes (WalkSpeed 200, RunSpeed 410) that were bound to nothing, and its velocity sat
+    ///     clamped at exactly 1.0 uu/s while acceleration read a perfectly normal 940.
+    /// </summary>
+    private static readonly FRepPropertyDef[] AbilitySystemComponentProps = {
+        Reserved("bReplicates"),                                       // 1, 0x0084 - uint8
+        Reserved("bIsActive"),                                         // 2, 0x0086 - uint8
+        Reserved("SimulatedTasks", ERepPropertyKind.EmptyDynamicArray), // 3, 0x00C0
+        new() {
+            // 4, 0x0140 - TArray<UAttributeSet*>. See UFortAbilitySystemComponent.SpawnedAttributes.
+            Name = "SpawnedAttributes",
+            Kind = ERepPropertyKind.ObjectRefArray,
+            GetObjectArrayValue = obj => ((UFortAbilitySystemComponent) obj).SpawnedAttributes
+        },
+        Reserved("ClientDebugStrings", ERepPropertyKind.EmptyDynamicArray), // 5, 0x0338
+        Reserved("ServerDebugStrings", ERepPropertyKind.EmptyDynamicArray), // 6, 0x0348
+        new() {
+            // 7, 0x03F8 - the actor that OWNS the component: the PlayerState.
+            Name = "OwnerActor",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((UFortAbilitySystemComponent) obj).OwnerActor
+        },
+        new() {
+            // 8, 0x0400 - the actor the component ACTS THROUGH: the pawn. This is the one that
+            // makes movement attributes reach the character.
+            Name = "AvatarActor",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((UFortAbilitySystemComponent) obj).AvatarActor
+        }
+    };
+
+    /// <summary>
+    ///     UFortMovementSet's RepLayout, as far as SpeedMultiplier (handles 91-92).
+    ///
+    ///     A GameplayAttribute is NOT one handle - FFortGameplayAttributeData is a plain struct with
+    ///     no native NetSerialize, so FRepLayout recurses into all NINE of its members
+    ///     (BaseValue, CurrentValue, Minimum, Maximum, three clamp bools, and the two Unclamped
+    ///     values). Eleven attributes at nine handles each is why SpeedMultiplier lands at 91.
+    ///
+    ///     The first 90 handles are carried by name only, generated with
+    ///     `python Tools/RepHandles/rep_handles.py UFortMovementSet --from 1 --to 90`.
+    /// </summary>
+    private static readonly FRepPropertyDef[] MovementSetReservedNames = new[] {
+         "WalkSpeed.BaseValue", "WalkSpeed.CurrentValue", "WalkSpeed.Minimum", "WalkSpeed.Maximum",
+         "WalkSpeed.bIsCurrentClamped", "WalkSpeed.bIsBaseClamped", "WalkSpeed.bShouldClampBase",
+         "WalkSpeed.UnclampedBaseValue", "WalkSpeed.UnclampedCurrentValue", "RunSpeed.BaseValue",
+         "RunSpeed.CurrentValue", "RunSpeed.Minimum", "RunSpeed.Maximum", "RunSpeed.bIsCurrentClamped",
+         "RunSpeed.bIsBaseClamped", "RunSpeed.bShouldClampBase", "RunSpeed.UnclampedBaseValue",
+         "RunSpeed.UnclampedCurrentValue", "SprintSpeed.BaseValue", "SprintSpeed.CurrentValue",
+         "SprintSpeed.Minimum", "SprintSpeed.Maximum", "SprintSpeed.bIsCurrentClamped",
+         "SprintSpeed.bIsBaseClamped", "SprintSpeed.bShouldClampBase", "SprintSpeed.UnclampedBaseValue",
+         "SprintSpeed.UnclampedCurrentValue", "FlySpeed.BaseValue", "FlySpeed.CurrentValue", "FlySpeed.Minimum",
+         "FlySpeed.Maximum", "FlySpeed.bIsCurrentClamped", "FlySpeed.bIsBaseClamped",
+         "FlySpeed.bShouldClampBase", "FlySpeed.UnclampedBaseValue", "FlySpeed.UnclampedCurrentValue",
+         "CrouchedRunSpeed.BaseValue", "CrouchedRunSpeed.CurrentValue", "CrouchedRunSpeed.Minimum",
+         "CrouchedRunSpeed.Maximum", "CrouchedRunSpeed.bIsCurrentClamped", "CrouchedRunSpeed.bIsBaseClamped",
+         "CrouchedRunSpeed.bShouldClampBase", "CrouchedRunSpeed.UnclampedBaseValue",
+         "CrouchedRunSpeed.UnclampedCurrentValue", "CrouchedSprintSpeed.BaseValue",
+         "CrouchedSprintSpeed.CurrentValue", "CrouchedSprintSpeed.Minimum", "CrouchedSprintSpeed.Maximum",
+         "CrouchedSprintSpeed.bIsCurrentClamped", "CrouchedSprintSpeed.bIsBaseClamped",
+         "CrouchedSprintSpeed.bShouldClampBase", "CrouchedSprintSpeed.UnclampedBaseValue",
+         "CrouchedSprintSpeed.UnclampedCurrentValue", "BackwardSpeedMultiplier.BaseValue",
+         "BackwardSpeedMultiplier.CurrentValue", "BackwardSpeedMultiplier.Minimum",
+         "BackwardSpeedMultiplier.Maximum", "BackwardSpeedMultiplier.bIsCurrentClamped",
+         "BackwardSpeedMultiplier.bIsBaseClamped", "BackwardSpeedMultiplier.bShouldClampBase",
+         "BackwardSpeedMultiplier.UnclampedBaseValue", "BackwardSpeedMultiplier.UnclampedCurrentValue",
+         "JumpHeight.BaseValue", "JumpHeight.CurrentValue", "JumpHeight.Minimum", "JumpHeight.Maximum",
+         "JumpHeight.bIsCurrentClamped", "JumpHeight.bIsBaseClamped", "JumpHeight.bShouldClampBase",
+         "JumpHeight.UnclampedBaseValue", "JumpHeight.UnclampedCurrentValue", "GravityZScale.BaseValue",
+         "GravityZScale.CurrentValue", "GravityZScale.Minimum", "GravityZScale.Maximum",
+         "GravityZScale.bIsCurrentClamped", "GravityZScale.bIsBaseClamped", "GravityZScale.bShouldClampBase",
+         "GravityZScale.UnclampedBaseValue", "GravityZScale.UnclampedCurrentValue",
+         "VehicleGravityZScale.BaseValue", "VehicleGravityZScale.CurrentValue", "VehicleGravityZScale.Minimum",
+         "VehicleGravityZScale.Maximum", "VehicleGravityZScale.bIsCurrentClamped",
+         "VehicleGravityZScale.bIsBaseClamped", "VehicleGravityZScale.bShouldClampBase",
+         "VehicleGravityZScale.UnclampedBaseValue", "VehicleGravityZScale.UnclampedCurrentValue"
+    }.Select(name => Reserved(name)).ToArray();
+
+    /// <summary>
+    ///     A GameplayAttribute's BaseValue and CurrentValue, at the two handles it owns. They are
+    ///     always sent together: a client that took only one would have an attribute whose base and
+    ///     current disagree.
+    /// </summary>
+    private static IEnumerable<FRepPropertyDef> Attribute(string name, int baseHandle, Func<UFortMovementSet, float> get) {
+        yield return new FRepPropertyDef { Name = $"{name}.BaseValue", Kind = ERepPropertyKind.Float, GetFloatValue = obj => get((UFortMovementSet) obj) };
+        yield return new FRepPropertyDef { Name = $"{name}.CurrentValue", Kind = ERepPropertyKind.Float, GetFloatValue = obj => get((UFortMovementSet) obj) };
+    }
+
+    private static readonly FRepPropertyDef[] MovementSetProps = BuildMovementSetProps();
+
+    private static FRepPropertyDef[] BuildMovementSetProps() {
+        // Start from the derived names, then replace the two value slots of each attribute we
+        // actually send. Handles are 1-based: attribute N occupies 9N+1 .. 9N+9.
+        var props = MovementSetReservedNames.ToList();
+
+        void Send(int baseHandle, string name, Func<UFortMovementSet, float> get) {
+            var replacement = Attribute(name, baseHandle, get).ToArray();
+            props[baseHandle - 1] = replacement[0];
+            props[baseHandle] = replacement[1];
+        }
+
+        Send(1, "WalkSpeed", set => set.WalkSpeed);
+        Send(10, "RunSpeed", set => set.RunSpeed);
+        Send(19, "SprintSpeed", set => set.SprintSpeed);
+        Send(37, "CrouchedRunSpeed", set => set.CrouchedRunSpeed);
+        Send(46, "CrouchedSprintSpeed", set => set.CrouchedSprintSpeed);
+        Send(55, "BackwardSpeedMultiplier", set => set.BackwardSpeedMultiplier);
+
+        return props.Concat(new FRepPropertyDef[] {
+        new() {
+            // 91, 0x01C0. BaseValue and CurrentValue are sent together: a client that took only one
+            // of them would have an attribute whose base and current disagree.
+            Name = "SpeedMultiplier.BaseValue",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((UFortMovementSet) obj).SpeedMultiplier
+        },
+        new() {
+            Name = "SpeedMultiplier.CurrentValue", // 92
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((UFortMovementSet) obj).SpeedMultiplier
+        }
+        }).ToArray();
+    }
+
+    public static readonly FRepLayout MovementSet = new(MovementSetProps);
+
+    public static readonly FRepLayout AbilitySystemComponent = new(AbilitySystemComponentProps);
 
     public static readonly FRepLayout Actor = new(ActorProps);
     public static readonly FRepLayout Controller = new(ControllerProps);

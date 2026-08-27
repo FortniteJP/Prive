@@ -106,9 +106,14 @@ public class UActorChannel : UChannel {
         // (ItemEntryGuid) and how loaded it is. Owner is the pawn - a real server sets it
         // (raider3.5 Inventory.h:294) and the client uses it to decide whose hands to put this in.
         AFortWeapon => new HashSet<string> {
-            "RemoteRole", "Role", "Owner", "WeaponData",
+            // Instigator (handle 15) is what the client's own weapon code reads to find the pawn
+            // holding this - without it AFortWeaponRanged::OwnerIsMoving errors every frame and the
+            // weapon never becomes usable.
+            "RemoteRole", "Role", "Owner", "Instigator", "WeaponData",
             "ItemEntryGuid.A", "ItemEntryGuid.B", "ItemEntryGuid.C", "ItemEntryGuid.D",
-            "WeaponLevel", "AmmoCount"
+            "WeaponLevel", "AmmoCount",
+            // Which granted abilities this weapon fires and reloads with - handles 31 and 33.
+            "PrimaryAbilitySpecHandle", "ReloadAbilitySpecHandle"
         },
         AFortPickup => new HashSet<string> {
             "RemoteRole", "Role",
@@ -229,7 +234,9 @@ public class UActorChannel : UChannel {
         bunch.SerializeIntPacked(&numPayloadBits);
 
         var payloadData = payload.GetData();
-        Console.WriteLine($"ReplicateActor: RemoteRole={Actor.RemoteRole} Role={Actor.Role} numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+        Console.WriteLine($"ReplicateActor: {Actor.GetFName()} ChIndex={ChIndex} RemoteRole={Actor.RemoteRole} " +
+                          $"Role={Actor.Role} numPayloadBits={numPayloadBits} " +
+                          $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
         fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
 
         foreach (var subobject in GetInitialReplicatedSubobjects(Actor)) ReplicateSubobject(subobject, bunch);
@@ -303,8 +310,10 @@ public class UActorChannel : UChannel {
         var changed = layout.CompareProperties(Actor, ReplicatedProperties, _shadowState);
 
         // Custom deltas go in their own bunch, so an actor with no changed RepLayout property can
-        // still have a changed fast array.
+        // still have a changed fast array. The same is true one level down, for a component's.
         var wroteSomething = ReplicateCustomDeltaUpdate();
+        wroteSomething |= ReplicateAbilitySystemComponent();
+        wroteSomething |= ReplicateMovementSet();
 
         if (changed.Count == 0) return wroteSomething;
 
@@ -540,6 +549,140 @@ public class UActorChannel : UChannel {
     /// </summary>
     private readonly Dictionary<string, FNetFastTArrayBaseState> _fastArrayBaseStates = new();
 
+    /// <summary>
+    ///     Replicates this actor's AbilitySystemComponent as a SUB-OBJECT content block - the first
+    ///     time this project sends one, and the only shape a component can travel in (a component is
+    ///     not an actor, so it never gets a channel of its own).
+    ///
+    ///     The framing is the ordinary content block with bIsActor=0, which makes the header carry
+    ///     the component's own NetGUID plus - because a component of a runtime-spawned actor is
+    ///     never name-stable - its class, so the client can construct it. That matches a real
+    ///     Project-Reboot-3.0 capture exactly: the player's ASC there is a dynamic guid with no path
+    ///     export, and every one of its 96 blocks rides its owner's channel this way.
+    ///
+    ///     Sent in its own bunch rather than appended to the actor's, purely so a failure here
+    ///     cannot corrupt the actor's own property stream while this path is new.
+    /// </summary>
+    private unsafe bool ReplicateAbilitySystemComponent() {
+        if (Connection == null || Actor is not APlayerState { AbilitySystemComponent: { } asc }) return false;
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 256);
+
+        // The component's own properties come first, in the same handle stream an actor uses - the
+        // ONLY thing that makes this a component rather than an actor is the content block header.
+        // OwnerActor/AvatarActor are what let the client run InitAbilityActorInfo and therefore
+        // apply movement attributes to the pawn; see NativeRepLayouts.AbilitySystemComponentProps.
+        var layout = NativeRepLayouts.AbilitySystemComponent;
+        var changed = layout.CompareProperties(asc, AbilitySystemProperties, _ascShadowState);
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        if (changedNames.Count > 0) layout.WriteChangedProperties(payload, asc, changedNames);
+
+        var wroteDelta = WriteCustomDeltaField(payload, NativeClassNetCache.FortAbilitySystemComponentCache,
+            "ActivatableAbilities", fieldPayload =>
+                FFastArraySerializerWriter.WriteDelta(fieldPayload, asc.ActivatableAbilities,
+                    BaseStateFor("ActivatableAbilities"), FFastArraySerializerWriter.WriteAbilitySpec));
+
+        if (changedNames.Count == 0 && !wroteDelta) return false;
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        // bHasRepLayout says whether a handle stream leads the payload. WriteContentBlockHeader
+        // writes that bit, the bIsActor=0 bit, and the object reference.
+        WriteContentBlockHeader(asc, bunch, hasRepLayout: changedNames.Count > 0);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        var ascGuid = ((UPackageMapClient) Connection.PackageMap!).GuidCache!.GetNetGUID(asc);
+        Console.WriteLine($"ReplicateAbilitySystemComponent: ChIndex={ChIndex} Actor={Actor.GetFName()} " +
+                          $"ascNetGuid={ascGuid} stablyNamed={asc.IsNameStableForNetworking()} " +
+                          $"changed=[{string.Join(", ", changedNames)}] " +
+                          $"abilities={asc.ActivatableAbilities.Count} numPayloadBits={numPayloadBits} " +
+                          $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        SendBunch(bunch, false);
+
+        // Only after the bunch is away, for the same reason ReplicateActorUpdate commits late.
+        FRepLayout.CommitShadowState(changed, _ascShadowState);
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Sends the PlayerState's MovementSet attribute values as a sub-object content block - the
+    ///     same framing the AbilitySystemComponent uses, one sibling over.
+    ///
+    ///     Only SpeedMultiplier is sent. Every other attribute already has a healthy value on the
+    ///     client (its log prints WalkSpeed 200, RunSpeed 410), so re-sending them would be noise;
+    ///     SpeedMultiplier is the one that never appears there at all.
+    /// </summary>
+    private unsafe bool ReplicateMovementSet() {
+        if (Connection == null || Actor is not APlayerState { MovementSet: { } movementSet }) return false;
+
+        var layout = NativeRepLayouts.MovementSet;
+        var changed = layout.CompareProperties(movementSet, MovementSetProperties, _movementSetShadowState);
+        if (changed.Count == 0) return false;
+
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 128);
+        layout.WriteChangedProperties(payload, movementSet, changedNames);
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        WriteContentBlockHeader(movementSet, bunch, hasRepLayout: true);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"ReplicateMovementSet: ChIndex={ChIndex} RunSpeed={movementSet.RunSpeed} " +
+                          $"changed=[{string.Join(", ", changedNames)}] numPayloadBits={numPayloadBits} " +
+                          $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        SendBunch(bunch, false);
+        FRepLayout.CommitShadowState(changed, _movementSetShadowState);
+        return true;
+    }
+
+    /// <summary>
+    ///     The movement attributes this server sends. MaxWalkSpeed reads 0 on the client
+    ///     (confirmed with `GetAll FortMovementComp_CharacterAthena MaxWalkSpeed`), and Fortnite
+    ///     drives it from these - so with nothing feeding them the character has no speed at all.
+    ///     Base and Current always travel together.
+    /// </summary>
+    private static readonly HashSet<string> MovementSetProperties = new() {
+        "WalkSpeed.BaseValue", "WalkSpeed.CurrentValue",
+        "RunSpeed.BaseValue", "RunSpeed.CurrentValue",
+        "SprintSpeed.BaseValue", "SprintSpeed.CurrentValue",
+        "CrouchedRunSpeed.BaseValue", "CrouchedRunSpeed.CurrentValue",
+        "CrouchedSprintSpeed.BaseValue", "CrouchedSprintSpeed.CurrentValue",
+        "BackwardSpeedMultiplier.BaseValue", "BackwardSpeedMultiplier.CurrentValue",
+        "SpeedMultiplier.BaseValue", "SpeedMultiplier.CurrentValue"
+    };
+
+    private readonly Dictionary<string, object?> _movementSetShadowState = new();
+
+    /// <summary>
+    ///     The AbilitySystemComponent properties this server sends. Deliberately just the two links
+    ///     that make the component usable - everything else on it is either server bookkeeping or a
+    ///     subsystem this project does not have.
+    /// </summary>
+    private static readonly HashSet<string> AbilitySystemProperties = new() {
+        "SpawnedAttributes", "OwnerActor", "AvatarActor"
+    };
+
+    /// <summary>The component's own shadow buffer, kept apart from the actor's.</summary>
+    private readonly Dictionary<string, object?> _ascShadowState = new();
+
     private FNetFastTArrayBaseState BaseStateFor(string fieldName) {
         if (!_fastArrayBaseStates.TryGetValue(fieldName, out var state)) {
             state = new FNetFastTArrayBaseState();
@@ -603,8 +746,10 @@ public class UActorChannel : UChannel {
     ///     written - an unchanged fast array must be absent from the bunch, not present as an empty
     ///     header, or the client re-runs its whole PostReceiveCleanup and RepNotify for no reason.
     /// </summary>
-    private unsafe bool WriteCustomDeltaField(FNetBitWriter payload, string fieldName, Func<FNetBitWriter, bool> writeDelta) {
-        var classCache = NativeClassNetCache.Get(Actor!);
+    private bool WriteCustomDeltaField(FNetBitWriter payload, string fieldName, Func<FNetBitWriter, bool> writeDelta) =>
+        WriteCustomDeltaField(payload, NativeClassNetCache.Get(Actor!), fieldName, writeDelta);
+
+    private unsafe bool WriteCustomDeltaField(FNetBitWriter payload, FClassNetCache classCache, string fieldName, Func<FNetBitWriter, bool> writeDelta) {
         var field = classCache.GetFromName(fieldName);
         if (field == null) {
             Console.WriteLine($"WriteCustomDeltaProperties: '{fieldName}' not found in {Actor!.GetType().Name}'s ClassNetCache, not sending");
@@ -822,6 +967,71 @@ public class UActorChannel : UChannel {
     public void SendBoolRpc(string fieldName, bool value) =>
         SendRpc(fieldName, writer => writer.WriteBit(value));
 
+    /// <summary>
+    ///     A server-&gt;client RPC on a replicated COMPONENT. Identical to SendRpc below except the
+    ///     content block names the sub-object instead of the actor, and the field index is bounded by
+    ///     the COMPONENT's ClassNetCache rather than the actor's - a component has its own index
+    ///     space entirely (the ASC's GetMaxIndex is 53, so 6 bits).
+    /// </summary>
+    private unsafe void SendSubObjectRpc(UObject subObject, FClassNetCache classCache, string fieldName,
+                                         Action<FNetBitWriter> writeParams, bool reliable = true) {
+        if (Actor == null || Connection == null) return;
+
+        var field = classCache.GetFromName(fieldName);
+        if (field == null) {
+            Console.WriteLine($"SendSubObjectRpc: '{fieldName}' not found in the sub-object's ClassNetCache, not sending");
+            return;
+        }
+
+        using var payload = new FNetBitWriter(Connection.PackageMap!, 64);
+        payload.WriteBit(false); // bDoChecksum
+        uint terminator = 0;
+        payload.SerializeIntPacked(&terminator); // empty RepLayout property section
+
+        using var fieldPayload = new FNetBitWriter(Connection.PackageMap!, 64);
+        writeParams(fieldPayload);
+
+        var fieldIndex = (uint) field.FieldNetIndex;
+        payload.SerializeInt(&fieldIndex, (uint) (classCache.GetMaxIndex() + 1));
+        var fieldBits = (uint) fieldPayload.GetNumBits();
+        payload.SerializeIntPacked(&fieldBits);
+        var fieldData = fieldPayload.GetData();
+        fixed (byte* p = fieldData) payload.SerializeBits(p, fieldPayload.GetNumBits());
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = reliable;
+
+        WriteContentBlockHeader(subObject, bunch, hasRepLayout: true);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"SendSubObjectRpc: {fieldName} on {subObject.GetFName()} fieldIndex={fieldIndex} " +
+                          $"numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        SendBunch(bunch, false);
+    }
+
+    /// <summary>
+    ///     UAbilitySystemComponent::ClientActivateAbilitySucceed (field index 9) - the server's
+    ///     "yes, that activation stands" for a client that has already predicted it.
+    ///
+    ///     Without this the client is left holding an unresolved prediction key forever, which is
+    ///     why only the FIRST ServerTryActivateAbility ever arrived: it predicts, waits, and does
+    ///     not ask again.
+    /// </summary>
+    public void SendClientActivateAbilitySucceed(UObject abilitySystem, int abilityHandle, FPredictionKey predictionKey) =>
+        SendSubObjectRpc(abilitySystem, NativeClassNetCache.FortAbilitySystemComponentCache,
+            "ClientActivateAbilitySucceed", writer => {
+                writer.WriteBit(true);              // AbilityToActivate is present (non-bool param)
+                writer.WriteInt32(abilityHandle);   // FGameplayAbilitySpecHandle's single int32
+
+                writer.WriteBit(true);              // PredictionKey is present
+                FPredictionKey.Write(writer, predictionKey);
+            });
+
     /// <param name="reliable">
     ///     Must match the UFUNCTION's own declaration. Getting this wrong is not cosmetic: an
     ///     unreliable-in-UE RPC sent reliably at gameplay frequency (ClientAckGoodMove fires at the
@@ -934,8 +1144,20 @@ public class UActorChannel : UChannel {
             // NEXT block (and every later one) survives. That is the whole difference from before:
             // one unreadable component block used to cost the entire remainder of the bunch.
             if (!bIsActor) {
-                Console.WriteLine($"UActorChannel.ReceivedBunch: skipping {numPayloadBits} bits of sub-object payload " +
-                                  "(no ClassNetCache for components yet) - the rest of the bunch is still read");
+                // A component we could not resolve has no ClassNetCache either, so its field indices
+                // cannot be decoded - but NumPayloadBits below still resyncs the bunch, so the rest
+                // survives either way.
+                if (subObject is UFortAbilitySystemComponent) {
+                    try {
+                        ReadContentBlockFields(bunch, NativeClassNetCache.FortAbilitySystemComponentCache,
+                            payloadEnd, subObject);
+                    } catch (Exception ex) {
+                        Console.WriteLine($"UActorChannel.ReceivedBunch: sub-object field decode threw on ChIndex={ChIndex}: {ex}");
+                    }
+                } else {
+                    Console.WriteLine($"UActorChannel.ReceivedBunch: skipping {numPayloadBits} bits from unresolved " +
+                                      $"sub-object '{subObjectPath}' - the rest of the bunch is still read");
+                }
             } else if (Actor != null) {
                 try {
                     ReadContentBlockFields(bunch, NativeClassNetCache.Get(Actor), payloadEnd);
@@ -967,9 +1189,13 @@ public class UActorChannel : UChannel {
     ///     own declared bit count always resyncs bunch.Pos at the end of the loop body regardless of
     ///     what a handler actually consumed, so a handler bug can't desync the rest of the bunch.
     /// </summary>
-    private unsafe void ReadContentBlockFields(FInBunch bunch, FClassNetCache classCache, long payloadEnd) {
+    private unsafe void ReadContentBlockFields(FInBunch bunch, FClassNetCache classCache, long payloadEnd,
+                                               UObject? subObject = null) {
         var maxIndex = classCache.GetMaxIndex();
-        var rpcTable = Actor != null ? NativeRpcHandlers.Get(Actor) : null;
+        var target = subObject ?? Actor;
+        var rpcTable = subObject != null
+            ? NativeRpcHandlers.GetForSubObject(subObject)
+            : Actor != null ? NativeRpcHandlers.Get(Actor) : null;
 
         while (bunch.Pos < payloadEnd && !bunch.IsError()) {
             var repIndex = (int) bunch.ReadInt((uint) (maxIndex + 1));
@@ -986,19 +1212,27 @@ public class UActorChannel : UChannel {
             if (rpcTable != null && rpcTable.TryGetValue(fieldName, out var rpcDef)) {
                 try {
                     var values = FRpcReader.ReadParams(bunch, rpcDef.Params);
-                    rpcDef.Invoke(Actor!, values);
+                    rpcDef.Invoke(target as AActor ?? Actor!, values);
                 } catch (Exception ex) {
                     Console.WriteLine($"UActorChannel.ReceivedBunch: RPC {fieldName} failed to decode on ChIndex={ChIndex} Actor={Actor?.GetFName()}: {ex}");
                 }
+            } else if (subObject != null) {
+                // Not gated on verbose: a component field arrives only when the player actually does
+                // something, and each unrecognised one names the next thing worth implementing.
+                Console.WriteLine($"UActorChannel.ReceivedBunch:   SUB-OBJECT field[{repIndex}]={fieldName} " +
+                                  $"on {subObject.GetFName()} ({fieldNumBits} payload bits) - no handler");
             } else {
                 if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits)");
             }
 
-            HandlePossessionRpc(fieldName);
+            // Both of these are about the channel's ACTOR; a component's fields never mean either.
+            if (subObject == null) {
+                HandlePossessionRpc(fieldName);
 
-            // Any accepted client move leaves a timestamp owed back to the client; this is the only
-            // place we learn one arrived. Throttled inside - see SendClientAckGoodMove.
-            if (fieldName.StartsWith("ServerMove", StringComparison.Ordinal)) SendClientAckGoodMove();
+                // Any accepted client move leaves a timestamp owed back to the client; this is the
+                // only place we learn one arrived. Throttled inside - see SendClientAckGoodMove.
+                if (fieldName.StartsWith("ServerMove", StringComparison.Ordinal)) SendClientAckGoodMove();
+            }
 
             bunch.Pos = fieldEnd;
         }

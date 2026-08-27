@@ -1,6 +1,7 @@
 ﻿using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
 using CUE4Parse.UE4.Assets.Exports;
+using CUE4Parse.UE4.Assets.Exports.Engine;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Objects.UObject;
@@ -174,6 +175,25 @@ foreach (var path in mapPaths) {
         var want = classFilter["props:".Length..];
 
         foreach (var export in exports) {
+            // A UDataTable keeps its contents in RowMap, not in Properties - so the ordinary
+            // property walk below prints an empty object for one. Weapon stats (ClipSize,
+            // damage, reload time) all live in these, reached from a WID's WeaponStatHandle.
+            if (export is UDataTable dataTable) {
+                foreach (var (rowName, row) in dataTable.RowMap) {
+                    if (want.Length > 0 && !rowName.Text.Contains(want, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    Console.WriteLine();
+                    Console.WriteLine($"--- {path}");
+                    Console.WriteLine($"DataTable row  {rowName.Text}");
+                    foreach (var rowProp in row.Properties) {
+                        Console.WriteLine($"    {rowProp.Name,-46} {rowProp.Tag?.GenericValue}");
+                    }
+                    located++;
+                }
+
+                continue;
+            }
+
             if (want.Length > 0
                 && !export.ExportType.Contains(want, StringComparison.OrdinalIgnoreCase)
                 && !export.Name.Contains(want, StringComparison.OrdinalIgnoreCase)) continue;
@@ -182,6 +202,24 @@ foreach (var path in mapPaths) {
             Console.WriteLine($"--- {path}");
             Console.WriteLine($"{export.ExportType}  {export.Name}");
             foreach (var prop in export.Properties) {
+                // A struct property used to print as its C# type name and nothing else, which hid
+                // exactly the things worth reading - a FDataTableRowHandle's table and row name, a
+                // FScalableFloat's value. One level of recursion turns those into something usable.
+                // CUE4Parse wraps a struct value in FScriptStruct, whose ToString() prints the
+                // INNER type name - so the old output looked like it was already showing the struct
+                // when it was showing nothing at all.
+                var nested = (prop.Tag?.GenericValue as FScriptStruct)?.StructType as FStructFallback
+                             ?? prop.Tag?.GenericValue as FStructFallback;
+
+                if (nested != null) {
+                    Console.WriteLine($"    {prop.Name,-46} {{");
+                    foreach (var inner in nested.Properties) {
+                        Console.WriteLine($"        {inner.Name,-42} {inner.Tag?.GenericValue}");
+                    }
+                    Console.WriteLine("    }");
+                    continue;
+                }
+
                 Console.WriteLine($"    {prop.Name,-46} {prop.Tag?.GenericValue}");
             }
             located++;

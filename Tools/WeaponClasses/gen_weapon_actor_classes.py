@@ -38,6 +38,33 @@ internal static partial class FortWeaponActorClasses {
     private static readonly Dictionary<string, string> Table = new(StringComparer.OrdinalIgnoreCase) {
 '''
 
+ABILITY_HEADER = '''    /// <summary>
+    ///     Item definition name -> its PrimaryFireAbility, the UGameplayAbility class the server
+    ///     grants into UAbilitySystemComponent::ActivatableAbilities when the weapon is equipped.
+    ///     Nothing the client can fire exists until one of these is granted. %d entries.
+    /// </summary>
+    private static readonly Dictionary<string, string> AbilityTable = new(StringComparer.OrdinalIgnoreCase) {
+'''
+
+AMMO_HEADER = '''    /// <summary>
+    ///     Item definition name -> the FortAmmoItemDefinition its magazine draws from. Reloading
+    ///     pulls from a SEPARATE inventory item, so a player holding only the weapon is correctly
+    ///     told there is not enough ammo. Project-Reboot-3.0 hands out both together when a weapon
+    ///     is spawned as loot (FortLootPackage.cpp:349-355, GetAmmoData + GetDropCount). %d entries.
+    /// </summary>
+    private static readonly Dictionary<string, string> AmmoTable = new(StringComparer.OrdinalIgnoreCase) {
+'''
+
+CLIP_HEADER = '''    /// <summary>
+    ///     Item definition name -> ClipSize, i.e. how many rounds a full magazine holds. A WID does
+    ///     not carry this: it carries a FDataTableRowHandle into a weapon-stats table, so this is
+    ///     joined through that row name (see the script's docstring for the second dump). Only
+    ///     ranged weapons appear - melee and trap definitions point at other tables and have no
+    ///     magazine. %d entries.
+    /// </summary>
+    private static readonly Dictionary<string, int> ClipSizeTable = new(StringComparer.OrdinalIgnoreCase) {
+'''
+
 FOOTER = '''    };
 }
 '''
@@ -73,11 +100,65 @@ def main():
 
         m = re.match(r"^WeaponActorClass\s+(\S.*)$", stripped)
         if m:
-            entries[current] = m.group(1).strip()
+            entries.setdefault(current, {})["actor"] = m.group(1).strip()
 
-    print(HEADER % len(entries), end="")
-    for name in sorted(entries, key=str.lower):
-        print('        ["%s"] = "%s",' % (name, entries[name]))
+        m = re.match(r"^PrimaryFireAbility\s+(\S.*)$", stripped)
+        if m:
+            entries.setdefault(current, {})["ability"] = m.group(1).strip()
+
+        m = re.match(r"^AmmoData\s+(\S.*)$", stripped)
+        if m:
+            entries.setdefault(current, {})["ammo"] = m.group(1).strip()
+
+        # The WeaponStatHandle's RowName, printed by MapActorDump's one level of struct recursion.
+        m = re.match(r"^RowName\s+(\S+)$", stripped)
+        if m:
+            entries.setdefault(current, {}).setdefault("row", m.group(1))
+
+    actors = {k: v["actor"] for k, v in entries.items() if "actor" in v}
+    abilities = {k: v["ability"] for k, v in entries.items() if "ability" in v}
+
+    print(HEADER % len(actors), end="")
+    for name in sorted(actors, key=str.lower):
+        print('        ["%s"] = "%s",' % (name, actors[name]))
+    print("    };")
+    print()
+    print(ABILITY_HEADER % len(abilities), end="")
+    for name in sorted(abilities, key=str.lower):
+        print('        ["%s"] = "%s",' % (name, abilities[name]))
+    print("    };")
+    print()
+
+    ammo = {k: v["ammo"] for k, v in entries.items() if "ammo" in v}
+    print(AMMO_HEADER % len(ammo), end="")
+    for name in sorted(ammo, key=str.lower):
+        print('        ["%s"] = "%s",' % (name, ammo[name]))
+    print("    };")
+    print()
+
+    # WID -> ClipSize, joined through the stat row name. Only ranged weapons resolve: melee and
+    # trap definitions point at other tables entirely, and have no magazine to size.
+    clips = {}
+    if len(sys.argv) > 2:
+        row_clip, row = {}, None
+        with open(sys.argv[2], encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                m = re.match(r"^DataTable row\s+(\S+)$", stripped)
+                if m:
+                    row = m.group(1)
+                    continue
+                if row:
+                    m = re.match(r"^ClipSize\s+(\d+)$", stripped)
+                    if m:
+                        row_clip[row] = int(m.group(1))
+
+        clips = {k: row_clip[v["row"]] for k, v in entries.items()
+                 if "row" in v and v["row"] in row_clip}
+
+    print(CLIP_HEADER % len(clips), end="")
+    for name in sorted(clips, key=str.lower):
+        print('        ["%s"] = %d,' % (name, clips[name]))
     print(FOOTER, end="")
 
 

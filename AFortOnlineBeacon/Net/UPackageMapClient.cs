@@ -154,8 +154,10 @@ public class UPackageMapClient : UPackageMap {
         //
         // Deliberately not done while writing the export bunch itself (those GUIDs are the
         // announcement) nor for anything CanClientLoadObject rejects.
-        if (GuidCache!.ShouldAsyncLoad() && IsNetGUIDAuthority() && !GuidCache.IsExportingNetGUIDBunch
-            && GuidCache.CanClientLoadObject(obj, netGuid) && !_mustBeMappedGuidsInLastBunch.Contains(netGuid)) {
+        var bNoLoad = !GuidCache!.CanClientLoadObject(obj, netGuid);
+
+        if (GuidCache.ShouldAsyncLoad() && IsNetGUIDAuthority() && !GuidCache.IsExportingNetGUIDBunch
+            && !bNoLoad && !_mustBeMappedGuidsInLastBunch.Contains(netGuid)) {
             _mustBeMappedGuidsInLastBunch.Add(netGuid);
         }
 
@@ -170,9 +172,15 @@ public class UPackageMapClient : UPackageMap {
             // kept only for symmetry with the real implementation.
             bHasPath = true;
             ar.WriteByte(1);
-        } else if (GuidCache!.IsExportingNetGUIDBunch) {
+        } else if (GuidCache.IsExportingNetGUIDBunch) {
             bHasPath = obj != null ? ShouldSendFullPath(obj, netGuid) : !string.IsNullOrEmpty(objectPathName);
-            ar.WriteByte((byte) (bHasPath ? 1 : 0));
+
+            // FExportFlags (PackageMapClient.h): bit 0 bHasPath, bit 1 bNoLoad, bit 2 bHasNetworkChecksum.
+            // bNoLoad says "resolve this by name only, never try to load a package for it" - true for
+            // anything CanClientLoadObject rejects, which includes a component whose outer is a
+            // runtime-spawned actor. Every asset export this project already relies on is loadable,
+            // so for those the byte is unchanged.
+            ar.WriteByte((byte) ((bHasPath ? 1 : 0) | (bNoLoad ? 2 : 0)));
         }
 
         if (!bHasPath) return;

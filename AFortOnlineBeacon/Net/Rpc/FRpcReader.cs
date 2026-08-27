@@ -30,11 +30,31 @@ public static class FRpcReader {
                 ERpcParamKind.VectorQuantize100 => FVector.NetSerializeReadQuantized(bunch, 100, 30),
                 ERpcParamKind.Rotator => FRotator.NetSerializeRead(bunch),
                 ERpcParamKind.String => bunch.ReadString(),
+                ERpcParamKind.PredictionKey => ReadPredictionKey(bunch),
                 _ => throw new NotSupportedException($"FRpcReader: unhandled param kind {def.Kind}")
             };
         }
 
         return values;
+    }
+
+    /// <summary>
+    ///     FPredictionKey::NetSerialize (GameplayPrediction.h). Note the middle bit is CONDITIONAL:
+    ///     HasBaseKey is only on the wire when the key is valid for this connection, so reading it
+    ///     unconditionally would shift everything after it.
+    /// </summary>
+    private static FPredictionKey ReadPredictionKey(FArchive bunch) {
+        var key = new FPredictionKey { bValidKeyForConnection = bunch.ReadBit() };
+
+        var hasBaseKey = false;
+        if (key.bValidKeyForConnection) hasBaseKey = bunch.ReadBit();
+
+        key.bIsServerInitiated = bunch.ReadBit();
+
+        if (key.bValidKeyForConnection) key.Current = (short) bunch.ReadUInt16();
+        if (hasBaseKey) key.Base = (short) bunch.ReadUInt16();
+
+        return key;
     }
 
     /// <summary>

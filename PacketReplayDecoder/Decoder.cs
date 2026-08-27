@@ -511,7 +511,20 @@ internal sealed class RoleDecoder {
                 var subPath = _guidPaths.GetValueOrDefault(subGuid.Value);
                 var subBits = r.ReadUInt32Packed();
                 var subStart = r.Pos;
-                var subEnd = Math.Min(subStart + subBits, r.GetNumBits());
+
+                // A block claiming more bits than the packet has left means the bunch is already
+                // desynced - almost always because this sub-object is NOT an AbilitySystemComponent
+                // and its own header framing differs. Decoding on regardless produces field indices
+                // and payload sizes that look real and are pure noise; that noise was briefly
+                // mistaken for genuine ActivatableAbilities traffic. Stop instead.
+                if (subBits > (uint) (r.GetNumBits() - subStart)) {
+                    Log($"#{packetIndex}:   [ChIndex={chIndex}] SUB-OBJECT block guid={subGuid.Value} claims " +
+                        $"{subBits} bits with only {r.GetNumBits() - subStart} left - not an ASC block, or the " +
+                        "bunch is desynced. Abandoning this bunch.");
+                    return;
+                }
+
+                var subEnd = subStart + subBits;
 
                 Log($"#{packetIndex}:   [ChIndex={chIndex}] SUB-OBJECT block guid={subGuid.Value} " +
                     $"path={subPath ?? "(unknown)"} bHasRepLayout={bHasRepLayout} numPayloadBits={subBits}");
@@ -529,7 +542,14 @@ internal sealed class RoleDecoder {
                             break;
                         }
 
-                        Log($"#{packetIndex}:     FIELD index={fieldIndex} ({AscFieldName(fieldIndex)}) numPayloadBits={fieldBits}");
+                        var fieldStart = r.Pos;
+                        var hex = new System.Text.StringBuilder();
+                        for (var bit = 0; bit < fieldBits && bit < 256; bit++) {
+                            if (bit % 8 == 0 && bit > 0) hex.Append(' ');
+                            hex.Append(r.BufferBits[(int) (fieldStart + bit)] ? '1' : '0');
+                        }
+
+                        Log($"#{packetIndex}:     FIELD index={fieldIndex} ({AscFieldName(fieldIndex)}) numPayloadBits={fieldBits} bits={hex}");
                         r.Pos += (int) fieldBits;
                     }
                 }

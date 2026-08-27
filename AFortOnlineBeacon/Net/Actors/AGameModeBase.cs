@@ -190,6 +190,24 @@ public class AGameModeBase : AInfo {
                 LoadedAmmo = 30
             });
 
+            // Ammunition for the starting weapon. Reloading pulls from a SEPARATE inventory item,
+            // not from the weapon, so a player holding only a rifle is told - correctly - that
+            // there is not enough ammo to reload. Project-Reboot-3.0 hands both out together
+            // whenever a weapon is spawned as loot (FortLootPackage.cpp:349-355: GetAmmoData()
+            // plus GetDropCount()).
+            //
+            // The count is ours to choose - a real Battle Royale player starts with nothing but a
+            // pickaxe, so there is no authentic number to copy. Ten drops' worth of the real
+            // DropCount (12 for AthenaAmmoDataBulletsMedium, read from the cooked asset), so the
+            // figure is at least anchored to real data. STARTING_AMMO overrides it.
+            var startingWeaponItem = worldInventory.Inventory.Items.LastOrDefault();
+            if (FortWeaponActorClasses.AmmoItemFor(startingWeaponItem?.ItemDefinition) is { } ammoItem) {
+                worldInventory.Inventory.Add(new FFortItemEntry {
+                    ItemDefinition = ammoItem,
+                    Count = int.TryParse(Environment.GetEnvironmentVariable("STARTING_AMMO"), out var ammo) && ammo > 0 ? ammo : 120
+                });
+            }
+
             newPlayerController.WorldInventory = worldInventory;
         }
 
@@ -205,6 +223,73 @@ public class AGameModeBase : AInfo {
             // APlayerState.UniqueId. Real UE does this in AGameModeBase::Login via
             // PlayerState->SetUniqueId.
             playerState.UniqueId = uniqueId;
+
+            // AController::InitPlayerState does this, and APlayerState::GetOwningController is just
+            // Cast<AController>(GetOwner()) - so without it the player state has no way back to its
+            // controller, and anything that starts from the PlayerState (an ability RPC arrives on
+            // ITS channel) cannot find the pawn.
+            playerState.SetOwner(newPlayerController);
+
+            // The AbilitySystemComponent, flagged RF_DefaultSubObject - and that flag is the whole
+            // ballgame. UActorChannel::ReadContentBlockHeader branches on the "stably named" bit:
+            //
+            //   bStablyNamed = 1 -> the client RESOLVES an existing sub-object and never creates one
+            //   bStablyNamed = 0 -> the client reads a class and NewObjects a fresh one
+            //
+            // and we write that bit from IsNameStableForNetworking(). Without the flag we wrote 0,
+            // so a real client dutifully built a SECOND AbilitySystemComponent
+            // ("Instantiating sub-object. Class: FortAbilitySystemComponentAthena") while
+            // AFortPlayerState::AbilitySystemComponent - a non-replicated pointer set by the
+            // client's own constructor - went on pointing at the original. Every ability we granted
+            // landed in a component nothing referenced. No error, no warning, simply inert.
+            //
+            // The name must match the real component's exactly, because that is how the client
+            // finds it: the export carries the outer's GUID plus this name.
+            //
+            // Note the two stability rules are NOT the same and both are already implemented
+            // correctly here: the GUID stays DYNAMIC because IsFullNameStableForNetworking walks
+            // the outer chain and this PlayerState is runtime-spawned (matching the real capture,
+            // where the player's ASC is the even guid 584), while the path export and the
+            // stably-named bit both use IsNameStableForNetworking, which looks only at this object.
+            playerState.AbilitySystemComponent = UObjectGlobals.NewObject<UFortAbilitySystemComponent>(
+                playerState,
+                GUClassArray.StaticClass<UFortAbilitySystemComponent>(),
+                new FName("AbilitySystemComponent"),
+                EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject);
+
+            if (playerState.AbilitySystemComponent != null) {
+                playerState.AbilitySystemComponent.OwnerActor = playerState;
+
+                // The attribute sets. These are DEFAULT SUBOBJECTS OF THE PLAYER STATE, not of the
+                // component - a real Project-Reboot-3.0 capture exports all ten of them in one
+                // packet (#189) right after Default__FortPlayerStateAthena, and in this order.
+                //
+                // Nothing here creates or fills anything: the client's own PlayerState constructor
+                // already built these with their real defaults (its log prints WalkSpeed 200,
+                // RunSpeed 410). Being stably named, each is referenced by PATH - outer plus name -
+                // so no class and no attribute values go on the wire. All the server has to do is
+                // INTRODUCE them through the ASC's SpawnedAttributes array, because
+                // GetNumericAttribute finds a set by searching that array and an empty one makes
+                // every attribute read as zero. That is what left walk speed clamped at 1 uu/s.
+                foreach (var setName in AttributeSetNames) {
+                    // MovementSet alone gets a typed stand-in, because it is the only one this
+                    // server sends attribute VALUES for - see UFortMovementSet.
+                    var isMovementSet = setName == "MovementSet";
+
+                    var set = isMovementSet
+                        ? UObjectGlobals.NewObject<UFortMovementSet>(
+                            playerState, GUClassArray.StaticClass<UFortMovementSet>(), new FName(setName),
+                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject)
+                        : UObjectGlobals.NewObject<UFortAttributeSet>(
+                            playerState, GUClassArray.StaticClass<UFortAttributeSet>(), new FName(setName),
+                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject);
+
+                    if (set == null) continue;
+
+                    playerState.AbilitySystemComponent.SpawnedAttributes.Add(set);
+                    if (set is UFortMovementSet movementSet) playerState.MovementSet = movementSet;
+                }
+            }
             Console.WriteLine($"AGameModeBase.Login: PlayerState UniqueId={uniqueId.ToDebugString()}");
 
             // Mirror the same player into the GameState's roster. Add() hands out the ReplicationID
@@ -298,6 +383,16 @@ public class AGameModeBase : AInfo {
         return new FVector { X = x, Y = y, Z = z };
     }
 
+    /// <summary>
+    ///     The PlayerState's attribute sets, in the order a real server sends them (recovered from
+    ///     Project-Reboot-3.0 packet #189). Only the NAMES matter: the client resolves each by path
+    ///     against the subobject its own constructor already made.
+    /// </summary>
+    private static readonly string[] AttributeSetNames = {
+        "HealthSet", "ControlResistanceSet", "DamageSet", "MovementSet", "AdvancedMovementSet",
+        "ConstructionSet", "PlayerAttrSet", "CharacterAttrSet", "WeaponAttrSet", "HomebaseSet"
+    };
+
     public void PostLogin(APlayerController newPlayer) {
         var world = GetWorld();
         if (world == null) return;
@@ -325,6 +420,14 @@ public class AGameModeBase : AInfo {
             pawn.SetActorLocation(SpawnLocation);
 
             newPlayer.Possess(pawn);
+
+            // The ASC acts THROUGH the pawn. UAbilitySystemComponent::InitAbilityActorInfo is what
+            // binds movement attributes to a character's CharacterMovement, and it needs an avatar;
+            // without one the client had WalkSpeed 200 / RunSpeed 410 applying to nothing and moved
+            // at a velocity clamped to exactly 1.0 uu/s. See NativeRepLayouts handle 8.
+            if (newPlayer.PlayerState?.AbilitySystemComponent is { } abilitySystem) {
+                abilitySystem.AvatarActor = pawn;
+            }
 
             // Spawn holding the pickaxe, the way a real match starts. The client will also ask for
             // this itself the moment the player touches a quickbar slot

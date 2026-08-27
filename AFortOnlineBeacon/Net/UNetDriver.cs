@@ -132,6 +132,20 @@ public abstract class UNetDriver {
     }
 
     /// <summary>
+    ///     Sends ClientActivateAbilitySucceed on whichever connection owns this actor's channel.
+    ///
+    ///     It lives here rather than on the actor because a component RPC has to go out on its
+    ///     OWNER'S channel, and only the driver knows which connections have one - the same reason
+    ///     the ASC's property updates are driven from ServerReplicateActors.
+    /// </summary>
+    public void SendClientActivateAbilitySucceed(AActor owner, UObject abilitySystem, int abilityHandle,
+                                                 FPredictionKey predictionKey) {
+        foreach (var connection in ClientConnections) {
+            connection.FindActorChannel(owner)?.SendClientActivateAbilitySucceed(abilitySystem, abilityHandle, predictionKey);
+        }
+    }
+
+    /// <summary>
     ///     Set false by REP_TICK=0. The escape hatch for the whole ongoing-replication pass: before
     ///     this existed every channel was a one-shot burst at join, so turning it off restores
     ///     exactly the behaviour every earlier live test ran against.

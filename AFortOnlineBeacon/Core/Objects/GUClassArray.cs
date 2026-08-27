@@ -52,6 +52,13 @@ public class GUClassArray {
         // so it is always resident on the client; AFortPickupAthena adds no replicated properties
         // of its own, so NativeRepLayouts.PickupProps is really AFortPickup's layout.
         [typeof(AFortPickup)] = "/Script/FortniteGame.FortPickupAthena",
+        // The player's AbilitySystemComponent. Native, so always resident on the client - which
+        // matters more than usual here: a sub-object content block that has to CREATE the object
+        // client-side sends this class reference, and an unresolvable one leaves the client with a
+        // block it cannot construct. UFortAbilitySystemComponentAthena adds no net fields over its
+        // parent, so either class name gives the same field index space (see the component's own
+        // doc comment).
+        [typeof(UFortAbilitySystemComponent)] = "/Script/FortniteGame.FortAbilitySystemComponentAthena",
         // Athena's real TimeOfDayManager Blueprint - its CDO carries the SkyboxFog*/day-phase
         // settings, so this is what makes the match look like daytime rather than the native
         // defaults' permanent dark. Override with TODM_CLASS

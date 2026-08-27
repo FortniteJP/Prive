@@ -11,7 +11,10 @@ class Program {
 
     static async Task<int> Main(string[] args) {
         //StartPacketCapture();
-        //StartConsoleLog();
+        // On by default now: the console scrolls faster than it can be read once a match is
+        // running, and every diagnosis in this project has come from grepping a transcript rather
+        // than watching one. SERVER_LOG=0 turns it off.
+        if (Environment.GetEnvironmentVariable("SERVER_LOG") != "0") StartConsoleLog();
 
         var worldUrl = new FUrl {
             Map = "/Game/Athena/Maps/Athena_Terrain",

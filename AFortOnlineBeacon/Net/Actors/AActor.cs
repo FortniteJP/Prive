@@ -126,6 +126,19 @@ public class AActor : UObject {
 
     public APawn? GetInstigator() => _Instigator;
 
+    /// <summary>
+    ///     AActor::Instigator - wire handle 15, and it is not decoration. A real client refuses to
+    ///     run a weapon without it:
+    ///
+    ///         LogFort: Error: AFortWeaponRanged::OwnerIsMoving() B_Assault_Auto_Athena_C_...:
+    ///                  The instigator pawn is null when it shouldn't be!
+    ///
+    ///     repeated every frame the weapon existed. Owner (handle 13) is not a substitute - Owner is
+    ///     "who replicates this", Instigator is "whose pawn is responsible for what it does", and
+    ///     weapon code reads the second.
+    /// </summary>
+    public void SetInstigator(APawn? instigator) => _Instigator = instigator;
+
     public bool IsActorInitialized() => bActorInitialized;
 
     public bool IsPendingKillPending() => bActorIsBeingDestroyed || IsPendingKill();
@@ -164,6 +177,11 @@ public class AActor : UObject {
     public virtual void OnSerializeNewActor(FOutBunch bunch) {}
 
     public void PostSpawnInitialize(FTransform userSpawnTransform, AActor? inOwner, AActor? inInstigator, bool bRemoteOwned, bool bNoFail, bool bDeferConstruction) {
+        // Both spawn parameters were being accepted and dropped on the floor - _Instigator was never
+        // assigned anywhere (the compiler had been saying so: CS0649 "is never assigned to").
+        if (inOwner != null) SetOwner(inOwner);
+        if (inInstigator is APawn instigatorPawn) SetInstigator(instigatorPawn);
+
         // General flow here is like so
         // - Actor sets up the basics.
         // - Actor gets PreInitializeComponents()

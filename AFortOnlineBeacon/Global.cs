@@ -1,4 +1,4 @@
-global using AFortOnlineBeacon.Runtime;
+﻿global using AFortOnlineBeacon.Runtime;
 global using AFortOnlineBeacon.Core;
 global using AFortOnlineBeacon.Core.Math;
 global using AFortOnlineBeacon.Core.Names;
@@ -6,6 +6,7 @@ global using AFortOnlineBeacon.Core.Objects;
 global using AFortOnlineBeacon.Core.Properties;
 global using AFortOnlineBeacon.Exceptions;
 global using AFortOnlineBeacon.Net;
+global using AFortOnlineBeacon.Net.Abilities;
 global using AFortOnlineBeacon.Net.Actors;
 global using AFortOnlineBeacon.Net.Channels;
 global using AFortOnlineBeacon.Net.Channels.Actor;

@@ -265,6 +265,22 @@ internal static class FFastArraySerializerWriter {
     ///     bits at the current (possibly unaligned) bit position - NOT SerializeIntPacked. The
     ///     FastArray header relies on this fixed width, so it must not be packed.
     /// </summary>
+    /// <summary>
+    ///     One FGameplayAbilitySpec item body - the six non-RepSkip members, in the struct's own
+    ///     declaration (offset) order. Everything omitted here is RepSkip in the 10.40 SDK, i.e.
+    ///     server bookkeeping the client rebuilds itself; see FGameplayAbilitySpec.
+    /// </summary>
+    public static void WriteAbilitySpec(FNetBitWriter payload, FGameplayAbilitySpec spec) {
+        var packageMap = (UPackageMapClient) payload.PackageMap!;
+
+        WriteInt32(payload, spec.Handle);           // FGameplayAbilitySpecHandle - one bare int32
+        packageMap.SerializeObject(payload, spec.Ability);
+        WriteInt32(payload, spec.Level);
+        WriteInt32(payload, spec.InputID);
+        packageMap.SerializeObject(payload, spec.SourceObject);
+        WriteEmptyArray(payload);                   // ReplicatedInstances - none; the client instances abilities itself
+    }
+
     private static unsafe void WriteInt32(FNetBitWriter payload, int value) {
         payload.SerializeBits(&value, 32);
     }

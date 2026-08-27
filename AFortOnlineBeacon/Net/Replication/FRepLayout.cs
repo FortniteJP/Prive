@@ -83,6 +83,18 @@ public sealed class FRepLayout {
                 return def.GetNetIdValue == null ? NotComparable : def.GetNetIdValue(instance)?.ToDebugString();
             case ERepPropertyKind.ObjectRef:
                 return def.GetObjectValue == null ? NotComparable : def.GetObjectValue(instance);
+            case ERepPropertyKind.ObjectRefArray:
+                // Identity per element, in order - the same rule as a single ObjectRef, since a
+                // NetGUID reference IS identity. Flattened to a string so the snapshot has value
+                // equality; holding the live List would compare it against itself after a change.
+                //
+                // Without this case the Kind fell through to NotComparable, which means "never
+                // changed" - and a property that is never changed is never sent. SpawnedAttributes
+                // silently stayed off the wire.
+                return def.GetObjectArrayValue == null
+                    ? NotComparable
+                    : string.Join('|', def.GetObjectArrayValue(instance)
+                        .Select(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode));
             case ERepPropertyKind.VectorQuantize10:
                 // Compared by string: FVector is a mutable reference type here, so holding the
                 // instance would compare a value with itself after the actor moved it.
@@ -167,6 +179,32 @@ public sealed class FRepLayout {
 
                 payload.SerializeIntPacked(&handle);
                 ((UPackageMapClient) payload.PackageMap!).SerializeObject(payload, cmd.Def.GetObjectValue(instance));
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.ObjectRefArray) {
+                if (cmd.Def.GetObjectArrayValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no object-array serializer yet, can't be in a changed set.");
+                }
+
+                var elements = cmd.Def.GetObjectArrayValue(instance);
+                var packageMap = (UPackageMapClient) payload.PackageMap!;
+
+                payload.SerializeIntPacked(&handle);
+
+                var count = (ushort) elements.Count;
+                payload.SerializeBits(&count, 16);
+
+                // Handles inside an array are relative and 1-based per element - one handle per
+                // element here, since an object reference is a single leaf cmd.
+                for (var index = 0; index < elements.Count; index++) {
+                    var elementHandle = (uint) (index + 1);
+                    payload.SerializeIntPacked(&elementHandle);
+                    packageMap.SerializeObject(payload, elements[index]);
+                }
+
+                uint arrayEnd = 0;
+                payload.SerializeIntPacked(&arrayEnd);
                 continue;
             }
 

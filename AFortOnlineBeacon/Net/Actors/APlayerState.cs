@@ -9,6 +9,33 @@
 ///     see AGameModeBase.Login, which does the same here.
 /// </summary>
 public class APlayerState : AInfo {
+    /// <summary>
+    ///     AFortPlayerState::AbilitySystemComponent (0x08C0). The pawn borrows this one rather than
+    ///     owning its own - AFortPlayerPawn carries a bInitAbilitySystemComponentFromPlayerState
+    ///     bit - so the PlayerState is where a granted ability has to live to survive a respawn.
+    ///
+    ///     Replicated as a SUB-OBJECT on this actor's channel, not as a property: components have no
+    ///     channel of their own. See UActorChannel.ReplicateAbilitySystemComponent.
+    /// </summary>
+    public UFortAbilitySystemComponent? AbilitySystemComponent { get; set; }
+
+    /// <summary>
+    ///     The one attribute set this server sends values for. Kept here rather than dug back out of
+    ///     SpawnedAttributes so the replication pass does not have to search a list every tick.
+    /// </summary>
+    public UFortMovementSet? MovementSet { get; set; }
+
+    /// <summary>
+    ///     APlayerState::GetOwningController - `Cast&lt;AController&gt;(GetOwner())`. Real UE sets
+    ///     that owner in AController::InitPlayerState; this project does the same in
+    ///     AGameModeBase.Login, which is also what makes the PlayerState replicate to the right
+    ///     connection.
+    /// </summary>
+    public AController? GetOwningController() => Owner as AController;
+
+    /// <summary>The pawn this player state's controller is possessing, if any.</summary>
+    public APawn? GetOwningPawn() => GetOwningController()?.Pawn;
+
 
     /// <summary>APlayerState::APlayerState (PlayerState.cpp:22) - every client needs every player's state (scoreboard, teams).</summary>
     public APlayerState() => bAlwaysRelevant = true;

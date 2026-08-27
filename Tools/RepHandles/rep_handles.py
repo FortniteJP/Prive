@@ -29,7 +29,11 @@ ATOMIC_STRUCTS = {
     "FVector_NetQuantizeNormal", "FRotator", "FVector", "FQuat", "FPlane",
     "FUniqueNetIdRepl", "FRepMovement", "FGameplayTag", "FGameplayTagContainer",
     "FGameplayAbilityTargetDataHandle", "FGameplayEffectContextHandle",
-    "FPredictionKey", "FGameplayCueParameters", "FGameplayAbilitySpecHandle",
+    "FPredictionKey", "FGameplayCueParameters",
+    # NOT FGameplayAbilitySpecHandle: the engine scan finds no WithNetSerializer for it, and the
+    # 54-bit ServerTryActivateAbility measurement only works if it recurses to its single int32
+    # member. It wraps exactly one int32 either way, so this changes no handle count - it is
+    # corrected for honesty, and checked by verify_cs_handles.py below.
     "FGameplayEffectSpecHandle", "FMinimalGameplayCueReplicationProxy",
     "FFastArraySerializer", "FFloatRange", "FInt32Range",
     # --------------------------------------------------------------------------------------

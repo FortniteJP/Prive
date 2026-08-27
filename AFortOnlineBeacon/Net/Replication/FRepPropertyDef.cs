@@ -26,6 +26,14 @@ public enum ERepPropertyKind {
     StructRecurse,
 
     /// <summary>
+    ///     A TArray of object references, sent for real rather than as an empty stub. Wire format is
+    ///     FRepLayout::SendProperties_r's DynamicArray branch (RepLayout.cpp:1998): the array's own
+    ///     handle, a uint16 element count, then each element as its own relative handle (1-based)
+    ///     plus the value, closed by a 0 handle.
+    /// </summary>
+    ObjectRefArray,
+
+    /// <summary>
     ///     A UObjectProperty leaf (e.g. AController::PlayerState/Pawn) - NetSerializeItem defers to
     ///     UPackageMap::SerializeObject, i.e. the same NetGUID-reference write SerializeNewActor
     ///     already uses for Archetype/Level, occupies exactly 1 handle like a plain leaf.
@@ -113,6 +121,9 @@ public sealed class FRepPropertyDef {
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ObjectRef"/> - the referenced object, or null.</summary>
     public Func<object, UObject?>? GetObjectValue { get; init; }
+
+    /// <summary>Elements for <see cref="ERepPropertyKind.ObjectRefArray"/>.</summary>
+    public Func<object, IReadOnlyList<UObject>>? GetObjectArrayValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Name"/>.</summary>
     public Func<object, FName>? GetNameValue { get; init; }
