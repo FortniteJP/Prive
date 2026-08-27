@@ -989,8 +989,28 @@ public abstract class UNetConnection : UPlayer {
 
         // Registration order matters: real client chain is [Oodle, AES, StatelessConnect] and Incoming()
         // unwraps last-added first, so StatelessConnect (the outermost wire framing) must be added last.
-        Handler.AddHandler<OodleHandlerComponent>();
-        Handler.AddHandler<AESHandlerComponent>();
+        //
+        // This chain MUST match the client's own [PacketHandlerComponents] in DefaultEngine.ini,
+        // because every component costs bits on the wire whether or not it does anything: AES and
+        // Oodle each read one leading "is this encrypted / compressed" bit on Incoming. Registering
+        // a component the other side does not have therefore shifts the entire packet body by one
+        // bit per component - which decodes as garbage rather than as an error.
+        //
+        // NET_HANDLER_COMPONENTS overrides the chain (comma-separated, e.g. "stateless" or
+        // "oodle,stateless"). Needed to replay captures taken against a client configured with
+        // `!Components=ClearArray`, where the chain really is shorter.
+        var components = Environment.GetEnvironmentVariable("NET_HANDLER_COMPONENTS") is { Length: > 0 } chain
+            ? chain.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : new[] { "oodle", "aes", "stateless" };
+
+        foreach (var component in components) {
+            switch (component.ToLowerInvariant()) {
+                case "oodle": Handler.AddHandler<OodleHandlerComponent>(); break;
+                case "aes": Handler.AddHandler<AESHandlerComponent>(); break;
+                case "stateless": break; // added below - it must always be last
+                default: Console.WriteLine($"InitHandler: unknown packet handler component '{component}', ignoring"); break;
+            }
+        }
 
         StatelessConnectComponent = (StatelessConnectHandlerComponent) Handler.AddHandler<StatelessConnectHandlerComponent>();
         StatelessConnectComponent.SetDriver(Driver);

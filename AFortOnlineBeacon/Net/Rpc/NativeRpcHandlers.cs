@@ -74,8 +74,9 @@ internal static class NativeRpcHandlers {
                 }
 
                 int droppedCount;
+                var bWholeStackDropped = count <= 0 || count >= item.Count;
 
-                if (count <= 0 || count >= item.Count) {
+                if (bWholeStackDropped) {
                     droppedCount = item.Count;
                     inventory.Inventory.Remove(item);
                     Console.WriteLine($"NativeRpcHandlers: ServerAttemptInventoryDrop removed ItemGuid={itemGuid} " +
@@ -89,7 +90,64 @@ internal static class NativeRpcHandlers {
                                       $"{item.Count} left, ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
                 }
 
+                // Dropping what you are holding has to take the weapon out of your hands too: the
+                // weapon actor is keyed to its inventory row by ItemEntryGuid, and that row is now
+                // gone. A partial drop leaves the row (and so the weapon) alone.
+                if (bWholeStackDropped
+                    && pc.Pawn is { CurrentWeapon: { } weapon } dropPawn
+                    && weapon.ItemEntryGuid == itemGuid) {
+                    dropPawn.UnequipCurrentWeapon();
+                }
+
                 SpawnDroppedPickup(pc, item, droppedCount);
+            }
+        ),
+
+        // AFortPlayerController::ServerExecuteInventoryItem(FGuid ItemGuid) - "equip this quickbar
+        // slot". The client sends it whenever the player selects a slot, and it is the whole reason
+        // a weapon ever appears in a pawn's hands.
+        //
+        // What a real (injected) server does here is one native call - AFortPawn::EquipWeaponDefinition,
+        // which spawns the weapon actor, fills it in, and links it to the pawn. None of that is
+        // callable from outside the process, so SpawnEquippedWeapon below does the three parts that
+        // actually reach the wire: spawn an actor of the item's own WeaponActorClass, set the
+        // properties the client reads (WeaponData / ItemEntryGuid / AmmoCount) and point
+        // AFortPawn::CurrentWeapon at it.
+        ["ServerExecuteInventoryItem"] = new FRpcDef(
+            "ServerExecuteInventoryItem",
+            new[] { new FRpcParamDef("ItemGuid", ERpcParamKind.Guid) },
+            (actor, values) => {
+                if (actor is not APlayerController pc || pc.WorldInventory is not { } inventory) return;
+                if (values[0] is not Guid itemGuid) return;
+
+                if (pc.Pawn is not { } pawn) {
+                    Console.WriteLine("NativeRpcHandlers: ServerExecuteInventoryItem with no pawn to equip on, ignoring");
+                    return;
+                }
+
+                var item = inventory.Inventory.Items.FirstOrDefault(entry => entry.ItemGuid == itemGuid);
+                if (item == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerExecuteInventoryItem for unknown ItemGuid={itemGuid}, ignoring");
+                    return;
+                }
+
+                pawn.EquipInventoryItem(item);
+            }
+        ),
+
+        // AFortPlayerController::ServerReleaseInventoryItemKey(FGuid ItemGuid) - the "key up" half
+        // of holding a quickbar slot, which only matters for items whose use is a hold (a
+        // consumable, a building piece). Nothing here acts on it, and neither does
+        // Project-Reboot-3.0, which hooks the whole quickbar path and skips this one.
+        //
+        // Decoded anyway rather than skipped as an unknown field: it is the clearest proof in the
+        // log that the client is really driving its quickbar, which is the same input path
+        // ServerExecuteInventoryItem rides on.
+        ["ServerReleaseInventoryItemKey"] = new FRpcDef(
+            "ServerReleaseInventoryItemKey",
+            new[] { new FRpcParamDef("ItemGuid", ERpcParamKind.Guid) },
+            (actor, values) => {
+                if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerReleaseInventoryItemKey on {actor.GetFName()} ItemGuid={values[0]}");
             }
         ),
 

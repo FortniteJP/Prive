@@ -85,6 +85,36 @@ public class GUClassArray {
 
     public static UClass StaticClass<T>() => StaticClass(typeof(T));
 
+    /// <summary>
+    ///     A UClass for a class path that is NOT fixed per C# type - one entry per distinct path,
+    ///     all backed by the same C# type.
+    ///
+    ///     Everything in NativePackagePaths above is a one-to-one mapping: this project's APawn is
+    ///     always PlayerPawn_Athena_C, its AGameState always Athena_GameState_C. Weapons broke that
+    ///     assumption - the class to spawn comes from the item definition
+    ///     (FortWeaponActorClasses), so one AFortWeapon can be a B_Assault_Auto_Athena_C on one
+    ///     channel and a B_Athena_Pickaxe_Generic_C on the next.
+    ///
+    ///     Only the CLIENT's view is affected: the class is what SerializeNewActor exports as the
+    ///     archetype, while this server's RepLayout and property getters are chosen from the C#
+    ///     type. Cached per path because FNetGUIDCache is keyed by object identity, so two UClass
+    ///     instances for the same path would export as two different GUIDs for the same client-side
+    ///     class.
+    /// </summary>
+    public static UClass StaticClassForPath<T>(string nativePackagePath) where T : UObject =>
+        StaticClassForPath(typeof(T), nativePackagePath);
+
+    public static UClass StaticClassForPath(Type type, string nativePackagePath) {
+        var key = (type, nativePackagePath);
+        if (PathClasses.TryGetValue(key, out var existing)) return existing;
+
+        var uClass = new UClass(type) { NativePackagePath = nativePackagePath };
+        PathClasses[key] = uClass;
+        return uClass;
+    }
+
+    private static readonly Dictionary<(Type, string), UClass> PathClasses = new();
+
     public static UClass StaticClass(Type type) {
         if (Classes.TryGetValue(type, out var existing)) return existing;
 

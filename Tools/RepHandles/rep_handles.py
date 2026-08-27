@@ -32,6 +32,29 @@ ATOMIC_STRUCTS = {
     "FPredictionKey", "FGameplayCueParameters", "FGameplayAbilitySpecHandle",
     "FGameplayEffectSpecHandle", "FMinimalGameplayCueReplicationProxy",
     "FFastArraySerializer", "FFloatRange", "FInt32Range",
+    # --------------------------------------------------------------------------------------
+    # Everything below was found by MACHINE-SCANNING the real UE 4.23 source for
+    # `TStructOpsTypeTraits<X>` bodies containing `WithNetSerializer = true`, after the hand-written
+    # list above turned out to be missing one:
+    #
+    #   FRootMotionSourceGroup (RootMotionSource.h:865). Recursing into its 5 members instead of
+    #   treating it as one handle put every ACharacter/AFortPawn handle after it 4 too high, and a
+    #   real client dropped the connection over it - "ReceiveProperties_r: Failed to receive
+    #   property, BunchIsError - Property=LocalSpin, Parent=43, Cmd=65, ReadHandle=66", i.e.
+    #   LocalSpin at 66 where this script said 70.
+    #
+    # One unlisted NetSerializer struct silently shifts every property after it, so this half of
+    # the list is derived, not remembered. Note the scan is a LOWER bound: the core math types
+    # (FVector/FRotator/FQuat/FPlane) get STRUCT_NetSerializeNative without a traits body the scan
+    # can see, and are kept above on the strength of the live-probed AActor handles that depend on
+    # them (ReplicatedMovement, AttachmentReplication.*).
+    "FRootMotionSourceGroup", "FRootMotionSource", "FRootMotionSource_ConstantForce",
+    "FRootMotionSource_JumpForce", "FRootMotionSource_MoveToDynamicForce",
+    "FRootMotionSource_MoveToForce", "FRootMotionSource_RadialForce",
+    "FHitResult",
+    "FGameplayAbilityTargetData_ActorArray", "FGameplayAbilityTargetData_LocationInfo",
+    "FGameplayAbilityTargetData_SingleTargetHit", "FGameplayAbilityTargetingLocationInfo",
+    "FGameplayEffectContext", "FMinimalReplicationTagCountMap", "FNetQuantizeFaceCurve",
     "FMcpVariantChannelInfo", "FGameplayAbilityTargetData",
 }
 

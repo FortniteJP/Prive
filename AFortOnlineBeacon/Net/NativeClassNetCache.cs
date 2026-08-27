@@ -442,7 +442,21 @@ internal static class NativeClassNetCache {
     private static readonly FClassNetCache FortPlayerStateZoneCache = new(FortPlayerStateCache, FortPlayerStateZoneOwnFields);
     private static readonly FClassNetCache PlayerStateCache = new(FortPlayerStateZoneCache, FortPlayerStateAthenaOwnFields);
 
+    /// <summary>
+    ///     AFortWeapon is the one actor whose cache cannot live here: its real class is a Blueprint
+    ///     chosen per item, so its field count - and therefore the BIT WIDTH of every FieldNetIndex
+    ///     on its channel - differs between an assault rifle and a pickaxe. See FortWeaponNetCaches,
+    ///     which builds one chain per weapon class from a table generated off an IN-MATCH Dumper-7
+    ///     dump.
+    ///
+    ///     Until 2026-08-27 this fell through to ActorCache with a comment explaining that the
+    ///     weapon Blueprints could not be ground-truthed, because every dump had been taken in the
+    ///     lobby where none of them are loaded. Dumping again from inside a match settled it - and
+    ///     also turned the "PlayerPawn_Athena_Generic_C/_Parent_C add no NetFields" note below from
+    ///     an assumption into a checked fact (both really are empty).
+    /// </summary>
     public static FClassNetCache Get(AActor actor) => actor switch {
+        AFortWeapon weapon => FortWeaponNetCaches.For(weapon, ActorCache),
         AFortInventory => FortInventoryCache,
         AGameState => GameStateCache,
         APlayerController => PlayerControllerCache,

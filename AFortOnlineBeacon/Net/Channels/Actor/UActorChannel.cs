@@ -102,6 +102,14 @@ public class UActorChannel : UChannel {
         // the two flags that say what kind of pickup it is and that it is already at rest. Every
         // member has to be listed - RepLayout gave each one its own handle, and the client's
         // OnRep_PrimaryPickupItemEntry sees whatever arrives, so a missing member is a zero.
+        // AFortWeapon: what the weapon IS (WeaponData), which inventory row it belongs to
+        // (ItemEntryGuid) and how loaded it is. Owner is the pawn - a real server sets it
+        // (raider3.5 Inventory.h:294) and the client uses it to decide whose hands to put this in.
+        AFortWeapon => new HashSet<string> {
+            "RemoteRole", "Role", "Owner", "WeaponData",
+            "ItemEntryGuid.A", "ItemEntryGuid.B", "ItemEntryGuid.C", "ItemEntryGuid.D",
+            "WeaponLevel", "AmmoCount"
+        },
         AFortPickup => new HashSet<string> {
             "RemoteRole", "Role",
             "PrimaryPickupItemEntry.Count", "PrimaryPickupItemEntry.ItemDefinition",
@@ -126,7 +134,13 @@ public class UActorChannel : UChannel {
         // attempt had wrongly placed this). See NativeRepLayouts.PlayerControllerProps.
         // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
         // with no controller and no player state.
-        APawn => new HashSet<string> { "RemoteRole", "Role", "Owner", "PlayerState", "Controller" },
+        APawn => new HashSet<string> {
+            "RemoteRole", "Role", "Owner", "PlayerState", "Controller",
+            // Null at spawn and set by ServerExecuteInventoryItem. Listed here because
+            // ReplicatedProperties doubles as the set the per-tick diff walks - a property absent
+            // from it is never compared, so it could never start being sent later either.
+            "CurrentWeapon"
+        },
         APlayerController => new HashSet<string> {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
             "PlayerState", "Pawn", "WorldInventory",
@@ -879,12 +893,29 @@ public class UActorChannel : UChannel {
             var bIsActor = bunch.ReadBit();
             if (bunch.IsError()) break;
 
+            // UActorChannel::ReadContentBlockHeader (DataChannel.cpp:3293). bIsActor=1 means "this
+            // block is for the channel's own actor", and the reader can go straight to the payload.
+            // Anything else is a SUB-OBJECT - a replicated component - and carries its own object
+            // reference first. Every GAS RPC arrives this way (UAbilitySystemComponent is a
+            // component, not an actor), so until this was read rather than bailed on, pulling the
+            // trigger threw away the rest of the bunch without saying what was in it.
+            UObject? subObject = null;
+            var subObjectPath = string.Empty;
+
             if (!bIsActor) {
-                // Sub-object content blocks need SerializeObject's load path (NetGUID resolution),
-                // which we haven't implemented (see UPackageMapClient - save/write side only so far).
-                // Bail out rather than misinterpret the rest of the bunch.
-                Console.WriteLine($"UActorChannel.ReceivedBunch: sub-object content block not supported yet, dropping rest of bunch. ChIndex={ChIndex} Actor={Actor?.GetFName()}");
-                return;
+                subObject = ((UPackageMapClient) Connection!.PackageMap!)
+                    .SerializeObjectRead(bunch, out var subObjectGuid, out subObjectPath);
+
+                if (bunch.IsError()) {
+                    Console.WriteLine($"UActorChannel.ReceivedBunch: content block header decode failed on ChIndex={ChIndex} " +
+                                      $"Actor={Actor?.GetFName()} - dropping the rest of the bunch");
+                    return;
+                }
+
+                Console.WriteLine($"UActorChannel.ReceivedBunch: SUB-OBJECT content block ChIndex={ChIndex} " +
+                                  $"Actor={Actor?.GetFName()} guid={subObjectGuid} " +
+                                  $"path='{(subObjectPath.Length > 0 ? subObjectPath : "(none - referenced by id)")}' " +
+                                  $"resolved={(subObject != null ? subObject.GetFName().ToString() : "NULL")}");
             }
 
             uint numPayloadBits = 0;
@@ -898,7 +929,14 @@ public class UActorChannel : UChannel {
             var truncated = payloadEnd - payloadStart > 512 ? "..." : "";
             if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UActorChannel.ReceivedBunch: content block ChIndex={ChIndex} Actor={Actor?.GetFName()} bHasRepLayout={bHasRepLayout} numPayloadBits={numPayloadBits} raw={rawHex}{truncated}");
 
-            if (Actor != null) {
+            // A sub-object this server cannot resolve has no ClassNetCache either, so its field
+            // indices cannot be decoded - but NumPayloadBits below still resyncs the bunch, so the
+            // NEXT block (and every later one) survives. That is the whole difference from before:
+            // one unreadable component block used to cost the entire remainder of the bunch.
+            if (!bIsActor) {
+                Console.WriteLine($"UActorChannel.ReceivedBunch: skipping {numPayloadBits} bits of sub-object payload " +
+                                  "(no ClassNetCache for components yet) - the rest of the bunch is still read");
+            } else if (Actor != null) {
                 try {
                     ReadContentBlockFields(bunch, NativeClassNetCache.Get(Actor), payloadEnd);
                 } catch (Exception ex) {

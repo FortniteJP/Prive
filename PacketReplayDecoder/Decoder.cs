@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using AFortOnlineBeacon.Core;
 using AFortOnlineBeacon.Core.Names;
@@ -389,6 +389,46 @@ internal sealed class RoleDecoder {
         return (guid, full);
     }
 
+    /// <summary>
+    ///     UFortAbilitySystemComponentAthena's net-field index space, generated from the 10.40 SDK
+    ///     the same way NativeClassNetCache's tables are: each class's own CPF_Net properties plus
+    ///     FUNC_Net functions, name-sorted, assigned base-first.
+    /// </summary>
+    private const int AscMaxIndex = 53;
+
+    private static readonly string[] AscFields = {
+        // UActorComponent (0-1)
+        "bIsActive", "bReplicates",
+        // UGameplayTasksComponent (2)
+        "SimulatedTasks",
+        // UAbilitySystemComponent (3-49)
+        "ActivatableAbilities", "ActiveGameplayCues", "ActiveGameplayEffects", "AvatarActor",
+        "BlockedAbilityBindings", "ClientActivateAbilityFailed", "ClientActivateAbilitySucceed",
+        "ClientActivateAbilitySucceedWithEventData", "ClientCancelAbility", "ClientDebugStrings",
+        "ClientEndAbility", "ClientPrintDebug_Response", "ClientSetReplicatedEvent",
+        "ClientTryActivateAbility", "MinimalReplicationGameplayCues", "MinimalReplicationTags",
+        "NetMulticast_InvokeGameplayCueAdded", "NetMulticast_InvokeGameplayCueAdded_WithParams",
+        "NetMulticast_InvokeGameplayCueAddedAndWhileActive_FromSpec",
+        "NetMulticast_InvokeGameplayCueAddedAndWhileActive_WithParams",
+        "NetMulticast_InvokeGameplayCueExecuted", "NetMulticast_InvokeGameplayCueExecuted_FromSpec",
+        "NetMulticast_InvokeGameplayCueExecuted_WithParams",
+        "NetMulticast_InvokeGameplayCuesAddedAndWhileActive_WithParams",
+        "NetMulticast_InvokeGameplayCuesExecuted", "NetMulticast_InvokeGameplayCuesExecuted_WithParams",
+        "OwnerActor", "RepAnimMontageInfo", "ReplicatedPredictionKeyMap", "ServerAbilityRPCBatch",
+        "ServerCancelAbility", "ServerCurrentMontageJumpToSectionName",
+        "ServerCurrentMontageSetNextSectionName", "ServerCurrentMontageSetPlayRate",
+        "ServerDebugStrings", "ServerEndAbility", "ServerPrintDebug_Request",
+        "ServerPrintDebug_RequestWithStrings", "ServerSetInputPressed", "ServerSetInputReleased",
+        "ServerSetReplicatedEvent", "ServerSetReplicatedEventWithPayload",
+        "ServerSetReplicatedTargetData", "ServerSetReplicatedTargetDataCancelled",
+        "ServerTryActivateAbility", "ServerTryActivateAbilityWithEventData", "SpawnedAttributes",
+        // UFortAbilitySystemComponent (50-52)
+        "LandingMontagePair", "NetMulticast_RefreshActiveGameplayEffectCueEvents", "RepSharedAnimInfo"
+    };
+
+    private static string AscFieldName(uint index) =>
+        index < AscFields.Length ? AscFields[index] : $"<out of range, max {AscFields.Length - 1}>";
+
     private void DecodeExportBunch(int packetIndex, FBitReader r, int chIndex) {
         var notRepLayoutExport = r.ReadBit();
         var count = r.ReadInt32();
@@ -464,8 +504,38 @@ internal sealed class RoleDecoder {
             var bHasRepLayout = r.ReadBit();
             var bIsActor = r.ReadBit();
             if (!bIsActor) {
-                Log($"#{packetIndex}:   [ChIndex={chIndex}] sub-object content block (not decoded)");
-                return;
+                // UActorChannel::ReadContentBlockHeader's sub-object branch: the block names the
+                // replicated COMPONENT it belongs to, then carries an ordinary field payload.
+                // Every GameplayAbilities RPC arrives this way.
+                var subGuid = ReadGuidRef(r);
+                var subPath = _guidPaths.GetValueOrDefault(subGuid.Value);
+                var subBits = r.ReadUInt32Packed();
+                var subStart = r.Pos;
+                var subEnd = Math.Min(subStart + subBits, r.GetNumBits());
+
+                Log($"#{packetIndex}:   [ChIndex={chIndex}] SUB-OBJECT block guid={subGuid.Value} " +
+                    $"path={subPath ?? "(unknown)"} bHasRepLayout={bHasRepLayout} numPayloadBits={subBits}");
+
+                // The AbilitySystemComponent's own ClassNetCache, derived from the 10.40 SDK:
+                // UObject(0) + UActorComponent(2) + UGameplayTasksComponent(1) +
+                // UAbilitySystemComponent(47) + UFortAbilitySystemComponent(3) = GetMaxIndex 53,
+                // so a field index is SerializeInt(.., 54) = 6 bits.
+                if (!bHasRepLayout && subBits > 0) {
+                    while (r.Pos < subEnd && !r.IsError()) {
+                        var fieldIndex = r.ReadInt((uint) (AscMaxIndex + 1));
+                        var fieldBits = r.ReadUInt32Packed();
+                        if (r.IsError() || r.Pos + fieldBits > subEnd) {
+                            Log($"#{packetIndex}:     field decode stopped (index={fieldIndex} bits={fieldBits} would overrun the block)");
+                            break;
+                        }
+
+                        Log($"#{packetIndex}:     FIELD index={fieldIndex} ({AscFieldName(fieldIndex)}) numPayloadBits={fieldBits}");
+                        r.Pos += (int) fieldBits;
+                    }
+                }
+
+                r.Pos = (int) subEnd;
+                continue;
             }
 
             var numPayloadBits = r.ReadUInt32Packed();

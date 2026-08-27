@@ -533,6 +533,15 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 pcChannel.SendIntRpc("ClientCapBandwidth", newPlayerController.Player?.CurrentNetSpeed ?? 10000);
 
                 if (newPlayerController.Pawn != null) {
+                    // Before the pawn, for the third time in this block and for the same reason:
+                    // the pawn's opening property push names CurrentWeapon (handle 66) as an
+                    // ObjectRef, so the weapon it points at needs a NetGUID first. PostLogin equips
+                    // the starting pickaxe (AGameModeBase.RestartPlayer), so unlike a mid-match
+                    // equip - which UNetDriver.ServerReplicateActors sequences for free - this one
+                    // happens before any channel exists and has to be ordered by hand.
+                    if (newPlayerController.Pawn.CurrentWeapon != null)
+                        OpenActorChannelFor(ownerConnection, newPlayerController.Pawn.CurrentWeapon);
+
                     OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);
                     // See UActorChannel.SendClientRestart's doc comment - without this, a real client
                     // never recognizes it controls this pawn and keeps calling

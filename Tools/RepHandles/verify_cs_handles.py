@@ -23,6 +23,8 @@ TABLES = [
     ("PlayerStateProps", ["ActorProps"], "AFortPlayerStateAthena"),
     ("PlayerControllerProps", ["ActorProps", "ControllerProps"], "AFortPlayerControllerAthena"),
     ("PickupProps", ["ActorProps"], "AFortPickupAthena"),
+    ("PawnProps", ["ActorProps"], "AFortPlayerPawnAthena"),
+    ("WeaponProps", ["ActorProps"], "AFortWeapon"),
 ]
 
 ENTRY_RE = re.compile(

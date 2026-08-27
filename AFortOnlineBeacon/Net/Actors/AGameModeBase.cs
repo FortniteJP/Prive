@@ -325,6 +325,15 @@ public class AGameModeBase : AInfo {
             pawn.SetActorLocation(SpawnLocation);
 
             newPlayer.Possess(pawn);
+
+            // Spawn holding the pickaxe, the way a real match starts. The client will also ask for
+            // this itself the moment the player touches a quickbar slot
+            // (ServerExecuteInventoryItem -> APawn.EquipInventoryItem), and asking for what is
+            // already equipped is a no-op there - so doing it here only removes the window in which
+            // the pawn stands around empty-handed, it does not fight the client for control of the
+            // slot.
+            var firstItem = newPlayer.WorldInventory?.Inventory.Items.FirstOrDefault();
+            if (firstItem != null) pawn.EquipInventoryItem(firstItem);
         }
     }
 }

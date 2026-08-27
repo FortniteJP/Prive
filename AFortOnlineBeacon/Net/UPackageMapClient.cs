@@ -43,6 +43,64 @@ public class UPackageMapClient : UPackageMap {
     }
 
     /// <summary>
+    ///     The read half of <see cref="SerializeObject"/> - UPackageMapClient::InternalLoadObject
+    ///     (PackageMapClient.cpp), reduced to what a SERVER can legitimately receive.
+    ///
+    ///     Two shapes arrive. The common one is a bare NetGUID naming something this server itself
+    ///     exported, which is just a cache lookup. The other is a DEFAULT guid (value 1) followed by
+    ///     export flags, the outer's reference, and a path string: that is a client naming an object
+    ///     the server never gave an id to - a default subobject it created locally, like an
+    ///     AbilitySystemComponent. A server cannot spawn objects on a client's say-so
+    ///     (DataChannel.cpp:3376, "Client attempted to create sub-object"), so an unresolvable path
+    ///     returns null; <paramref name="pathName"/> still comes back so the caller can say WHAT it
+    ///     could not resolve, which is the whole diagnostic value of reading this at all.
+    /// </summary>
+    public UObject? SerializeObjectRead(FArchive ar, out FNetworkGUID netGuid, out string pathName) =>
+        InternalLoadObject(ar, out netGuid, out pathName, 0);
+
+    /// <summary>Matches real UE's INTERNAL_LOAD_OBJECT_RECURSION_LIMIT - a malformed outer chain must not recurse forever.</summary>
+    private const int InternalLoadObjectRecursionLimit = 16;
+
+    private UObject? InternalLoadObject(FArchive ar, out FNetworkGUID netGuid, out string pathName, int recursionCount) {
+        netGuid = new FNetworkGUID();
+        pathName = string.Empty;
+
+        if (recursionCount > InternalLoadObjectRecursionLimit) {
+            Console.WriteLine("InternalLoadObject: recursion limit reached, refusing to follow the outer chain further");
+            ar.SetError();
+            return null;
+        }
+
+        netGuid.NetSerialize(ar);
+        if (ar.IsError() || !netGuid.IsValid()) return null;
+
+        // Export flags only follow a DEFAULT guid here. Real UE also reads them while processing a
+        // NetGUID export bunch, but those arrive on their own path and never through an actor
+        // channel's content block, which is the only caller of this.
+        var bHasPath = false;
+        if (netGuid.IsDefault()) {
+            var exportFlags = ar.ReadByte();
+            if (ar.IsError()) return null;
+            bHasPath = (exportFlags & 1) != 0;
+        }
+
+        if (!bHasPath) return GuidCache!.GetObjectFromNetGUID(netGuid);
+
+        var outer = InternalLoadObject(ar, out _, out var outerPath, recursionCount + 1);
+        if (ar.IsError()) return null;
+
+        var name = ar.ReadString();
+        if (ar.IsError()) return null;
+
+        pathName = string.IsNullOrEmpty(outerPath) ? name : $"{outerPath}.{name}";
+
+        // No path resolve. This server has no object registry to look a name up in - UAssetRegistry
+        // only holds assets it was asked to export - and inventing an object for a client-supplied
+        // name is exactly what real UE refuses to do on the server. The caller logs the path.
+        return outer == null ? null : null;
+    }
+
+    /// <summary>
     ///     Writes a newly-spawned actor's channel-open header: the actor's own (dynamic) NetGUID, its
     ///     Archetype (so the client knows what to spawn), and its initial transform. The actor's Level
     ///     is always sent as "unresolved" so the client spawns it into whatever level it already has
