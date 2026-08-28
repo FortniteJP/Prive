@@ -156,16 +156,37 @@ public class AGameModeBase : AInfo {
             // AActor.Owner. Erbium does the same (WorldInventory->SetOwner(PlayerController)).
             worldInventory.SetOwner(newPlayerController);
 
-            // Starting inventory. A real PR3.0 capture (packet #253) shows a working server sends
-            // the pickaxe plus BuildingItemData_Wall/Floor/Stair_W/RoofS and EditTool here; this
-            // starts with just the pickaxe, the minimum that should make the client build its
-            // quickbars at all. Add() runs MarkItemDirty, which is what assigns the ReplicationID
-            // and moves the array's replication key - never set the id by hand, or MarkItemDirty
-            // skips its own counter and the next item collides with this one.
+            // Starting inventory, in the order a real server sends it. Add() runs MarkItemDirty,
+            // which is what assigns the ReplicationID and moves the array's replication key - never
+            // set the id by hand, or MarkItemDirty skips its own counter and the next item collides
+            // with this one.
             worldInventory.Inventory.Add(new FFortItemEntry {
                 ItemDefinition = UAssetRegistry.GetOrCreate("/Game/Athena/Items/Weapons/WID_Harvest_Pickaxe_Athena_C_T01.WID_Harvest_Pickaxe_Athena_C_T01"),
                 Count = 1
             });
+
+            // The build menu, and the reason a player could harvest resources and then do nothing
+            // with them: the building quickbar draws its four slots from these items, so without
+            // them there is nothing to select and building is simply unavailable. Nothing was
+            // broken - they had never been handed out.
+            //
+            // These five paths are transcribed from a working Project-Reboot-3.0 server's own
+            // NetGUID export bunches (packet #253), so they are what a real match sends rather than
+            // paths guessed from the pak layout. Reading them took fixing the export decoder's
+            // missing network checksum, which had been shearing the object name off every exported
+            // path - see UPackageMapClient.ReadObjectReference.
+            foreach (var buildingTool in new[] {
+                "/Game/Items/Weapons/BuildingTools/BuildingItemData_Wall.BuildingItemData_Wall",
+                "/Game/Items/Weapons/BuildingTools/BuildingItemData_Floor.BuildingItemData_Floor",
+                "/Game/Items/Weapons/BuildingTools/BuildingItemData_Stair_W.BuildingItemData_Stair_W",
+                "/Game/Items/Weapons/BuildingTools/BuildingItemData_RoofS.BuildingItemData_RoofS",
+                "/Game/Items/Weapons/BuildingTools/EditTool.EditTool"
+            }) {
+                worldInventory.Inventory.Add(new FFortItemEntry {
+                    ItemDefinition = UAssetRegistry.GetOrCreate(buildingTool),
+                    Count = 1
+                });
+            }
 
             // A common Assault Rifle. Two reasons it is here rather than just the pickaxe:
             //
@@ -181,14 +202,16 @@ public class AGameModeBase : AInfo {
             // This is also a second consumer of the must-be-mapped GUID work: unlike the pickaxe,
             // the client does not have this loaded at spawn, so the channel has to hold its bunches
             // while the asset streams in.
-            worldInventory.Inventory.Add(new FFortItemEntry {
+            var startingWeaponItem = new FFortItemEntry {
                 ItemDefinition = UAssetRegistry.GetOrCreate(
                     Environment.GetEnvironmentVariable("STARTING_WEAPON") is { Length: > 0 } weapon
                         ? weapon
                         : "/Game/Athena/Items/Weapons/WID_Assault_Auto_Athena_C_Ore_T02.WID_Assault_Auto_Athena_C_Ore_T02"),
                 Count = 1,
                 LoadedAmmo = 30
-            });
+            };
+
+            worldInventory.Inventory.Add(startingWeaponItem);
 
             // Ammunition for the starting weapon. Reloading pulls from a SEPARATE inventory item,
             // not from the weapon, so a player holding only a rifle is told - correctly - that
@@ -200,8 +223,10 @@ public class AGameModeBase : AInfo {
             // pickaxe, so there is no authentic number to copy. Ten drops' worth of the real
             // DropCount (12 for AthenaAmmoDataBulletsMedium, read from the cooked asset), so the
             // figure is at least anchored to real data. STARTING_AMMO overrides it.
-            var startingWeaponItem = worldInventory.Inventory.Items.LastOrDefault();
-            if (FortWeaponActorClasses.AmmoItemFor(startingWeaponItem?.ItemDefinition) is { } ammoItem) {
+            // Named directly rather than fished back out with LastOrDefault(): the weapon stopped
+            // being the last thing added the moment anything was appended after it, and that would
+            // have looked up ammo for whatever happened to be on the end of the list instead.
+            if (FortWeaponActorClasses.AmmoItemFor(startingWeaponItem.ItemDefinition) is { } ammoItem) {
                 worldInventory.Inventory.Add(new FFortItemEntry {
                     ItemDefinition = ammoItem,
                     Count = int.TryParse(Environment.GetEnvironmentVariable("STARTING_AMMO"), out var ammo) && ammo > 0 ? ammo : 120
@@ -272,22 +297,26 @@ public class AGameModeBase : AInfo {
                 // GetNumericAttribute finds a set by searching that array and an empty one makes
                 // every attribute read as zero. That is what left walk speed clamped at 1 uu/s.
                 foreach (var setName in AttributeSetNames) {
-                    // MovementSet alone gets a typed stand-in, because it is the only one this
-                    // server sends attribute VALUES for - see UFortMovementSet.
-                    var isMovementSet = setName == "MovementSet";
-
-                    var set = isMovementSet
-                        ? UObjectGlobals.NewObject<UFortMovementSet>(
+                    // Two sets get a typed stand-in, because they are the only ones this server
+                    // sends attribute VALUES for rather than merely introducing: MovementSet
+                    // (speeds) and PlayerAttrSet (stamina, which a jump spends).
+                    var set = setName switch {
+                        "MovementSet" => (UFortAttributeSet?) UObjectGlobals.NewObject<UFortMovementSet>(
                             playerState, GUClassArray.StaticClass<UFortMovementSet>(), new FName(setName),
-                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject)
-                        : UObjectGlobals.NewObject<UFortAttributeSet>(
+                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject),
+                        "PlayerAttrSet" => UObjectGlobals.NewObject<UFortPlayerAttrSet>(
+                            playerState, GUClassArray.StaticClass<UFortPlayerAttrSet>(), new FName(setName),
+                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject),
+                        _ => UObjectGlobals.NewObject<UFortAttributeSet>(
                             playerState, GUClassArray.StaticClass<UFortAttributeSet>(), new FName(setName),
-                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject);
+                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject)
+                    };
 
                     if (set == null) continue;
 
                     playerState.AbilitySystemComponent.SpawnedAttributes.Add(set);
                     if (set is UFortMovementSet movementSet) playerState.MovementSet = movementSet;
+                    if (set is UFortPlayerAttrSet playerAttrSet) playerState.PlayerAttrSet = playerAttrSet;
                 }
             }
             Console.WriteLine($"AGameModeBase.Login: PlayerState UniqueId={uniqueId.ToDebugString()}");

@@ -150,7 +150,9 @@ public class UActorChannel : UChannel {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
             "PlayerState", "Pawn", "WorldInventory",
             // Without this the client's inventory capacity is zero and it refuses every pickup.
-            "OverriddenBackpackSize"
+            "OverriddenBackpackSize",
+            // Handle 75. False on an untold client, and a dead player may not jump or build.
+            "bMarkedAlive"
         },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
@@ -314,6 +316,7 @@ public class UActorChannel : UChannel {
         var wroteSomething = ReplicateCustomDeltaUpdate();
         wroteSomething |= ReplicateAbilitySystemComponent();
         wroteSomething |= ReplicateMovementSet();
+        wroteSomething |= ReplicatePlayerAttrSet();
 
         if (changed.Count == 0) return wroteSomething;
 
@@ -671,6 +674,54 @@ public class UActorChannel : UChannel {
 
     private readonly Dictionary<string, object?> _movementSetShadowState = new();
 
+    /// <summary>
+    ///     The stamina set, sent exactly like the movement set one sibling over.
+    ///
+    ///     Stamina is not cosmetic: a Fortnite jump spends it, so a client reading zero refuses
+    ///     to jump at all - locally, before any RPC, which is why the server saw a client that
+    ///     crouched and fired and harvested but never once set the jump flag in a move.
+    /// </summary>
+    private unsafe bool ReplicatePlayerAttrSet() {
+        if (Connection == null || Actor is not APlayerState { PlayerAttrSet: { } attrSet }) return false;
+
+        var layout = NativeRepLayouts.PlayerAttrSet;
+        var changed = layout.CompareProperties(attrSet, PlayerAttrSetProperties, _playerAttrSetShadowState);
+        if (changed.Count == 0) return false;
+
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 128);
+        layout.WriteChangedProperties(payload, attrSet, changedNames);
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        WriteContentBlockHeader(attrSet, bunch, hasRepLayout: true);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"ReplicatePlayerAttrSet: ChIndex={ChIndex} Stamina={attrSet.Stamina}/{attrSet.MaxStamina} " +
+                          $"changed=[{string.Join(", ", changedNames)}] numPayloadBits={numPayloadBits} " +
+                          $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        SendBunch(bunch, false);
+        FRepLayout.CommitShadowState(changed, _playerAttrSetShadowState);
+        return true;
+    }
+
+    /// <summary>Stamina and its regen, plus the cap the client clamps against.</summary>
+    private static readonly HashSet<string> PlayerAttrSetProperties = new() {
+        "Stamina.BaseValue", "Stamina.CurrentValue",
+        "StaminaRegenRate.BaseValue", "StaminaRegenRate.CurrentValue",
+        "StaminaRegenDelay.BaseValue", "StaminaRegenDelay.CurrentValue",
+        "MaxStamina.BaseValue", "MaxStamina.CurrentValue"
+    };
+
+    private readonly Dictionary<string, object?> _playerAttrSetShadowState = new();
     /// <summary>
     ///     The AbilitySystemComponent properties this server sends. Deliberately just the two links
     ///     that make the component usable - everything else on it is either server bookkeeping or a
@@ -1212,6 +1263,20 @@ public class UActorChannel : UChannel {
             if (rpcTable != null && rpcTable.TryGetValue(fieldName, out var rpcDef)) {
                 try {
                     var values = FRpcReader.ReadParams(bunch, rpcDef.Params);
+
+                    // The one check available on an RPC layout that was derived rather than probed.
+                    // A field carries no internal framing, so a decode that is off by a few bits
+                    // yields plausible values and no error at all; the only thing that gives it away
+                    // is finishing somewhere other than the field's own declared end.
+                    if (rpcDef.ExpectsFullDecode && !bunch.IsError()) {
+                        var leftover = fieldEnd - bunch.Pos;
+                        if (leftover != 0) {
+                            Console.WriteLine($"UActorChannel.ReceivedBunch: {fieldName} decoded {bunch.Pos - fieldStart} " +
+                                              $"of {fieldNumBits} bits - {leftover} left over. The declared parameter " +
+                                              "layout does not match the wire; treat the decoded values as suspect.");
+                        }
+                    }
+
                     rpcDef.Invoke(target as AActor ?? Actor!, values);
                 } catch (Exception ex) {
                     Console.WriteLine($"UActorChannel.ReceivedBunch: RPC {fieldName} failed to decode on ChIndex={ChIndex} Actor={Actor?.GetFName()}: {ex}");

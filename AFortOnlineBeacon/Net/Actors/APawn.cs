@@ -178,6 +178,65 @@ public class APawn : AActor {
         _lastTrackedTime = now;
     }
 
+    private byte? _lastMovementMode;
+    private bool _reportedJumpPress;
+    private byte _seenMoveFlags;
+
+    /// <summary>
+    ///     Reports what every client move says about jumping, because nothing else can.
+    ///
+    ///     A jump in UE is CLIENT-FIRST: the client runs its own CanJump()/DoJump() and only then
+    ///     tells the server, by setting FLAG_JumpPressed in the move's compressed flags
+    ///     (FSavedMove_Character::GetCompressedFlags). So this one bit separates the two possible
+    ///     worlds cleanly, with no console and no guessing:
+    ///
+    ///       bit never set  -> the CLIENT refused to jump. Its own CanJumpInternal said no, and the
+    ///                         cause is a pawn state we are getting wrong (or failing to send).
+    ///       bit set        -> the client DID jump and the server is somehow undoing it - which
+    ///                         would point at the position this server writes back from ClientLoc.
+    ///
+    ///     ClientMovementMode is logged on every change for the same reason: CanAttemptJump requires
+    ///     IsMovingOnGround(), so a client that thinks it is anything but Walking cannot jump no
+    ///     matter what else is right. EMovementMode: 1 Walking, 2 NavWalking, 3 Falling, 4 Swimming,
+    ///     5 Flying, 6 Custom.
+    /// </summary>
+    public void TrackMoveFlags(byte compressedMoveFlags, byte clientMovementMode) {
+        // FSavedMove_Character::CompressedFlags. Only the first two are standard input; the Custom
+        // ones are whatever the game's own movement component defines (Fortnite uses them for
+        // sprint and the like), and they are worth seeing precisely because we do not know which.
+        var names = new[] {
+            "JumpPressed", "WantsToCrouch", "Reserved_1", "Reserved_2",
+            "Custom_0", "Custom_1", "Custom_2", "Custom_3"
+        };
+
+        // Report each distinct bit ONCE. The point is not the traffic, it is the answer to a single
+        // question: which inputs reach this server at all? A jump that never sets bit 0 while crouch
+        // sets bit 1 says the input system is fine and jump specifically is refused client-side;
+        // neither bit ever appearing says the moves carry no input flags at all, which is a
+        // different problem entirely.
+        for (var bit = 0; bit < 8; bit++) {
+            var mask = (byte) (1 << bit);
+            if ((compressedMoveFlags & mask) == 0 || (_seenMoveFlags & mask) != 0) continue;
+
+            _seenMoveFlags |= mask;
+            Console.WriteLine($"APawn.TrackMoveFlags: client move flag {names[bit]} (0x{mask:X2}) seen for the first " +
+                              $"time - full flags=0x{compressedMoveFlags:X2}, movementMode={clientMovementMode}");
+        }
+
+        if ((compressedMoveFlags & 0x01) != 0 && !_reportedJumpPress) {
+            _reportedJumpPress = true;
+            Console.WriteLine("APawn.TrackMoveFlags: the client PRESSED JUMP - so ACharacter::Jump() ran and anything " +
+                              "still wrong is on this side, not in the client's own CanJump().");
+        }
+
+        if (_lastMovementMode == clientMovementMode) return;
+
+        Console.WriteLine($"APawn.TrackMoveFlags: ClientMovementMode {_lastMovementMode?.ToString() ?? "(none)"} -> " +
+                          $"{clientMovementMode} (1=Walking 2=NavWalking 3=Falling 4=Swimming 5=Flying 6=Custom)");
+
+        _lastMovementMode = clientMovementMode;
+    }
+
     public void SetController(AController? controller) => Controller = controller;
 
     /// <summary>

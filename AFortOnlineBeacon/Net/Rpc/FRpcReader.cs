@@ -30,7 +30,9 @@ public static class FRpcReader {
                 ERpcParamKind.VectorQuantize100 => FVector.NetSerializeReadQuantized(bunch, 100, 30),
                 ERpcParamKind.Rotator => FRotator.NetSerializeRead(bunch),
                 ERpcParamKind.String => bunch.ReadString(),
-                ERpcParamKind.PredictionKey => ReadPredictionKey(bunch),
+                ERpcParamKind.PredictionKey => FPredictionKey.NetSerializeRead(bunch),
+                ERpcParamKind.TargetDataHandle => FGameplayAbilityTargetDataHandle.NetSerializeRead(bunch),
+                ERpcParamKind.AbilityRpcBatch => FServerAbilityRPCBatch.NetSerializeRead(bunch),
                 _ => throw new NotSupportedException($"FRpcReader: unhandled param kind {def.Kind}")
             };
         }
@@ -39,37 +41,16 @@ public static class FRpcReader {
     }
 
     /// <summary>
-    ///     FPredictionKey::NetSerialize (GameplayPrediction.h). Note the middle bit is CONDITIONAL:
-    ///     HasBaseKey is only on the wire when the key is valid for this connection, so reading it
-    ///     unconditionally would shift everything after it.
+    ///     Reads an object reference and resolves it. Returns null when the id names nothing this
+    ///     server handed out - the handler must treat that the same way real UE treats an unmapped
+    ///     object reference, i.e. as "the caller meant nothing I can act on".
+    ///
+    ///     This used to read the packed NetGUID and stop there, which is only correct for a guid the
+    ///     SERVER assigned. A client naming anything else sends the default guid followed by an
+    ///     export block (flags, outer chain, path, checksum); consuming just the guid left all of
+    ///     that in the stream. UPackageMapClient.ReadObjectRef handles both shapes.
     /// </summary>
-    private static FPredictionKey ReadPredictionKey(FArchive bunch) {
-        var key = new FPredictionKey { bValidKeyForConnection = bunch.ReadBit() };
-
-        var hasBaseKey = false;
-        if (key.bValidKeyForConnection) hasBaseKey = bunch.ReadBit();
-
-        key.bIsServerInitiated = bunch.ReadBit();
-
-        if (key.bValidKeyForConnection) key.Current = (short) bunch.ReadUInt16();
-        if (hasBaseKey) key.Base = (short) bunch.ReadUInt16();
-
-        return key;
-    }
-
-    /// <summary>
-    ///     Reads a packed NetGUID and resolves it. Returns null when the archive carries no package
-    ///     map or the id names nothing - the handler must treat that the same way real UE treats an
-    ///     unmapped object reference, i.e. as "the caller meant nothing I can act on".
-    /// </summary>
-    private static unsafe UObject? ReadObject(FArchive bunch) {
-        var netGuid = new FNetworkGUID();
-        netGuid.NetSerialize(bunch);
-
-        if (bunch.IsError() || bunch is not FNetBitReader { PackageMap: UPackageMapClient packageMap }) return null;
-
-        return packageMap.GuidCache?.GetObjectFromNetGUID(netGuid);
-    }
+    private static UObject? ReadObject(FArchive bunch) => UPackageMapClient.ReadObjectRef(bunch, out _);
 
     /// <summary>Mirrors FFastArraySerializerWriter's GuidToAbcd - four int32s in A/B/C/D order.</summary>
     private static Guid ReadGuid(FArchive bunch) {

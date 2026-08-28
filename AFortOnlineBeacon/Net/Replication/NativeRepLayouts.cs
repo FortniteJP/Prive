@@ -313,7 +313,7 @@ internal static class NativeRepLayouts {
             Reserved("LatestRewardReport.TheaterName"),         // 37, FText
             Reserved("LatestRewardReport.Difficulty"),          // 38, FText
             Reserved("LatestRewardReport.DifficultyValue", ERepPropertyKind.Float),   // 39
-            Reserved("LatestRewardReport.RewardActivities", ERepPropertyKind.EmptyDynamicArray), // 40
+            Reserved("LatestRewardReport.RewardActivities"), // 40
             Reserved("LatestRewardReport.bIsFinalized"),        // 41
             Reserved("UpdatedObjectiveStats", ERepPropertyKind.EmptyDynamicArray),    // 42
             Reserved("bHasUnsavedPrimaryMissionProgress"),      // 43
@@ -341,9 +341,54 @@ internal static class NativeRepLayouts {
                 Name = "OverriddenBackpackSize",
                 Kind = ERepPropertyKind.Int32,
                 GetIntValue = obj => ((APlayerController) obj).OverriddenBackpackSize
+            },
+
+            // ---------------------------------------------------------------------------
+            // 53-75, derived with Tools/RepHandles/rep_handles.py AFortPlayerControllerAthena.
+            // Declared purely to REACH handle 75: a handle stream is positional, so bMarkedAlive
+            // cannot be sent without every handle before it existing in the table, even though
+            // none of them is ever put on the wire.
+            // ---------------------------------------------------------------------------
+            Reserved("AimHelpMode"), // 53 - uint32
+            Reserved("JumpStaminaCost"), // 54 - byte enum
+            Reserved("CameraPrototypeName"), // 55 - FName
+            Reserved("bFinalXPUpdateFailed"), // 56
+            Reserved("PoiTagContainerTableID"), // 57 - int16
+            Reserved("CreativeQuickbarComponent"), // 58 - object
+            Reserved("GhostModeRepData.bInGhostMode"), // 59
+            Reserved("GhostModeRepData.GhostModeItemDef"), // 60 - object
+            Reserved("ServerNumNPCs"), // 61 - uint16
+            Reserved("ServerMaxNumNPCs"), // 62 - uint16
+            Reserved("bDisplayNPCNumbers"), // 63
+            Reserved("FlyingModifierIndex"), // 64 - int32
+            Reserved("bIsFlightSprinting"), // 65
+            Reserved("bIsCreativeModeEnabled"), // 66
+            Reserved("bIsCreativeQuickbarEnabled"), // 67
+            Reserved("VoiceChatChannel"), // 68 - FString
+            Reserved("DesyncNotifyList"), // 69 - TArray<AActor*>
+            Reserved("SkydiveLeader"), // 70 - object
+            Reserved("ViewTargetInventory"), // 71 - object
+            Reserved("bNextRespawnInAir"), // 72
+            Reserved("bCanUseSolaris"), // 73
+            Reserved("MaxPlotCount"), // 74 - int32
+
+            new FRepPropertyDef {
+                // 75, 0x2AB8 - AFortPlayerControllerAthena::bMarkedAlive.
+                //
+                // "Is this player alive?", and it defaults to FALSE on a client that was never
+                // told otherwise. Walking never asked - that is the movement component running
+                // its own physics - but the things a DEAD player must not do are gated on it,
+                // which is the shape of the bug it was found for: crouch and fire and harvest
+                // all worked while jump and building placement were refused before they ever
+                // reached the server.
+                //
+                // It sits past the end of what this table used to declare (52), so it was not
+                // merely unset - there was no way to express it at all.
+                Name = "bMarkedAlive",
+                Kind = ERepPropertyKind.Bool,
+                GetByteValue = obj => (byte) (((APlayerController) obj).bMarkedAlive ? 1 : 0)
             }
         })
-        // Nothing past handle 52 is declared - this project sends none of it.
     ).ToArray();
 
     /// <summary>
@@ -1325,6 +1370,7 @@ internal static class NativeRepLayouts {
         Send(37, "CrouchedRunSpeed", set => set.CrouchedRunSpeed);
         Send(46, "CrouchedSprintSpeed", set => set.CrouchedSprintSpeed);
         Send(55, "BackwardSpeedMultiplier", set => set.BackwardSpeedMultiplier);
+        Send(64, "JumpHeight", set => set.JumpHeight);
 
         return props.Concat(new FRepPropertyDef[] {
         new() {
@@ -1342,6 +1388,78 @@ internal static class NativeRepLayouts {
         }).ToArray();
     }
 
+    /// <summary>
+    ///     UFortPlayerAttrSet, handles 1-36, derived with
+    ///     Tools/RepHandles/rep_handles.py UFortPlayerAttrSet. Nine handles per attribute, in
+    ///     offset order: Stamina 1, StaminaRegenRate 10, StaminaRegenDelay 19, MaxStamina 28.
+    ///
+    ///     Everything past MaxStamina is left undeclared - the handle stream is positional, so a
+    ///     table only has to reach the furthest handle it actually sends.
+    /// </summary>
+    private static readonly FRepPropertyDef[] PlayerAttrSetProps = BuildPlayerAttrSetProps();
+
+    private static FRepPropertyDef[] BuildPlayerAttrSetProps() {
+        var props = new List<FRepPropertyDef> {
+            Reserved("Stamina.BaseValue"),
+            Reserved("Stamina.CurrentValue"),
+            Reserved("Stamina.Minimum"),
+            Reserved("Stamina.Maximum"),
+            Reserved("Stamina.bIsCurrentClamped"),
+            Reserved("Stamina.bIsBaseClamped"),
+            Reserved("Stamina.bShouldClampBase"),
+            Reserved("Stamina.UnclampedBaseValue"),
+            Reserved("Stamina.UnclampedCurrentValue"),
+            Reserved("StaminaRegenRate.BaseValue"),
+            Reserved("StaminaRegenRate.CurrentValue"),
+            Reserved("StaminaRegenRate.Minimum"),
+            Reserved("StaminaRegenRate.Maximum"),
+            Reserved("StaminaRegenRate.bIsCurrentClamped"),
+            Reserved("StaminaRegenRate.bIsBaseClamped"),
+            Reserved("StaminaRegenRate.bShouldClampBase"),
+            Reserved("StaminaRegenRate.UnclampedBaseValue"),
+            Reserved("StaminaRegenRate.UnclampedCurrentValue"),
+            Reserved("StaminaRegenDelay.BaseValue"),
+            Reserved("StaminaRegenDelay.CurrentValue"),
+            Reserved("StaminaRegenDelay.Minimum"),
+            Reserved("StaminaRegenDelay.Maximum"),
+            Reserved("StaminaRegenDelay.bIsCurrentClamped"),
+            Reserved("StaminaRegenDelay.bIsBaseClamped"),
+            Reserved("StaminaRegenDelay.bShouldClampBase"),
+            Reserved("StaminaRegenDelay.UnclampedBaseValue"),
+            Reserved("StaminaRegenDelay.UnclampedCurrentValue"),
+            Reserved("MaxStamina.BaseValue"),
+            Reserved("MaxStamina.CurrentValue"),
+            Reserved("MaxStamina.Minimum"),
+            Reserved("MaxStamina.Maximum"),
+            Reserved("MaxStamina.bIsCurrentClamped"),
+            Reserved("MaxStamina.bIsBaseClamped"),
+            Reserved("MaxStamina.bShouldClampBase"),
+            Reserved("MaxStamina.UnclampedBaseValue"),
+            Reserved("MaxStamina.UnclampedCurrentValue"),
+        };
+
+        // Base and Current always travel together: a client that took only one would have an
+        // attribute whose base and current disagree.
+        void Send(int baseHandle, string name, Func<UFortPlayerAttrSet, float> get) {
+            props[baseHandle - 1] = new FRepPropertyDef {
+                Name = $"{name}.BaseValue", Kind = ERepPropertyKind.Float,
+                GetFloatValue = obj => get((UFortPlayerAttrSet) obj)
+            };
+            props[baseHandle] = new FRepPropertyDef {
+                Name = $"{name}.CurrentValue", Kind = ERepPropertyKind.Float,
+                GetFloatValue = obj => get((UFortPlayerAttrSet) obj)
+            };
+        }
+
+        Send(1, "Stamina", set => set.Stamina);
+        Send(10, "StaminaRegenRate", set => set.StaminaRegenRate);
+        Send(19, "StaminaRegenDelay", set => set.StaminaRegenDelay);
+        Send(28, "MaxStamina", set => set.MaxStamina);
+
+        return props.ToArray();
+    }
+
+    public static readonly FRepLayout PlayerAttrSet = new(PlayerAttrSetProps);
     public static readonly FRepLayout MovementSet = new(MovementSetProps);
 
     public static readonly FRepLayout AbilitySystemComponent = new(AbilitySystemComponentProps);

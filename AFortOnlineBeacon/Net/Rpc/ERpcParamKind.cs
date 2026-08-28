@@ -34,5 +34,19 @@ public enum ERpcParamKind {
     ///     GameplayAbilities' FPredictionKey - a conditional bit layout rather than a fixed-size
     ///     value. See FPredictionKey for the shape and the measurement that confirmed it.
     /// </summary>
-    PredictionKey
+    PredictionKey,
+
+    /// <summary>
+    ///     An FGameplayAbilityTargetDataHandle - what the client says it hit. A tagged union whose
+    ///     tag is a full UScriptStruct path; see FGameplayAbilityTargetDataHandle.
+    /// </summary>
+    TargetDataHandle,
+
+    /// <summary>
+    ///     An FServerAbilityRPCBatch parameter. A struct parameter is still ONE parameter: it takes
+    ///     one leading "send" bit and then all of its members back to back, so it must be declared
+    ///     as a single param rather than as its five members - declaring the members separately
+    ///     would read four presence bits that are not on the wire.
+    /// </summary>
+    AbilityRpcBatch
 }

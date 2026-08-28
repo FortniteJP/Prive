@@ -26,6 +26,12 @@ public class APlayerState : AInfo {
     public UFortMovementSet? MovementSet { get; set; }
 
     /// <summary>
+    ///     The same shortcut for the stamina set. Held for the same reason MovementSet is: the
+    ///     replication pass would otherwise search SpawnedAttributes every tick.
+    /// </summary>
+    public UFortPlayerAttrSet? PlayerAttrSet { get; set; }
+
+    /// <summary>
     ///     APlayerState::GetOwningController - `Cast&lt;AController&gt;(GetOwner())`. Real UE sets
     ///     that owner in AController::InitPlayerState; this project does the same in
     ///     AGameModeBase.Login, which is also what makes the PlayerState replicate to the right

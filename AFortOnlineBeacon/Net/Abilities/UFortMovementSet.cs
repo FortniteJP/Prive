@@ -31,5 +31,24 @@ public class UFortMovementSet : UFortAttributeSet {
     public float CrouchedRunSpeed { get; set; } = Env("CROUCHED_RUN_SPEED", 290.0f);
     public float CrouchedSprintSpeed { get; set; } = Env("CROUCHED_SPRINT_SPEED", 420.0f);
     public float BackwardSpeedMultiplier { get; set; } = Env("BACKWARD_SPEED_MULTIPLIER", 0.65f);
+
+    /// <summary>
+    ///     UFortMovementSet::JumpHeight - wire handle 64, and the reason a player could not jump at
+    ///     all. Exactly the shape the walk-speed bug had: the attribute exists, the client reads
+    ///     movement through the ability system, and an attribute this server never sends reads as
+    ///     zero no matter what the client's own defaults were.
+    ///
+    ///     The default here is deliberately 1.0, because whether this is a MULTIPLIER or a raw value
+    ///     is not yet known. Its siblings do not settle it - everything ending in Multiplier or Scale
+    ///     is a scalar and every speed is raw, and "JumpHeight" is neither. 1.0 is the safe half of
+    ///     that bet: if it is a multiplier, jumping simply works; if it is raw, the result is the
+    ///     same zero-height jump as today rather than something wild.
+    ///
+    ///     One reading settles it. With this sent, `GetAll FortMovementComp_CharacterAthena
+    ///     JumpZVelocity` in the client console says which it is - a real velocity (~1000) means
+    ///     multiplier and this is already right; ~1 or 0 means raw, and the number it wants can be
+    ///     set with JUMP_HEIGHT without a rebuild.
+    /// </summary>
+    public float JumpHeight { get; set; } = Env("JUMP_HEIGHT", 1.0f);
     public float SpeedMultiplier { get; set; } = Env("SPEED_MULTIPLIER", 1.0f);
 }

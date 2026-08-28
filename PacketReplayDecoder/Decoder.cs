@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using AFortOnlineBeacon.Core;
 using AFortOnlineBeacon.Core.Names;
 using AFortOnlineBeacon.Net;
+using AFortOnlineBeacon.Net.Abilities;
 using AFortOnlineBeacon.Net.Channels;
 using AFortOnlineBeacon.Net.Packets;
 using AFortOnlineBeacon.Net.Packets.Header;
@@ -65,10 +66,23 @@ internal sealed class RoleDecoder {
     private readonly FNetPacketNotify _notify = new();
     private int _inPacketId;
     private bool _sequenceInitialized;
+    private static bool _warnedAboutChain;
 
     private readonly Dictionary<int, int> _inReliable = new();
     private readonly Dictionary<int, ChannelState> _channels = new();
-    private readonly Dictionary<uint, string> _guidPaths = new();
+    /// <summary>
+    ///     Exported NetGUID -&gt; path, SHARED between the two role decoders rather than one each.
+    ///
+    ///     A NetGUID namespace belongs to the CONNECTION, not to a direction: only the server assigns
+    ///     ids, it exports them on the S-&gt;C side, and the client then names things by those same ids
+    ///     on the way back. With a table per direction the C-&gt;S decoder can never resolve anything -
+    ///     which is exactly how eleven ability batches ended up reported as
+    ///     "struct guid 9039, no path", while packet #1971 in the other direction had already said
+    ///     plainly that 9039 is FortGameplayAbilityTargetData_SingleTargetHit.
+    ///
+    ///     Static is honest here: this tool decodes exactly one captured session per run.
+    /// </summary>
+    private static readonly Dictionary<uint, string> _guidPaths = new();
 
     // Per-class-name (best-effort matched from the archetype path string) handle table for RepLayout decode.
     private readonly Dictionary<string, Dictionary<uint, GroundTruth.RepHandleDef>> _handleMaps;
@@ -258,6 +272,22 @@ internal sealed class RoleDecoder {
 
         if (_verbose) Log($"#{packetIndex}: header Seq={seq.Value} AckedSeq={ackedSeq.Value} HistoryWordCount={historyWordCount}");
 
+        // FNetPacketNotify caps the history at MaxSequenceHistoryLength/32 = 8 words, so anything
+        // above that is not a real header - it is a misaligned one, and by far the likeliest cause is
+        // a PacketHandler chain that does not match the client the capture was taken from. Every
+        // component costs bits whether or not it does anything (AES and Oodle each read one leading
+        // flag bit), so one surplus component shifts the whole body by one bit and the packet still
+        // "decodes" - into plausible garbage. This warning exists because that cost a full session:
+        // the decoder was written off as broken when it was being run with AES in the chain against a
+        // capture whose client had `!Components=ClearArray` and only Oodle.
+        if (historyWordCount > 8 && !_warnedAboutChain) {
+            _warnedAboutChain = true;
+            Log($"#{packetIndex}: HistoryWordCount={historyWordCount} exceeds the 8-word maximum, so this header " +
+                "is misaligned rather than unusual. The PacketHandler chain almost certainly does not match the " +
+                "client this capture came from - set NET_HANDLER_COMPONENTS (e.g. \"oodle,stateless\" for a " +
+                "capture with AES removed from [PacketHandlerComponents]) and run again.");
+        }
+
         // ReadPacketInfo equivalent (see UNetConnection.WritePacketInfo/ReadPacketInfo): 1 bit +
         // optional byte (only ever written by a SERVER sender) + 1 mandatory byte, always in that order.
         var bHasServerFrameTime = reader.ReadBit();
@@ -341,6 +371,22 @@ internal sealed class RoleDecoder {
         var chNameStr = chName.ToEName()?.ToString() ?? chName.ToString();
         if (_verbose) Log($"#{packetIndex}: bunch ChIndex={chIndex} ChName={chNameStr} bOpen={bOpen} bClose={bClose} bReliable={bReliable} bPartial={bPartial}/{bPartialInitial}/{bPartialFinal} bHasPackageMapExports={bHasPackageMapExports} bits={bunchDataBits}");
 
+        // UActorChannel::ReceivedBunch reads the must-be-mapped GUID list off the FRONT of the
+        // payload before anything else - a uint16 count, then that many packed NetGUIDs. The header
+        // bit was being read and the list itself never consumed, so every bunch carrying one began
+        // decoding 16+ bits early. That is why actor GUIDs came out as 0 or 1, why no channel ever
+        // resolved an actor class, and why all 324 RepLayout blobs were skipped: the decoder looked
+        // broken in a dozen places for one missing read.
+        if (bHasMustBeMappedGUIDs) {
+            var numMustBeMapped = bunchReader.ReadUInt16();
+            for (var i = 0; i < numMustBeMapped && !bunchReader.IsError(); i++) {
+                var mapped = new FNetworkGUID();
+                mapped.NetSerialize(bunchReader);
+            }
+
+            if (_verbose) Log($"#{packetIndex}:   consumed {numMustBeMapped} must-be-mapped GUID(s)");
+        }
+
         if (bHasPackageMapExports) {
             DecodeExportBunch(packetIndex, bunchReader, chIndex);
         } else if (chName == EName.Actor) {
@@ -359,32 +405,46 @@ internal sealed class RoleDecoder {
     // ---------------- NetGUID reading (two different wire shapes - see GroundTruth.cs comment) ----------------
 
     /// <summary>Inline object reference (SerializeNewActor's actor/archetype/level refs, RepLayout ObjectRef properties) - IsExportingNetGUIDBunch is false at these call sites, so no path is inlined (except the rare client-only "default GUID" case).</summary>
+    /// <summary>
+    ///     Delegates to the SERVER's own object-reference parser rather than keeping a second copy.
+    ///     That is the point of this decoder: running the production reader against a recording of a
+    ///     known-good server is the only check on it that does not need a live client. A private
+    ///     lookalike here would agree with itself and prove nothing - and did, right up until it was
+    ///     found to be skipping the export checksum that the real one also skipped.
+    /// </summary>
     private FNetworkGUID ReadGuidRef(FBitReader r) {
-        var val = r.ReadUInt32Packed();
-        var guid = new FNetworkGUID(val);
-        if (!guid.IsValid()) return guid;
-        if (guid.IsDefault()) {
-            var hasPath = r.ReadByte();
-            if (hasPath != 0) {
-                ReadGuidRef(r); // outer, discarded (default-GUID path is a client->server-only case)
-                r.ReadString();
-            }
-        }
-
+        UPackageMapClient.ReadObjectReference(r, out var guid, out _);
         return guid;
     }
 
-    /// <summary>Export-bunch entry (IsExportingNetGUIDBunch true for the whole bunch) - always carries a bHasPath byte, and recurses through the SAME export-style reader for its outer chain.</summary>
+    /// <summary>
+    ///     Export-bunch entry. While IsExportingNetGUIDBunch is true, InternalWriteObject writes the
+    ///     export flags for EVERY guid, not just the default one - so this cannot share
+    ///     ReadObjectReference, which (correctly, for its own callers) only expects flags after a
+    ///     default guid.
+    ///
+    ///     The flags are a bitfield and bit 2 is bHasNetworkChecksum, which puts a uint32 AFTER the
+    ///     path. Missing it did not fail loudly: it swallowed the next entry's first four bytes, so
+    ///     exports came out as real-looking paths with their object names sheared off
+    ///     ("/Game/Athena/Athena_PlayerController." with nothing after the dot) and every guid after
+    ///     the first in a bunch was garbage.
+    /// </summary>
     private (FNetworkGUID guid, string? path) ReadGuidExport(FBitReader r) {
         var val = r.ReadUInt32Packed();
         var guid = new FNetworkGUID(val);
         if (!guid.IsValid()) return (guid, null);
 
-        var hasPath = r.ReadByte();
-        if (hasPath == 0) return (guid, null);
+        var exportFlags = r.ReadByte();
+        var hasPath = (exportFlags & 1) != 0;
+        var hasNetworkChecksum = (exportFlags & 4) != 0;
+
+        if (!hasPath) return (guid, null);
 
         var (_, outerPath) = ReadGuidExport(r);
         var name = r.ReadString();
+
+        if (hasNetworkChecksum) r.ReadUInt32();
+
         var full = string.IsNullOrEmpty(outerPath) ? name : $"{outerPath}.{name}";
         return (guid, full);
     }
@@ -394,6 +454,80 @@ internal sealed class RoleDecoder {
     ///     the same way NativeClassNetCache's tables are: each class's own CPF_Net properties plus
     ///     FUNC_Net functions, name-sorted, assigned base-first.
     /// </summary>
+    /// <summary>
+    ///     Runs the SERVER's own ability-RPC readers over a captured field and reports whether they
+    ///     land exactly on its end.
+    ///
+    ///     This is the only validation available for a layout derived on paper. An
+    ///     FGameplayAbilityTargetDataHandle has no internal framing: a decode that is a few bits off
+    ///     still yields a coordinate and a name that both look entirely reasonable. What it cannot do
+    ///     is finish in the right place - so "consumed N of N bits" against a recording of a
+    ///     known-good server is the actual proof, and it costs no client, no test round and no match.
+    /// </summary>
+    private void DecodeAbilityRpcField(int packetIndex, FBitReader r, string fieldName, long fieldStart, uint fieldBits) {
+        var fieldEnd = fieldStart + fieldBits;
+
+        try {
+            switch (fieldName) {
+                case "ServerAbilityRPCBatch": {
+                    // One struct parameter, so one leading "send" bit for the whole thing.
+                    if (!r.ReadBit()) {
+                        Log($"#{packetIndex}:       ServerAbilityRPCBatch send bit clear - no batch present");
+                        return;
+                    }
+
+                    var batch = FServerAbilityRPCBatch.NetSerializeRead(r, ResolveExportedGuid);
+                    Log($"#{packetIndex}:       {batch}");
+                    ReportConsumed(packetIndex, r, fieldStart, fieldEnd, exact: true);
+                    return;
+                }
+
+                case "ServerSetReplicatedTargetData": {
+                    if (!r.ReadBit()) return;
+                    var handle = r.ReadInt32();
+
+                    if (!r.ReadBit()) {
+                        Log($"#{packetIndex}:       ServerSetReplicatedTargetData Handle={handle} (no prediction key)");
+                    } else {
+                        var key = FPredictionKey.NetSerializeRead(r);
+                        Log($"#{packetIndex}:       ServerSetReplicatedTargetData Handle={handle} PredictionKey=[{key}]");
+                    }
+
+                    if (!r.ReadBit()) return;
+
+                    var targetData = FGameplayAbilityTargetDataHandle.NetSerializeRead(r, ResolveExportedGuid);
+                    Log($"#{packetIndex}:       TargetData=[{targetData}]");
+
+                    // An FGameplayTag and a second FPredictionKey follow, so this one is NOT expected
+                    // to land on the field end - see NativeRpcHandlers for why the tag is undecodable.
+                    ReportConsumed(packetIndex, r, fieldStart, fieldEnd, exact: false);
+                    return;
+                }
+            }
+        } catch (Exception ex) {
+            Log($"#{packetIndex}:       {fieldName} decode threw at bit {r.Pos - fieldStart} of {fieldBits}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    ///     A client names a UScriptStruct by id whenever the server exported that id earlier in the
+    ///     session, sending no path at all. The decoder has been recording every export bunch it saw
+    ///     all along - this is what makes that record answer the question.
+    /// </summary>
+    private string? ResolveExportedGuid(uint guid) => _guidPaths.GetValueOrDefault(guid);
+
+    private void ReportConsumed(int packetIndex, FBitReader r, long fieldStart, long fieldEnd, bool exact) {
+        var consumed = r.Pos - fieldStart;
+        var leftover = fieldEnd - r.Pos;
+
+        if (exact && leftover == 0) {
+            Log($"#{packetIndex}:       decode consumed {consumed} of {fieldEnd - fieldStart} bits - EXACT");
+        } else {
+            Log($"#{packetIndex}:       decode consumed {consumed} of {fieldEnd - fieldStart} bits, {leftover} left over" +
+                (exact ? " - MISMATCH, the declared layout does not fit the wire" : " (expected: undecoded tail)"));
+        }
+    }
+
     private const int AscMaxIndex = 53;
 
     private static readonly string[] AscFields = {
@@ -550,7 +684,10 @@ internal sealed class RoleDecoder {
                         }
 
                         Log($"#{packetIndex}:     FIELD index={fieldIndex} ({AscFieldName(fieldIndex)}) numPayloadBits={fieldBits} bits={hex}");
-                        r.Pos += (int) fieldBits;
+
+                        DecodeAbilityRpcField(packetIndex, r, AscFieldName(fieldIndex), fieldStart, fieldBits);
+
+                        r.Pos = (int) (fieldStart + fieldBits);
                     }
                 }
 

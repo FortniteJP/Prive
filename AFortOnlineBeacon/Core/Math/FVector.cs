@@ -39,6 +39,33 @@ public class FVector {
     }
 
     /// <summary>
+    ///     Matches SerializeFixedVector&lt;MaxValue, NumBits&gt; (NetSerialization.h) - a completely
+    ///     different encoding from the packed one above: no bit-count header, every component a
+    ///     fixed-width biased int. FVector_NetQuantizeNormal is 1/16, i.e. three flat 16-bit fields,
+    ///     which is what an FHitResult's Normal and ImpactNormal use.
+    /// </summary>
+    public static FVector NetSerializeReadFixed(FArchive ar, int maxValue, int numBits) => new() {
+        X = ReadFixedCompressedFloat(ar, maxValue, numBits),
+        Y = ReadFixedCompressedFloat(ar, maxValue, numBits),
+        Z = ReadFixedCompressedFloat(ar, maxValue, numBits)
+    };
+
+    /// <summary>ReadFixedCompressedFloat&lt;MaxValue, NumBits&gt; (NetSerialization.h:1820).</summary>
+    private static float ReadFixedCompressedFloat(FArchive ar, int maxValue, int numBits) {
+        var maxBitValue = (1 << (numBits - 1)) - 1;
+        var bias = 1 << (numBits - 1);
+        var serIntMax = (uint) (1 << numBits);
+
+        var unscaled = (float) ((int) ar.ReadInt(serIntMax) - bias);
+
+        // Scaling up (MaxValue <= MaxBitValue) is the normal case - a unit normal at 16 bits has
+        // 32767 steps per unit. Scaling DOWN only happens for a range wider than the bit budget.
+        return maxValue > maxBitValue
+            ? unscaled * (maxValue / (float) maxBitValue)
+            : unscaled / (maxBitValue / maxValue);
+    }
+
+    /// <summary>
     ///     Matches WritePackedVector&lt;ScaleFactor, MaxBitsPerComponent&gt; (NetSerialization.h) - the
     ///     send half of NetSerializeReadQuantized above, and the encoding
     ///     UPackageMapClient::SerializeNewActor uses for a spawned actor's Location (FVector_NetQuantize10,

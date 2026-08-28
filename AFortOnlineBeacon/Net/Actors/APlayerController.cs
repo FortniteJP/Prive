@@ -21,7 +21,14 @@ public class APlayerController : AController {
     public bool bHasServerFinishedLoading { get; set; }
 
     /// <summary>
-    ///     AFortPlayerController::OverriddenBackpackSize - wire handle 52. How many inventory slots
+    ///     AFortPlayerControllerAthena::bMarkedAlive - wire handle 75.
+    ///
+    ///     The client's answer to "is this player alive?", and it is FALSE until a server says
+    ///     otherwise. A real match sets it as part of spawning the player in.
+    /// </summary>
+    public bool bMarkedAlive { get; set; } = true;
+
+    /// <summary>    ///     AFortPlayerController::OverriddenBackpackSize - wire handle 52. How many inventory slots
     ///     the client believes it has. Zero until told otherwise, which is why every pickup was
     ///     refused as "inventory full". 5 is Battle Royale's real backpack size and what
     ///     Project-Reboot-3.0 sets; raider3.5 uses 100. BACKPACK_SIZE overrides it.

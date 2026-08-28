@@ -55,49 +55,114 @@ public class UPackageMapClient : UPackageMap {
     ///     returns null; <paramref name="pathName"/> still comes back so the caller can say WHAT it
     ///     could not resolve, which is the whole diagnostic value of reading this at all.
     /// </summary>
-    public UObject? SerializeObjectRead(FArchive ar, out FNetworkGUID netGuid, out string pathName) =>
-        InternalLoadObject(ar, out netGuid, out pathName, 0);
+    public UObject? SerializeObjectRead(FArchive ar, out FNetworkGUID netGuid, out string pathName) {
+        var bHasPath = ReadObjectReference(ar, out netGuid, out pathName);
+
+        // A path means the client named something this server never assigned an id to, so there is
+        // nothing in the cache to look up - and inventing an object for a client-supplied name is
+        // exactly what real UE refuses to do on the server (DataChannel.cpp:3376, "Client attempted
+        // to create sub-object"). The caller still has the path, which is the whole diagnostic value.
+        if (ar.IsError() || bHasPath) return null;
+
+        return GuidCache?.GetObjectFromNetGUID(netGuid);
+    }
 
     /// <summary>Matches real UE's INTERNAL_LOAD_OBJECT_RECURSION_LIMIT - a malformed outer chain must not recurse forever.</summary>
     private const int InternalLoadObjectRecursionLimit = 16;
 
-    private UObject? InternalLoadObject(FArchive ar, out FNetworkGUID netGuid, out string pathName, int recursionCount) {
+    /// <summary>
+    ///     The PARSE half of UPackageMapClient::InternalLoadObject, with no resolution and no
+    ///     dependence on a package map: it consumes exactly the bits an object reference occupies and
+    ///     reports what it saw. Returns true when the reference carried an exported path (and so has
+    ///     no server-assigned id behind it).
+    ///
+    ///     Separate from resolution on purpose. Consuming the right number of bits is what keeps the
+    ///     rest of a bunch readable, and it is decided entirely by the wire - whereas resolution
+    ///     needs a live GUID cache. Splitting them lets the offline capture decoder run this exact
+    ///     code against a real Project-Reboot-3.0 recording, which is the only way any of this gets
+    ///     checked without a client in the loop.
+    /// </summary>
+    public static bool ReadObjectReference(FArchive ar, out FNetworkGUID netGuid, out string pathName,
+                                           int recursionCount = 0) {
         netGuid = new FNetworkGUID();
         pathName = string.Empty;
 
         if (recursionCount > InternalLoadObjectRecursionLimit) {
-            Console.WriteLine("InternalLoadObject: recursion limit reached, refusing to follow the outer chain further");
+            Console.WriteLine("ReadObjectReference: recursion limit reached, refusing to follow the outer chain further");
             ar.SetError();
-            return null;
+            return false;
         }
 
         netGuid.NetSerialize(ar);
-        if (ar.IsError() || !netGuid.IsValid()) return null;
+        if (ar.IsError() || !netGuid.IsValid()) return false;
 
         // Export flags only follow a DEFAULT guid here. Real UE also reads them while processing a
         // NetGUID export bunch, but those arrive on their own path and never through an actor
         // channel's content block, which is the only caller of this.
+        //
+        // FExportFlags (PackageMapClient.h) is a BITFIELD, not a single flag:
+        //   bit 0 bHasPath, bit 1 bNoLoad, bit 2 bHasNetworkChecksum.
         var bHasPath = false;
+        var bHasNetworkChecksum = false;
+
         if (netGuid.IsDefault()) {
             var exportFlags = ar.ReadByte();
-            if (ar.IsError()) return null;
+            if (ar.IsError()) return false;
+
             bHasPath = (exportFlags & 1) != 0;
+            bHasNetworkChecksum = (exportFlags & 4) != 0;
         }
 
-        if (!bHasPath) return GuidCache!.GetObjectFromNetGUID(netGuid);
+        if (!bHasPath) return false;
 
-        var outer = InternalLoadObject(ar, out _, out var outerPath, recursionCount + 1);
-        if (ar.IsError()) return null;
+        ReadObjectReference(ar, out _, out var outerPath, recursionCount + 1);
+        if (ar.IsError()) return true;
 
         var name = ar.ReadString();
-        if (ar.IsError()) return null;
+        if (ar.IsError()) return true;
+
+        // A uint32 that FOLLOWS the path (InternalWriteObject, PackageMapClient.cpp:740-746). The
+        // client's FNetGUIDCache::NetworkChecksumMode defaults to SaveAndUse, so every path a client
+        // exports carries one, and skipping it leaves four bytes of someone else's data in the
+        // stream. That went unnoticed for as long as the only thing read after a content block
+        // header was NumPayloadBits, which resynchronises regardless - but an object reference read
+        // MID-payload (an FHitResult's Actor, say) has nothing to resync against, and the very next
+        // field decodes as garbage.
+        if (bHasNetworkChecksum) {
+            ar.ReadUInt32();
+            if (ar.IsError()) return true;
+        }
 
         pathName = string.IsNullOrEmpty(outerPath) ? name : $"{outerPath}.{name}";
+        return true;
+    }
 
-        // No path resolve. This server has no object registry to look a name up in - UAssetRegistry
-        // only holds assets it was asked to export - and inventing an object for a client-supplied
-        // name is exactly what real UE refuses to do on the server. The caller logs the path.
-        return outer == null ? null : null;
+    /// <summary>
+    ///     Reads one object reference and resolves it if this archive can. Everything a client sends
+    ///     that names an object goes through here - an RPC parameter, an FHitResult's
+    ///     Actor/Component/PhysMaterial, an FGameplayAbilityTargetDataHandle's UScriptStruct - so
+    ///     they all get identical treatment for exports and for unresolvable paths.
+    ///
+    ///     A CLIENT can never assign a NetGUID (FNetGUIDCache::GetOrAssignNetGUID returns the default
+    ///     guid when !IsNetGUIDAuthority), so anything the server never introduced arrives as the
+    ///     default guid plus its full path, EVERY time - which is why an unresolved reference still
+    ///     yields a usable name.
+    /// </summary>
+    public static UObject? ReadObjectRef(FArchive ar, out string pathName) =>
+        ReadObjectRef(ar, out _, out pathName);
+
+    /// <summary>
+    ///     As above, but also hands back the NetGUID. Worth having whenever an unresolved reference
+    ///     is still worth naming: a reference with no path is one the SERVER introduced, so its id
+    ///     is the only handle on it a caller has left.
+    /// </summary>
+    public static UObject? ReadObjectRef(FArchive ar, out FNetworkGUID netGuid, out string pathName) {
+        var bHasPath = ReadObjectReference(ar, out netGuid, out pathName);
+        if (ar.IsError() || bHasPath) return null;
+
+        return ar is FNetBitReader { PackageMap: UPackageMapClient packageMap }
+            ? packageMap.GuidCache?.GetObjectFromNetGUID(netGuid)
+            : null;
     }
 
     /// <summary>

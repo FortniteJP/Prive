@@ -15,6 +15,9 @@ Making the dump (client sitting at the stuck loading screen):
 Usage:
     dumpxref.py <dump.dmp> ranges                     list the memory ranges covering the exe
     dumpxref.py <dump.dmp> xref <hexVA>               find lea reg,[rip+disp] sites pointing at VA
+    dumpxref.py <dump.dmp> ptr  <hexVA> [radius]      find 8-byte POINTERS to VA (UE registers
+                                                      native functions through .rdata tables, not
+                                                      through lea, so this is what finds them)
     dumpxref.py <dump.dmp> dis  <hexVA> [count]       disassemble from VA
     dumpxref.py <dump.dmp> fn   <hexVA> [count]       find the enclosing function start, disassemble
 """
@@ -131,6 +134,52 @@ class Mem:
             yield self.static(lo), self.f.read(hi - lo)
 
 
+def cmd_ptr(mem, target, radius):
+    """Find every 8-byte little-endian POINTER to `target` anywhere in the dumped image.
+
+    Code xrefs are not enough for UE. A native UFunction is not registered by instructions that
+    load its name - it is registered from a STATIC TABLE of {const char* name, FNativeFuncPtr}
+    pairs that the compiler emits into .rdata:
+
+        static const FNameNativePtrPair Funcs[] = {
+            { "CanJumpInternal", &ACharacter::execCanJumpInternal },
+            ...
+
+    So the way in is a DATA reference: find the qword holding the name string's address, and the
+    function pointer is the qword right after it. `radius` qwords either side are printed too,
+    because the neighbours are the rest of the same table - which is often the fastest way to
+    confirm a hit is a real table rather than a coincidence.
+    """
+    needle = struct.pack("<Q", mem.live(target))
+    hits = 0
+
+    for base, size, off in mem.ranges:
+        mem.f.seek(off)
+        data = mem.f.read(size)
+        start = 0
+        while True:
+            i = data.find(needle, start)
+            if i < 0:
+                break
+            start = i + 1
+            if i % 8:
+                continue  # a table entry is aligned; anything else is a coincidence
+
+            live = base + i
+            print("ptr @ 0x%X (static 0x%X)" % (live, mem.static(live)))
+
+            for k in range(-radius, radius + 1):
+                o = i + k * 8
+                if o < 0 or o + 8 > len(data):
+                    continue
+                (value,) = struct.unpack_from("<Q", data, o)
+                mark = "  <== name" if k == 0 else ("  <== likely exec fn" if k == 1 else "")
+                print("    [%+3d] 0x%016X   static 0x%X%s"
+                      % (k, value, mem.static(value) if value > mem.slide else 0, mark))
+            hits += 1
+
+    print("%d pointer hit(s)." % hits)
+
 def cmd_ranges(mem):
     total = 0
     lo_live, hi_live = mem.live(TEXT_LO), mem.live(TEXT_HI)
@@ -195,6 +244,8 @@ def main():
     cmd = sys.argv[2]
     if cmd == "ranges":
         cmd_ranges(mem)
+    elif cmd == "ptr":
+        cmd_ptr(mem, int(sys.argv[3], 16), int(sys.argv[4]) if len(sys.argv) > 4 else 2)
     elif cmd == "xref":
         cmd_xref(mem, int(sys.argv[3], 16))
     elif cmd == "dis":

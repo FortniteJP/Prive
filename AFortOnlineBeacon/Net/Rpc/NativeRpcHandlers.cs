@@ -365,6 +365,7 @@ internal static class NativeRpcHandlers {
 
                 if (actor is APawn trackedPawn && actor.GetWorld()?.NetDriver is { } driver) {
                     trackedPawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
+                    trackedPawn.TrackMoveFlags(values[3] as byte? ?? 0, values[6] as byte? ?? 0);
                 }
 
                 var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
@@ -457,14 +458,21 @@ internal static class NativeRpcHandlers {
         // neither reference server has anything to copy because on an injected server the native
         // GAS does it.
         //
-        // Only the FIRST parameter is declared. UActorChannel.ReadContentBlockFields always resyncs
-        // to the field's own declared bit count afterwards, so stopping early cannot desync the
-        // bunch - the same trick ServerMove's tail relies on. That matters here because the rest is
-        // an FGameplayAbilityTargetDataHandle, whose contents this project cannot read yet.
+        // Declared through the target data and NO FURTHER. What follows is an FGameplayTag, whose
+        // NetSerialize_Packed encoding is a bounded int over Fortnite's own tag table - a table this
+        // server has no copy of, so the width of that field is genuinely unknown. Stopping is safe:
+        // UActorChannel.ReadContentBlockFields always resyncs to the field's own declared bit count,
+        // the same trick ServerMove's tail relies on. (Which is also why this one is not marked
+        // ExpectsFullDecode - leftover bits here are expected, not a bug.)
         ["ServerSetReplicatedTargetData"] = new FRpcDef(
             "ServerSetReplicatedTargetData",
-            new[] { new FRpcParamDef("AbilityHandle", ERpcParamKind.Int32) },
-            (actor, values) => OnShotReported(actor, values[0], "ServerSetReplicatedTargetData")
+            new[] {
+                new FRpcParamDef("AbilityHandle", ERpcParamKind.Int32),
+                new FRpcParamDef("AbilityOriginalPredictionKey", ERpcParamKind.PredictionKey),
+                new FRpcParamDef("ReplicatedTargetDataHandle", ERpcParamKind.TargetDataHandle)
+            },
+            (actor, values) => OnShotReported(actor, values[0],
+                values[2] as FGameplayAbilityTargetDataHandle, "ServerSetReplicatedTargetData")
         ),
 
         // The BATCHED form, and the one Fortnite's ranged fire ability actually uses. UE's
@@ -474,23 +482,40 @@ internal static class NativeRpcHandlers {
         // 41 ServerAbilityRPCBatch and 40 ServerEndAbility, against 2 loose ServerTryActivateAbility
         // and zero target data.
         //
-        // FServerAbilityRPCBatch's members, in order: AbilitySpecHandle (an int32), PredictionKey,
-        // TargetData, InputPressed, Ended (Started is RepSkip). Only the handle is declared here.
-        // Careful: the ONE "send" bit belongs to the whole BatchInfo parameter, not to its members -
-        // declaring a second parameter would read a presence bit that is not on the wire and desync
-        // the read. The field's own bit count resyncs afterwards regardless.
+        // ONE parameter, not five. The whole FServerAbilityRPCBatch is a single RPC parameter, so it
+        // takes a single leading "send" bit and its members then follow back to back with no framing
+        // of their own - declaring them as separate FRpcParamDefs would read four presence bits that
+        // are not on the wire. See FServerAbilityRPCBatch for the member layout.
         ["ServerAbilityRPCBatch"] = new FRpcDef(
             "ServerAbilityRPCBatch",
-            new[] { new FRpcParamDef("AbilitySpecHandle", ERpcParamKind.Int32) },
-            (actor, values) => OnShotReported(actor, values[0], "ServerAbilityRPCBatch")
+            new[] { new FRpcParamDef("BatchInfo", ERpcParamKind.AbilityRpcBatch) },
+            (actor, values) => {
+                if (values[0] is not FServerAbilityRPCBatch batch) {
+                    Console.WriteLine("NativeRpcHandlers: ServerAbilityRPCBatch arrived with its send bit clear - " +
+                                      "no batch to act on");
+                    return;
+                }
+
+                Console.WriteLine($"NativeRpcHandlers: ServerAbilityRPCBatch on {actor.GetFName()} {batch}");
+                OnShotReported(actor, batch.AbilitySpecHandle, batch.TargetData, "ServerAbilityRPCBatch");
+            },
+            expectsFullDecode: true
         )
     };
 
     /// <summary>
     ///     One reported shot, from either the loose or the batched path - UE sends one or the other
     ///     per activation, never both, so this cannot double-count.
+    ///
+    ///     <paramref name="targetData"/> is what the client says it hit, and it is the client's word
+    ///     alone: a real server re-traces it before believing it. Nothing is trusted here yet - it is
+    ///     only reported - but it is now READ, which it was not before, and that is what any damage,
+    ///     harvesting or hit-marker work needs first.
     /// </summary>
-    private static void OnShotReported(AActor actor, object? handleValue, string source) {
+    private static void OnShotReported(AActor actor, object? handleValue,
+                                       FGameplayAbilityTargetDataHandle? targetData, string source) {
+        ReportTargetData(actor, targetData, source);
+
         if (actor is not APlayerState playerState) {
             Console.WriteLine($"NativeRpcHandlers: {source} arrived on {actor.GetType().Name}, not a PlayerState");
             return;
@@ -529,6 +554,66 @@ internal static class NativeRpcHandlers {
         }
 
         ConsumeAmmo(pawn, weapon);
+    }
+
+    /// <summary>
+    ///     Logs what the client reported hitting. Map geometry is almost never something this server
+    ///     has a NetGUID for, so <see cref="FHitResult.Actor"/> is usually null and the exported path
+    ///     is the only name available - "Athena_Tree_Medium_01_12" is a perfectly good answer even
+    ///     though no object backs it here.
+    /// </summary>
+    private static void ReportTargetData(AActor actor, FGameplayAbilityTargetDataHandle? targetData, string source) {
+        if (targetData == null) {
+            Console.WriteLine($"NativeRpcHandlers: {source} on {actor.GetFName()} carried no target data " +
+                              "(its send bit was clear, or the decode stopped before it)");
+            return;
+        }
+
+        if (targetData.Data.Count == 0) {
+            Console.WriteLine(targetData.bDecodeFailed
+                ? $"NativeRpcHandlers: {source} on {actor.GetFName()} carried target data that would not decode at all"
+                : $"NativeRpcHandlers: {source} on {actor.GetFName()} reported no targets");
+            return;
+        }
+
+        foreach (var entry in targetData.Data) {
+            if (entry.bUnknownShape) {
+                // Worth a full sentence rather than a shrug: this names the exact struct someone has
+                // to work out next, and it is the only place that name ever appears.
+                Console.WriteLine($"NativeRpcHandlers: {source} carried target data of type " +
+                                  $"'{entry.ScriptStructPath}', which this server has no layout for - " +
+                                  "decoding stopped there. Add it to FGameplayAbilityTargetDataHandle.");
+                continue;
+            }
+
+            if (entry.HitResult is not { } hit) continue;
+
+            Console.WriteLine($"NativeRpcHandlers: {source} HIT {hit}");
+
+            if (hit.ComponentPath.Length > 0 || hit.PhysMaterialPath.Length > 0) {
+                Console.WriteLine($"NativeRpcHandlers:   component='{hit.ComponentPath}' " +
+                                  $"physMaterial='{hit.PhysMaterialPath}' item={hit.Item} face={hit.FaceIndex}");
+            }
+
+            Harvest(actor, hit);
+        }
+    }
+
+    /// <summary>
+    ///     Pays out whatever the thing that was hit is made of. Every swing at a tree yields, the way
+    ///     it does in the real game - resources are granted per hit as damage is dealt, not in one
+    ///     lump when the tree falls (there is no health model here to fell it with).
+    ///
+    ///     Any weapon counts, not just the pickaxe. That matches Fortnite, where shooting scenery
+    ///     harvests it too, and it costs nothing to allow: the yield comes from what was hit.
+    /// </summary>
+    private static void Harvest(AActor actor, FHitResult hit) {
+        if (actor is not APlayerState playerState) return;
+        if (playerState.GetOwningPawn()?.Controller is not APlayerController controller) return;
+
+        if (FortHarvestResources.ResolveHit(hit.ActorPath) is not { } yield) return;
+
+        FortHarvestResources.Grant(controller, yield.ItemPath, yield.Amount);
     }
 
     /// <summary>

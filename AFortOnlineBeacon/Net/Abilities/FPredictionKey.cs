@@ -27,6 +27,25 @@ public sealed class FPredictionKey {
     public bool bValidKeyForConnection { get; set; }
 
     /// <summary>
+    ///     The load half. Note the middle bit is CONDITIONAL: HasBaseKey is only on the wire when the
+    ///     key is valid for this connection, so reading it unconditionally shifts everything after
+    ///     it - and in an FServerAbilityRPCBatch what follows is the target data.
+    /// </summary>
+    public static FPredictionKey NetSerializeRead(FArchive ar) {
+        var key = new FPredictionKey { bValidKeyForConnection = ar.ReadBit() };
+
+        var hasBaseKey = false;
+        if (key.bValidKeyForConnection) hasBaseKey = ar.ReadBit();
+
+        key.bIsServerInitiated = ar.ReadBit();
+
+        if (key.bValidKeyForConnection) key.Current = (short) ar.ReadUInt16();
+        if (hasBaseKey) key.Base = (short) ar.ReadUInt16();
+
+        return key;
+    }
+
+    /// <summary>
     ///     The save half of FPredictionKey::NetSerialize. Conditional in the same places the read
     ///     side is: HasBaseKey and Current only exist when the key is valid for this connection.
     ///

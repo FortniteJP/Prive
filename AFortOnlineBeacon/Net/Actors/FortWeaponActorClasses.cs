@@ -23,9 +23,34 @@ internal static partial class FortWeaponActorClasses {
     ///     (or is one the generated table does not cover - anything outside Athena's own weapon
     ///     directory, e.g. the Save the World building tools).
     /// </summary>
+    /// <summary>
+    ///     The building tools, which the generated table does not and cannot cover: it is built from
+    ///     a dump of `WID_*` under Athena/Items/Weapons, and these are FortBuildingItemDefinitions
+    ///     living somewhere else entirely.
+    ///
+    ///     Selecting a building piece is an EQUIP, exactly like picking up a rifle - the piece's own
+    ///     WeaponActorClass is the tool the pawn holds, and the build menu is that tool being in your
+    ///     hands. With no entry here the equip resolved to null, nothing was spawned, and the pawn
+    ///     silently kept whatever it was already holding: pieces in the quickbar, no build mode.
+    ///
+    ///     Read from the cooked assets rather than guessed - MapActorDump "props:" over
+    ///     FortniteGame/Content/Items/Weapons/BuildingTools/ prints the WeaponActorClass of each,
+    ///     along with the PreferredQuickbarSlot that orders them (Wall 0, Floor 1, Stair 2, Roof 3).
+    ///     All four pieces share one generic tool; the edit tool is its own.
+    /// </summary>
+    private static readonly Dictionary<string, string> BuildingToolClasses = new(StringComparer.OrdinalIgnoreCase) {
+        ["BuildingItemData_Wall"] = "/Game/Weapons/FORT_BuildingTools/Blueprints/DefaultBuildingTool.DefaultBuildingTool_C",
+        ["BuildingItemData_Floor"] = "/Game/Weapons/FORT_BuildingTools/Blueprints/DefaultBuildingTool.DefaultBuildingTool_C",
+        ["BuildingItemData_Stair_W"] = "/Game/Weapons/FORT_BuildingTools/Blueprints/DefaultBuildingTool.DefaultBuildingTool_C",
+        ["BuildingItemData_RoofS"] = "/Game/Weapons/FORT_BuildingTools/Blueprints/DefaultBuildingTool.DefaultBuildingTool_C",
+        ["EditTool"] = "/Game/Weapons/FORT_BuildingTools/Blueprints/DefaultEditingTool.DefaultEditingTool_C"
+    };
+
     public static string? PathFor(UObject? itemDefinition) {
         if (itemDefinition == null) return null;
-        return Table.GetValueOrDefault(itemDefinition.GetFName().ToString());
+
+        var name = itemDefinition.GetFName().ToString();
+        return Table.GetValueOrDefault(name) ?? BuildingToolClasses.GetValueOrDefault(name);
     }
 
     /// <summary>
