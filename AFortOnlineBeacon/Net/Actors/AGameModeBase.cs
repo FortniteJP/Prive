@@ -188,6 +188,27 @@ public class AGameModeBase : AInfo {
                 });
             }
 
+            // Wood/Stone/Metal resource stacks - without these, placement never has anything to pay
+            // with. Confirmed 2026-08-29: the ghost preview, its edit-pattern cycling and the cost
+            // UI are all purely client-local (work with zero resources), but with the ghost/edit/
+            // cost gates all now cleared, ServerCreateBuildingActor still never gets sent at all -
+            // the simplest remaining explanation is a client-side "can afford this?" check refusing
+            // silently before the RPC is even attempted, exactly like every other gate this project
+            // has hit. Paths match FortHarvestResources' own private ItemPaths table (the same three assets a
+            // harvested tree/rock/wall already hands out as loot). 500 is arbitrary - enough that
+            // running out mid-test is not itself a confound; STARTING_RESOURCES overrides it.
+            var startingResources = int.TryParse(Environment.GetEnvironmentVariable("STARTING_RESOURCES"), out var res) && res >= 0 ? res : 500;
+            foreach (var resourcePath in new[] {
+                "/Game/Items/ResourcePickups/WoodItemData.WoodItemData",
+                "/Game/Items/ResourcePickups/StoneItemData.StoneItemData",
+                "/Game/Items/ResourcePickups/MetalItemData.MetalItemData"
+            }) {
+                worldInventory.Inventory.Add(new FFortItemEntry {
+                    ItemDefinition = UAssetRegistry.GetOrCreate(resourcePath),
+                    Count = startingResources
+                });
+            }
+
             // A common Assault Rifle. Two reasons it is here rather than just the pickaxe:
             //
             // 1. A match needs a weapon, and this is a real asset a real match hands out.
@@ -234,6 +255,20 @@ public class AGameModeBase : AInfo {
             }
 
             newPlayerController.WorldInventory = worldInventory;
+        }
+
+        // See AFortBroadcastRemoteClientInfo's own doc comment: without this, the client's
+        // ServerSetPlayerBuildableClass call (sent the instant a building tool is equipped) finds
+        // BroadcastRemoteClientInfo null and is silently skipped. Same shape as WorldInventory above
+        // - its own actor/channel, owned by the controller that holds it.
+        var broadcastRemoteClientInfo = world.SpawnActor<AFortBroadcastRemoteClientInfo>(
+            GUClassArray.StaticClass<AFortBroadcastRemoteClientInfo>(), spawnInfo);
+        if (broadcastRemoteClientInfo != null) {
+            broadcastRemoteClientInfo.SetRole(ENetRole.ROLE_Authority);
+            broadcastRemoteClientInfo.SetReplicates(true);
+            broadcastRemoteClientInfo.SetOwner(newPlayerController);
+            broadcastRemoteClientInfo.bActive = true;
+            newPlayerController.BroadcastRemoteClientInfo = broadcastRemoteClientInfo;
         }
 
         // Simplified stand-in for AController::InitPlayerState - real UE spawns this automatically

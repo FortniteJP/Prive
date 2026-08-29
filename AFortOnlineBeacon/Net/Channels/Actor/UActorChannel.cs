@@ -105,6 +105,27 @@ public class UActorChannel : UChannel {
         // AFortWeapon: what the weapon IS (WeaponData), which inventory row it belongs to
         // (ItemEntryGuid) and how loaded it is. Owner is the pawn - a real server sets it
         // (raider3.5 Inventory.h:294) and the client uses it to decide whose hands to put this in.
+        // AFortWeap_BuildingTool::DefaultMetadata is wire handle 36 - but ONLY on that subclass.
+        // AFortWeaponPickaxeAthena and AFortWeaponRanged are SIBLINGS of AFortWeap_BuildingTool
+        // under plain AFortWeapon, not descendants of it: their real ClassReps stops at handle 33
+        // (ReloadAbilitySpecHandle) or wherever their OWN extra properties end, and handle 36
+        // simply does not exist for them. This project has one C# AFortWeapon type standing in for
+        // that whole hierarchy, so the split has to happen on STATE (does this instance actually
+        // have DefaultMetadata set?), not on C# type. Sending handle 36 unconditionally to every
+        // weapon (as an earlier version of this code did) broke every weapon, not just building
+        // tools: the client's HandleToCmdIndex.IsValidIndex(36) check fails for a class whose own
+        // Cmds array ends before 36, ReceiveProperties_r logs "BunchIsError" and returns false, and
+        // the connection dies a few ticks later with no server-side exception at all - reproduced
+        // twice, disconnecting during the very first few ticks after spawn, well before any
+        // building tool was ever equipped (the pickaxe alone was enough to trigger it). Same failure
+        // shape as the historical ATOMIC_STRUCTS bug in [[rep_handle_derivation]].
+        AFortWeapon w when w.DefaultMetadata != null => new HashSet<string> {
+            "RemoteRole", "Role", "Owner", "Instigator", "WeaponData",
+            "ItemEntryGuid.A", "ItemEntryGuid.B", "ItemEntryGuid.C", "ItemEntryGuid.D",
+            "WeaponLevel", "AmmoCount",
+            "PrimaryAbilitySpecHandle", "ReloadAbilitySpecHandle",
+            "DefaultMetadata"
+        },
         AFortWeapon => new HashSet<string> {
             // Instigator (handle 15) is what the client's own weapon code reads to find the pawn
             // holding this - without it AFortWeaponRanged::OwnerIsMoving errors every frame and the
@@ -152,8 +173,16 @@ public class UActorChannel : UChannel {
             // Without this the client's inventory capacity is zero and it refuses every pickup.
             "OverriddenBackpackSize",
             // Handle 75. False on an untold client, and a dead player may not jump or build.
-            "bMarkedAlive"
+            "bMarkedAlive",
+            // Handle 80. Without this the client has no BroadcastRemoteClientInfo to call
+            // ServerSetPlayerBuildableClass on - see AFortBroadcastRemoteClientInfo's doc comment.
+            "BroadcastRemoteClientInfo"
         },
+        // AFortBroadcastRemoteClientInfo: just enough that the client can resolve who owns this and
+        // that it's live. RemoteBuildableClass is never sent from HERE - it starts unset and only
+        // becomes non-default once ServerSetPlayerBuildableClass actually sets it (see
+        // NativeRpcHandlers), same as AFortPickup.bPickedUp above.
+        AFortBroadcastRemoteClientInfo => new HashSet<string> { "RemoteRole", "Role", "Owner", "bActive" },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
 
@@ -425,6 +454,20 @@ public class UActorChannel : UChannel {
         Console.WriteLine($"UActorChannel.ReceivedNak: ChIndex={ChIndex} packet {nakPacketId} was lost, " +
                           $"re-dirtying [{string.Join(", ", lost.Select(entry => entry.Name))}]");
     }
+
+    /// <summary>
+    ///     Forget what the shadow says about one property, so the next ReplicateActorUpdate sees it
+    ///     as changed and sends it again. Same mechanism ReceivedNak uses, exposed for the one case
+    ///     that is not a lost packet: a reference that was WRITTEN correctly but could not be
+    ///     RESOLVED by the client, because the actor it names had no channel yet.
+    ///
+    ///     UPackageMap writes such a reference as a bare NetGUID; if the client has never seen that
+    ///     GUID it reads null and, in this project's experience, never comes back to it - real UE's
+    ///     FObjectReplicator::UpdateUnmappedObjects would retry, but nothing here makes the server
+    ///     send it a second time, and a property that matches the shadow is never reconsidered.
+    ///     Re-dirtying once, after the referenced actor's channel is open, is the whole fix.
+    /// </summary>
+    public void MarkPropertyDirty(string propertyName) => _shadowState.Remove(propertyName);
 
     /// <summary>
     ///     Port of UActorChannel::WriteContentBlockHeader (DataChannel.cpp). Every replicated object
@@ -1287,7 +1330,22 @@ public class UActorChannel : UChannel {
                 Console.WriteLine($"UActorChannel.ReceivedBunch:   SUB-OBJECT field[{repIndex}]={fieldName} " +
                                   $"on {subObject.GetFName()} ({fieldNumBits} payload bits) - no handler");
             } else {
-                if (NetDebugLog.VerboseEnabled) Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits)");
+                // NOT gated on verbose, for the same reason the sub-object case above isn't: a
+                // top-level field the client sent that names no known RPC is exactly as informative
+                // as an unrecognised sub-object one - each names the next thing worth implementing,
+                // and staying silent here is how a genuine building-placement attempt (e.g.
+                // ServerCreateBuildingActor, which ClassNetCache can name but this project has never
+                // had a handler for) could arrive and leave no trace at all. Previously gated on
+                // NET_VERBOSE, which meant every ordinary test run - including every past attempt to
+                // confirm "the client never even tries to build" - could not actually tell an
+                // unattempted RPC apart from an attempted-but-silently-dropped one.
+                // ServerUpdateCamera specifically: sent every tick regardless of what the player is
+                // doing, so it never names a new gate the way the rest of this branch's discoveries
+                // did (ServerCreateBuildingActor, ServerSetPlayerBuildableClass, ...) - pure log
+                // volume with nothing left to learn from it. Everything else stays unconditional.
+                if (fieldName != "ServerUpdateCamera") {
+                    Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits) - no handler");
+                }
             }
 
             // Both of these are about the channel's ACTOR; a component's fields never mean either.

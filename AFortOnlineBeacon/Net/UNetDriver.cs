@@ -227,6 +227,26 @@ public abstract class UNetDriver {
 
             channel.ReplicateActor();
             opened++;
+
+            // AFortPawn::ClientInternalEquipWeapon(AFortWeapon*) - experimental, 2026-08-29. Sent
+            // HERE, once this weapon's OWN channel has actually opened (ReplicateActor above just
+            // gave it a resolvable NetGUID), rather than at the moment it's equipped: sending it
+            // earlier left the client logging "Unable to resolve RPC parameter ... Parameter Weap"
+            // and dropping the call outright, since the weapon had no NetGUID yet. Must go out on
+            // the PAWN's own channel (ClientInternalEquipWeapon is a FortPawnOwnFields entry, so its
+            // field index only resolves against the pawn's ClassNetCache), found the same way
+            // OpenChannelsForNewlyRelevantActors always does.
+            if (actor is AFortWeapon { bNeedsClientInternalEquipWeaponRpc: true } weapon
+                && weapon.Owner is APawn pawn) {
+                weapon.bNeedsClientInternalEquipWeaponRpc = false;
+
+                if (connection.FindActorChannel(pawn) is { } pawnChannel) {
+                    pawnChannel.SendObjectRpc("ClientInternalEquipWeapon", weapon);
+                    Console.WriteLine($"UNetDriver.OpenChannelsForNewlyRelevantActors: sent ClientInternalEquipWeapon({weapon.GetFName()})");
+                } else {
+                    Console.WriteLine("UNetDriver.OpenChannelsForNewlyRelevantActors: pawn has no channel yet, ClientInternalEquipWeapon not sent");
+                }
+            }
         }
 
         return opened;

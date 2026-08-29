@@ -114,4 +114,62 @@ internal static partial class FortWeaponActorClasses {
         var path = PathFor(itemDefinition);
         return path == null ? null : GUClassArray.StaticClassForPath<AFortWeapon>(path);
     }
+
+    /// <summary>
+    ///     UFortBuildingItemDefinition::BuildingMetaData - a soft reference (10.40 SDK, offset 0x910)
+    ///     to the UBuildingEditModeMetadata asset that shapes this piece. AFortWeap_BuildingTool
+    ///     mirrors it into its own replicated DefaultMetadata (wire handle 36, rep_handles.py
+    ///     AFortWeap_BuildingTool), and OnRep_DefaultMetadata is what the client's ghost/pencil
+    ///     preview actually reads to know what to draw. With no value there, DefaultMetadata stays
+    ///     null forever and the client silently draws no ghost - exactly the reported symptom, and
+    ///     the same shape as jump: a client-side gate fed by a property this server never sent.
+    ///
+    ///     Read from the cooked assets rather than guessed (MapActorDump "props:BuildingItemData"
+    ///     over FortniteGame/Content/Items/Weapons/BuildingTools/), since the four pieces do not
+    ///     share one metadata asset the way they share one WeaponActorClass.
+    /// </summary>
+    private static readonly Dictionary<string, string> BuildingMetadataTable = new(StringComparer.OrdinalIgnoreCase) {
+        ["BuildingItemData_Wall"] = "/Game/Building/EditModePatterns/Wall/EMP_Wall_Solid.EMP_Wall_Solid",
+        ["BuildingItemData_Floor"] = "/Game/Building/EditModePatterns/Floor/EMP_Floor_Floor.EMP_Floor_Floor",
+        ["BuildingItemData_Stair_W"] = "/Game/Building/EditModePatterns/Stair/EMP_Stair_StairW.EMP_Stair_StairW",
+        ["BuildingItemData_RoofS"] = "/Game/Building/EditModePatterns/Roof/EMP_Roof_RoofC.EMP_Roof_RoofC"
+        // EditTool has no entry: AFortWeap_EditingTool does not inherit AFortWeap_BuildingTool and
+        // has no DefaultMetadata to fill.
+    };
+
+    public static UObject? BuildingMetadataFor(UObject? itemDefinition) {
+        if (itemDefinition == null) return null;
+        var path = BuildingMetadataTable.GetValueOrDefault(itemDefinition.GetFName().ToString());
+        return path == null ? null : UAssetRegistry.GetOrCreate(path);
+    }
+
+    /// <summary>
+    ///     The real building ACTOR class (not the item/tool the player holds) a piece places as -
+    ///     what ServerCreateBuildingActor needs to SpawnActor. Wood tier 1 only for now (material
+    ///     switching doesn't yet change what this returns - see NativeRpcHandlers.ServerCreateBuildingActor's
+    ///     doc comment for the rest of that story).
+    ///
+    ///     Wall/Floor/Stair_W paths are straight from a real Project-Reboot-3.0 capture's own NetGUID
+    ///     exports (PriveDev/PacketProxy/decoded_new.txt, 2026-08-29:
+    ///     "/Game/Building/ActorBlueprints/Player/Wood/L1/PBWA_W1_Solid" etc.) - RoofS's Wood-tier
+    ///     path was never itself captured (only the Metal-tier PBWA_M1_RoofC turned up), but the
+    ///     naming is completely systematic across all three confirmed pieces
+    ///     (.../{Material}/L1/PBWA_{MaterialCode}1_{Piece}), so it is inferred by the same pattern,
+    ///     not guessed from nothing.
+    /// </summary>
+    private static readonly Dictionary<string, string> BuildingActorClassTable = new(StringComparer.OrdinalIgnoreCase) {
+        ["BuildingItemData_Wall"] = "/Game/Building/ActorBlueprints/Player/Wood/L1/PBWA_W1_Solid.PBWA_W1_Solid_C",
+        ["BuildingItemData_Floor"] = "/Game/Building/ActorBlueprints/Player/Wood/L1/PBWA_W1_Floor.PBWA_W1_Floor_C",
+        ["BuildingItemData_Stair_W"] = "/Game/Building/ActorBlueprints/Player/Wood/L1/PBWA_W1_StairW.PBWA_W1_StairW_C",
+        ["BuildingItemData_RoofS"] = "/Game/Building/ActorBlueprints/Player/Wood/L1/PBWA_W1_RoofC.PBWA_W1_RoofC_C" // inferred, see doc comment
+    };
+
+    public static UClass? BuildingActorClassFor(UObject? itemDefinition) {
+        if (itemDefinition == null) return null;
+        var path = BuildingActorClassTable.GetValueOrDefault(itemDefinition.GetFName().ToString());
+        // Same pattern as ClassFor above: no dedicated C# type for a building actor (this project
+        // never simulates building health/interaction, only needs it to exist, replicate its real
+        // Blueprint Archetype, and sit at the right transform), so a plain AActor stands in.
+        return path == null ? null : GUClassArray.StaticClassForPath<AActor>(path);
+    }
 }

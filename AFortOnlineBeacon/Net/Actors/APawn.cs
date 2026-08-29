@@ -9,6 +9,30 @@ public class APawn : AActor {
     /// </summary>
     public FRotator? LastClientViewRotation { get; set; }
 
+    /// <summary>
+    ///     The exact transform NativeRpcHandlers.ServerCreateBuildingActor last spawned something at
+    ///     for this pawn, as "X,Y,Z,Yaw" - a duplicate filter, since the client can send this RPC
+    ///     more than once for what is really a single confirm and each send would otherwise become
+    ///     its own building actor stacked on the last one.
+    ///
+    ///     This used to be a 0.3s time debounce, from back when the RPC's parameters could not be
+    ///     decoded and "same placement" was unknowable. Now that FCreateBuildingActorData decodes,
+    ///     the duplicates can be recognised for what they are - byte-identical transforms - which
+    ///     also stops the filter from swallowing the genuinely distinct, genuinely fast placements
+    ///     that turbo building produces well inside 0.3s.
+    /// </summary>
+    public string? LastBuildingPlaceKey { get; set; }
+
+    /// <summary>
+    ///     The building actor class path the client's own ServerSetPlayerBuildableClass last named
+    ///     (see NativeRpcHandlers - arrives on the pawn's BroadcastRemoteClientInfo, routed here via
+    ///     its Owner). Cycling pieces while ALREADY in build mode only ever sends this, never a fresh
+    ///     ServerExecuteInventoryItem/EquipInventoryItem - so CurrentWeapon.WeaponData reflects
+    ///     whichever piece build mode was FIRST entered with, not the current selection, and
+    ///     ServerCreateBuildingActor needs this instead once it's been set at least once.
+    /// </summary>
+    public string? SelectedBuildingActorClassPath { get; set; }
+
     /// <summary>APawn::Controller - wire handle 18, an ObjectRef.</summary>
     public AController? Controller { get; private set; }
 
@@ -83,6 +107,27 @@ public class APawn : AActor {
         weapon.AmmoCount = item.LoadedAmmo;
         weapon.SetOwner(this);
         weapon.SetActorLocation(GetActorLocation());
+
+        // A building tool's ghost/pencil preview is driven client-side off OnRep_DefaultMetadata -
+        // with no value here the client silently draws no ghost (same shape as jump: a client gate
+        // fed by a property nothing ever sent). Null for every other weapon.
+        if (FortWeaponActorClasses.BuildingMetadataFor(item.ItemDefinition) is { } buildingMetadata) {
+            weapon.DefaultMetadata = buildingMetadata;
+            Console.WriteLine($"APawn.EquipInventoryItem: set DefaultMetadata={buildingMetadata.GetFName()} for building tool");
+        }
+
+        // AFortPawn::ClientInternalEquipWeapon(AFortWeapon*) - originally scoped to building tools
+        // only (2026-08-29), on the reasoning that ordinary weapons already worked via
+        // CurrentWeapon's RepNotify alone. Widened to every weapon the same day: leaving a building
+        // tool for the pickaxe/a gun left the client stuck showing the ghost AND the build-mode arm
+        // pose forever, meaning the RPC (or something it triggers) is also what tells the client
+        // this equip REPLACES a previous one, and skipping it for a normal weapon left the client
+        // with no signal to tear down the OLD equip's state, only to raise the new one. See
+        // UNetDriver.OpenChannelsForNewlyRelevantActors for why the actual send is deferred to that
+        // weapon's own channel opening, not here (sending immediately here fails: the weapon has no
+        // NetGUID resolvable client-side yet, and the client logs "Unable to resolve RPC parameter
+        // ... Parameter Weap" and silently drops the call).
+        weapon.bNeedsClientInternalEquipWeaponRpc = true;
         // Grant the weapon's fire ability. Without a spec in ActivatableAbilities the client has
         // literally nothing to activate: the FGameplayAbilitySpecHandle it sends in
         // ServerTryActivateAbility is an index into that array, handed out by the server.

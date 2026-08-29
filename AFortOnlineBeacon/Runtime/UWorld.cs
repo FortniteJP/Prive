@@ -481,7 +481,27 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // the PlayerController so its GUID is already assigned when the PC's own property
                 // push (WorldInventory, an ObjectRef Cmd) references it, matching PlayerState's order.
                 if (newPlayerController.WorldInventory != null) OpenActorChannelFor(ownerConnection, newPlayerController.WorldInventory);
+                // Same ordering rule again - see AFortBroadcastRemoteClientInfo's doc comment.
+                var broadcastInfoChannel = newPlayerController.BroadcastRemoteClientInfo != null
+                    ? OpenActorChannelFor(ownerConnection, newPlayerController.BroadcastRemoteClientInfo)
+                    : null;
                 var pcChannel = OpenActorChannelFor(ownerConnection, newPlayerController);
+
+                // The ordering rule above is a CYCLE for this one actor, and only re-sending breaks it.
+                // The PlayerController must be able to name BroadcastRemoteClientInfo (handle 80), so
+                // that channel has to open first - but the info actor's own Owner (handle 13) names the
+                // PlayerController right back, and at that moment the PC has no channel, so the client
+                // reads Owner as null and keeps it null.
+                //
+                // That is not cosmetic. A client sends a Server RPC through
+                // UNetDriver::ProcessRemoteFunction, which does `Connection = Actor->GetNetConnection()`
+                // and gives up silently if it is null - and AActor::GetNetConnection() is
+                // `Owner ? Owner->GetNetConnection() : nullptr`. With Owner null the client drops every
+                // ServerSetPlayerBuildableClass on the floor without logging anything, which is exactly
+                // what a real client log of this server showed: the piece-select sound cue fired 100
+                // times and the RPC was sent 0 times, while `InternalLoadObject loaded NULL from
+                // NetGUID <10>` (the PlayerController) sat right after the info actor's own bunch.
+                broadcastInfoChannel?.MarkPropertyDirty("Owner");
 
                 // AFortPlayerController::ClientOnGenericPlayerInitialization - a parameterless client
                 // RPC Fortnite hangs off AGameModeBase::GenericPlayerInitialization, which real UE

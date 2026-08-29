@@ -113,6 +113,16 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("bXBLGoldRequired", "false")
             }
         },
+        // A [PacketHandlerComponents] override (dropping AES so a PacketProxy capture doesn't need
+        // to guess the chain) lived here 2026-08-29 for the PR3.0 capture work - removed because it
+        // is served through this SAME shared auth backend to any client, including ones about to
+        // test AFortOnlineBeacon directly, whose own UNetConnection.InitHandler defaults to
+        // oodle,aes,stateless (WITH Aes) unless NET_HANDLER_COMPONENTS says otherwise. Leaving AES
+        // off here silently mismatched client vs. this server's own default and stalled every
+        // connection right after Oodle handler init (past the stateless handshake, which doesn't
+        // depend on the handler chain, but before any real content). If a PR3.0 capture needs this
+        // again, set NET_HANDLER_COMPONENTS=oodle,stateless on THIS project's own server process
+        // instead of editing the shared client ini - see memory:pr3_capture_setup.
         #if DEBUG
         new() {
             Section = "Core.Log",

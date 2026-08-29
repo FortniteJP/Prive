@@ -24,6 +24,7 @@ public static class FRpcReader {
                 ERpcParamKind.Int32 => bunch.ReadInt32(),
                 ERpcParamKind.Guid => ReadGuid(bunch),
                 ERpcParamKind.Object => ReadObject(bunch),
+                ERpcParamKind.ObjectPath => ReadObjectPath(bunch),
                 ERpcParamKind.Float => bunch.ReadFloat(),
                 ERpcParamKind.Vector => FVector.NetSerializeRead(bunch),
                 ERpcParamKind.VectorQuantize10 => FVector.NetSerializeReadQuantized(bunch, 10, 24),
@@ -33,6 +34,7 @@ public static class FRpcReader {
                 ERpcParamKind.PredictionKey => FPredictionKey.NetSerializeRead(bunch),
                 ERpcParamKind.TargetDataHandle => FGameplayAbilityTargetDataHandle.NetSerializeRead(bunch),
                 ERpcParamKind.AbilityRpcBatch => FServerAbilityRPCBatch.NetSerializeRead(bunch),
+                ERpcParamKind.CreateBuildingActorData => FCreateBuildingActorData.NetSerializeRead(bunch),
                 _ => throw new NotSupportedException($"FRpcReader: unhandled param kind {def.Kind}")
             };
         }
@@ -51,6 +53,12 @@ public static class FRpcReader {
     ///     that in the stream. UPackageMapClient.ReadObjectRef handles both shapes.
     /// </summary>
     private static UObject? ReadObject(FArchive bunch) => UPackageMapClient.ReadObjectRef(bunch, out _);
+
+    /// <summary>See <see cref="ERpcParamKind.ObjectPath"/> - the path, when the reference carried one; null otherwise.</summary>
+    private static string? ReadObjectPath(FArchive bunch) {
+        UPackageMapClient.ReadObjectRef(bunch, out var path);
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
 
     /// <summary>Mirrors FFastArraySerializerWriter's GuidToAbcd - four int32s in A/B/C/D order.</summary>
     private static Guid ReadGuid(FArchive bunch) {

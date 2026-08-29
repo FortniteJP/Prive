@@ -191,15 +191,21 @@ public class UPackageMapClient : UPackageMap {
         //
         // Location matters because the client spawns the pawn wherever we say and then runs its own
         // physics: with nothing sent, a real client put the pawn at the origin and it fell to
-        // Z=-5042, below the landscape (which sits at Z=-1692). Rotation/Scale/Velocity are still
-        // left at their defaults - there is no component system here to source them from.
+        // Z=-5042, below the landscape (which sits at Z=-1692). Scale/Velocity are still left at
+        // their defaults - there is no component system here to source them from.
         var location = actor.GetActorLocation();
         var bSerializeLocation = !location.IsNearlyZero();
         bunch.SerializeBits(&bSerializeLocation, 1);
         if (bSerializeLocation) location.NetSerializeWriteQuantized(bunch, 10, 24); // FVector_NetQuantize10
 
-        var bSerializeRotation = false;
+        // Rotation matters for exactly the same reason location does, and for building pieces it is
+        // the whole game: a wall's yaw is what decides which side of the tile it sits on. This used
+        // to be hardcoded false, so every spawned actor arrived at ZeroRotator and every placed
+        // building faced the same way regardless of what the client asked for.
+        var rotation = actor.GetActorRotation();
+        var bSerializeRotation = !rotation.IsNearlyZero();
         bunch.SerializeBits(&bSerializeRotation, 1);
+        if (bSerializeRotation) rotation.NetSerializeWrite(bunch); // FRotator::NetSerialize -> SerializeCompressedShort
 
         var bSerializeScale = false;
         bunch.SerializeBits(&bSerializeScale, 1);

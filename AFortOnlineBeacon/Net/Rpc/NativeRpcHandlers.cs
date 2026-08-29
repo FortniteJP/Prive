@@ -16,6 +16,27 @@
 ///     out is safe, just inert.
 /// </summary>
 internal static class NativeRpcHandlers {
+    /// <summary>
+    ///     A real server's own ServerCreateBuildingActor hook deducts a flat 10 regardless of piece
+    ///     type - confirmed independently against a live test's own empirical finding (the cost UI
+    ///     appeared once 10+ of a resource was on hand, the same number across all four pieces).
+    /// </summary>
+    private const int BuildingPlaceResourceCost = 10;
+
+    /// <summary>
+    ///     Which resource item a building class's placement cost draws from, read off the class's
+    ///     own asset path (e.g. ".../Wood/L1/PBWA_W1_Solid.PBWA_W1_Solid_C" -&gt; Wood) rather than
+    ///     tracked separately - the class already names its own material tier. Paths match
+    ///     AGameModeBase's starting-resource grant and FortHarvestResources' own ItemPaths table.
+    /// </summary>
+    private static string? BuildingResourcePathFor(string? buildingClassPath) {
+        if (buildingClassPath == null) return null;
+        if (buildingClassPath.Contains("/Wood/", StringComparison.OrdinalIgnoreCase)) return "/Game/Items/ResourcePickups/WoodItemData.WoodItemData";
+        if (buildingClassPath.Contains("/Stone/", StringComparison.OrdinalIgnoreCase)) return "/Game/Items/ResourcePickups/StoneItemData.StoneItemData";
+        if (buildingClassPath.Contains("/Metal/", StringComparison.OrdinalIgnoreCase)) return "/Game/Items/ResourcePickups/MetalItemData.MetalItemData";
+        return null;
+    }
+
     private static FRpcDef NoParams(string name, Action<APlayerController>? action = null) => new(
         name,
         Array.Empty<FRpcParamDef>(),
@@ -152,6 +173,130 @@ internal static class NativeRpcHandlers {
             new[] { new FRpcParamDef("ItemGuid", ERpcParamKind.Guid) },
             (actor, values) => {
                 if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerReleaseInventoryItemKey on {actor.GetFName()} ItemGuid={values[0]}");
+            }
+        ),
+
+        // AFortPlayerController::ServerCreateBuildingActor(FCreateBuildingActorData) - the RPC that
+        // places a building piece, and now fully decoded: the client sends the exact, already
+        // grid-snapped transform its own ghost was standing on, and a real server uses it verbatim
+        // without snapping anything itself (Project-Reboot-3.0's ServerCreateBuildingActorHook does
+        // precisely `Transform.Translation = BuildLoc; Transform.Rotation = BuildRot.Quaternion()`).
+        // Any server-side "snap to the grid" is therefore wrong by construction - the grid maths
+        // already happened on the client, and re-deriving it from the pawn's position can only
+        // disagree with the ghost the player was actually looking at.
+        //
+        // The parameter's wire layout - a hand-written native NetSerialize, which is why it resisted
+        // both a flat member dump and a RepLayout-handle read - is documented and derived in
+        // FCreateBuildingActorData.
+        //
+        // The building CLASS still does not come from this RPC (it carries only an opaque
+        // BuildingClassHandle indexing a list the client owns). It comes from the last
+        // ServerSetPlayerBuildableClass, exactly as it does for a real server.
+        ["ServerCreateBuildingActor"] = new FRpcDef(
+            "ServerCreateBuildingActor",
+            new[] { new FRpcParamDef("CreateBuildingData", ERpcParamKind.CreateBuildingActorData) },
+            (actor, values) => {
+                if (actor is not APlayerController { Pawn: { } pawn } pc) return;
+                if (values[0] is not FCreateBuildingActorData buildData) return;
+
+                var world = pc.GetWorld();
+                if (world == null) return;
+
+                // A real placement has been observed sending this RPC twice back to back for what
+                // the player experiences as one confirm; without this each send spawns its own
+                // building actor on top of the last one. See APawn.LastBuildingPlaceKey.
+                var placeKey = $"{buildData.BuildLoc},{buildData.BuildRot.Yaw}";
+                if (placeKey == pawn.LastBuildingPlaceKey) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - same transform as the " +
+                                      $"last placement for this pawn ({placeKey}), ignoring (duplicate send)");
+                    return;
+                }
+
+                // Which piece, in descending order of how much the source actually knows:
+                //
+                //  1. BuildingClassHandle, via the measured table - the ONLY signal that tracks a
+                //     piece switch made INSIDE build mode. See BuildingClassHandles for why nothing
+                //     else can, and for how to calibrate it.
+                //  2. ServerSetPlayerBuildableClass's last word. Correct when it arrives, but this
+                //     client has never once sent it to this server (0 calls across every capture,
+                //     including after the info actor's Owner was fixed) - kept because it costs
+                //     nothing and would be authoritative if it ever does.
+                //  3. CurrentWeapon.WeaponData - only ever names the piece build mode was ENTERED
+                //     with, so it is wrong for every switch. Last resort, and the reason an
+                //     uncalibrated handle is worth shouting about below.
+                var buildingClass = BuildingClassHandles.ClassFor(buildData.BuildingClassHandle);
+
+                if (buildingClass == null) {
+                    buildingClass = pawn.SelectedBuildingActorClassPath is { } selectedPath
+                        ? GUClassArray.StaticClassForPath<AActor>(selectedPath)
+                        : FortWeaponActorClasses.BuildingActorClassFor(pawn.CurrentWeapon?.WeaponData);
+
+                    Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - BuildingClassHandle " +
+                                      $"{buildData.BuildingClassHandle} is not in the handle table, falling back to " +
+                                      $"'{buildingClass?.NativePackagePath ?? "(nothing)"}'. If that is not the piece you " +
+                                      $"just placed, add a line '{buildData.BuildingClassHandle} = <Material>:<Piece>' " +
+                                      $"(e.g. Wood:Stair) to BuildingClassHandles.txt - it is re-read live, no restart needed.");
+                }
+
+                if (buildingClass == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - handle " +
+                                      $"{buildData.BuildingClassHandle} is uncalibrated and CurrentWeapon " +
+                                      $"'{pawn.CurrentWeapon?.WeaponData?.GetFName()}' has no known building actor class, ignoring");
+                    return;
+                }
+
+                // Straight from the client, unmodified - see this RPC's doc comment. The client has
+                // already snapped this to the building grid; the server's job is to trust it (a real
+                // server only validates it, via FStructuralSupportSystem::IsWorldLocValid and the
+                // overlap check, neither of which this project models yet).
+                var placeAt = buildData.BuildLoc;
+                var buildYaw = buildData.BuildRot.Yaw;
+
+                // Escape hatch (toggle via SKIP_BUILDING_SPAWN=1): log the decoded placement without
+                // spawning anything, leaving the client's own locally-predicted ghost uncorrected.
+                // Originally the only way to see where the client really wanted the piece, back when
+                // the RPC's parameters could not be decoded; now just a way to watch placements go
+                // by without building up world state.
+                if (Environment.GetEnvironmentVariable("SKIP_BUILDING_SPAWN") == "1") {
+                    pawn.LastBuildingPlaceKey = placeKey;
+                    Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - SKIP_BUILDING_SPAWN=1, " +
+                                      $"not spawning (class would have been {buildingClass.NativePackagePath}, " +
+                                      $"{buildData})");
+                    return;
+                }
+
+                var building = world.SpawnActor<AActor>(buildingClass, new FActorSpawnParameters {
+                    ObjectFlags = EObjectFlags.RF_Transient
+                });
+                if (building == null) return;
+
+                building.SetRole(ENetRole.ROLE_Authority);
+                building.SetActorLocation(placeAt);
+                building.SetActorRotation(new FRotator { Yaw = buildYaw });
+                building.SetReplicates(true);
+                pawn.LastBuildingPlaceKey = placeKey;
+
+                // A real server's own ServerCreateBuildingActor hook deducts a flat 10 units of
+                // whatever resource the spawned class costs (confirmed independently: matches
+                // exactly what a live test found the real in-game cost to be) - the building
+                // ACTOR CLASS itself carries which resource that is (its path names the material
+                // tier, e.g. .../Wood/L1/... ), not something this RPC's own parameters say, so no
+                // separate "which material" tracking is needed beyond the class we already resolved
+                // above. Best-effort: if the class path names no known material (a class this
+                // project hasn't mapped), nothing is deducted rather than guessing wrong.
+                if (pc.WorldInventory is { } inventory && BuildingResourcePathFor(buildingClass.NativePackagePath) is { } resourcePath) {
+                    var resourceDef = UAssetRegistry.GetOrCreate(resourcePath);
+                    var stack = inventory.Inventory.Items.FirstOrDefault(item => item.ItemDefinition == resourceDef);
+                    if (stack != null) {
+                        stack.Count = Math.Max(0, stack.Count - BuildingPlaceResourceCost);
+                        inventory.Inventory.MarkItemDirty(stack);
+                        Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - deducted {BuildingPlaceResourceCost} x " +
+                                          $"{resourceDef.GetFName()} -> {stack.Count}");
+                    }
+                }
+
+                Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - spawned {buildingClass.NativePackagePath} " +
+                                  $"at {buildData}");
             }
         ),
 
@@ -407,6 +552,47 @@ internal static class NativeRpcHandlers {
             if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()} PendingAckGoodMoveTimeStamp={pawn.PendingAckGoodMoveTimeStamp}");
         }
     );
+
+    /// <summary>
+    ///     AFortBroadcastRemoteClientInfo's server RPCs - see its own doc comment for why this actor
+    ///     exists at all. Only ServerSetPlayerBuildableClass is handled; the other eight real Net
+    ///     functions on this class (ServerSetPlayerBuildingMaterial, ServerSetPlayerInteracting, ...)
+    ///     aren't implemented - UActorChannel already skips any field with no matching entry here by
+    ///     its own declared NumPayloadBits, same as everywhere else in this file.
+    /// </summary>
+    private static readonly Dictionary<string, FRpcDef> BroadcastRemoteClientInfoRpcs = new() {
+        // AFortBroadcastRemoteClientInfo::ServerSetPlayerBuildableClass(TSubclassOf<ABuildingSMActor>
+        // BuildableClass). Sent the instant a player equips a building tool, immediately after the
+        // (purely client-local) ghost preview mesh updates and right before the
+        // "Fort_Build_BluePrint_Select_Cue" sound - see AFortBroadcastRemoteClientInfo's doc comment
+        // for the full working-client log sequence this was found from. Originally modeled as a
+        // pure broadcast/UI setter for OTHER clients, independent of this player's own placement -
+        // revised 2026-08-29: it turns out to be the ONLY signal this project has for "the player
+        // switched pieces while already in build mode" (cycling Wall/Floor/Stair/Roof mid-build
+        // does NOT re-trigger ServerExecuteInventoryItem/EquipInventoryItem at all - CurrentWeapon
+        // stays on whatever piece was equipped when build mode was FIRST entered), so
+        // ServerCreateBuildingActor now reads the class THIS carries in preference to
+        // CurrentWeapon.WeaponData. Read as ObjectPath rather than Object: this server never
+        // assigned the class itself a NetGUID (it's a class the CLIENT picked, exactly like
+        // FCreateBuildingActorData's own BuildingClassData.BuildingClass would be), so it always
+        // arrives as an unresolvable path export - the path is the only usable part.
+        ["ServerSetPlayerBuildableClass"] = new FRpcDef(
+            "ServerSetPlayerBuildableClass",
+            new[] {
+                new FRpcParamDef("BuildableClass", ERpcParamKind.ObjectPath)
+            },
+            (actor, values) => {
+                if (actor is not AFortBroadcastRemoteClientInfo info) return;
+
+                var path = values[0] as string;
+                Console.WriteLine($"NativeRpcHandlers: ServerSetPlayerBuildableClass on {info.GetFName()} -> {path ?? "(no path)"}");
+
+                if (path != null && info.Owner is APlayerController { Pawn: { } pawn }) {
+                    pawn.SelectedBuildingActorClassPath = path;
+                }
+            }
+        )
+    };
 
     /// <summary>
     ///     UAbilitySystemComponent's server RPCs. These arrive on the OWNER'S actor channel inside a
@@ -694,6 +880,7 @@ internal static class NativeRpcHandlers {
     public static Dictionary<string, FRpcDef>? Get(AActor actor) => actor switch {
         APlayerController => PlayerControllerRpcs,
         APawn => PawnRpcs,
+        AFortBroadcastRemoteClientInfo => BroadcastRemoteClientInfoRpcs,
         _ => null
     };
 }

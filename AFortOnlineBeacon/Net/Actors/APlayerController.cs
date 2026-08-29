@@ -50,6 +50,14 @@ public class APlayerController : AController {
 
     public AFortInventory? WorldInventory { get; set; }
 
+    /// <summary>
+    ///     AFortPlayerControllerAthena::BroadcastRemoteClientInfo - a plain ObjectRef Cmd, exactly
+    ///     like WorldInventory above. See AFortBroadcastRemoteClientInfo's doc comment for why this
+    ///     matters: without it, the client's ServerSetPlayerBuildableClass call (sent the instant a
+    ///     building tool is equipped) silently finds nothing to call on.
+    /// </summary>
+    public AFortBroadcastRemoteClientInfo? BroadcastRemoteClientInfo { get; set; }
+
     public void SetPlayer(UPlayer inPlayer) => Player = inPlayer;
 
     /// <summary>

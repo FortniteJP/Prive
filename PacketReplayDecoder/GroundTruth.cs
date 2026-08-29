@@ -288,6 +288,34 @@ internal static class GroundTruth {
         Unknown("ReplicatedWorldTimeSeconds") // float in real UE, but width/quantization not confirmed here
     }).ToArray();
 
+    /// <summary>
+    ///     Mirrors NativeRepLayouts.WeaponProps exactly (handles 16-36) - see AFortOnlineBeacon for
+    ///     the reasoning behind each one. AppliedAlterations (35) is a TArray, not a plain field; this
+    ///     table doesn't model a real DynamicArray Cmd, so it's approximated as the exact bit cost of
+    ///     an EMPTY one (packed handle already consumed by the caller, then a raw uint16 ArrayNum=0
+    ///     plus a packed terminator=0 - see FRepLayout.WriteChangedProperties's EmptyDynamicArray
+    ///     case) since a building tool has no alterations to carry. If a captured payload's
+    ///     AppliedAlterations is ever non-empty, decode will drift from this handle on.
+    /// </summary>
+    public static readonly RepHandleDef[] WeaponProps = ActorProps.Concat(new[] {
+        Bit("bIsEquippingWeapon"), Bit("bIsReloadingWeapon"), Bit("bIsChargingWeapon"),
+        Obj("WeaponData"),
+        Obj("CosmeticOverrideWeaponData"),
+        Byte("EquippedWeaponDestroyWrapperRepCounter"),
+        new("LastFireTimeVerified", 32),
+        new("ItemEntryGuid.A", 32), new("ItemEntryGuid.B", 32), new("ItemEntryGuid.C", 32), new("ItemEntryGuid.D", 32),
+        new("WeaponLevel", 32),
+        new("AmmoCount", 32),
+        new("ChargeStatusPack", 16),
+        Obj("ActiveAbility"),
+        new("PrimaryAbilitySpecHandle", 32),
+        new("SecondaryAbilitySpecHandle", 32),
+        new("ReloadAbilitySpecHandle", 32),
+        new("ImpactAbilitySpecHandle", 32),
+        new("AppliedAlterations", 16 + 8), // approximated as empty - see summary above
+        Obj("DefaultMetadata") // AFortWeap_BuildingTool's own property - what this whole capture dig was for
+    }).ToArray();
+
     public static readonly RepHandleDef[] PlayerStateProps = ActorProps.Concat(new[] {
         Unknown("Score"), Unknown("PlayerID"), Unknown("Ping"),
         Bit("bIsSpectator"), Bit("bOnlySpectator"), Bit("bIsABot"), Bit("bIsInactive"), Bit("bFromPreviousLevel"),

@@ -48,6 +48,10 @@ public class GUClassArray {
         // live client confirmed this is really an ACTOR class ("Sub-object cannot be actor class"
         // rejecting the sub-object-content-block approach) - see AFortInventory's doc comment.
         [typeof(AFortInventory)] = "/Script/FortniteGame.FortInventory",
+        // AFortPlayerController::BroadcastRemoteClientInfo's real engine type - native (final,
+        // non-Blueprint per the Dumper-7 SDK class declaration), so always resident on the client.
+        // See AFortBroadcastRemoteClientInfo's own doc comment for why this actor is spawned at all.
+        [typeof(AFortBroadcastRemoteClientInfo)] = "/Script/FortniteGame.FortBroadcastRemoteClientInfo",
         // AFortPickupAthena : AFortPickup : AActor - the Battle Royale dropped-item actor. Native,
         // so it is always resident on the client; AFortPickupAthena adds no replicated properties
         // of its own, so NativeRepLayouts.PickupProps is really AFortPickup's layout.

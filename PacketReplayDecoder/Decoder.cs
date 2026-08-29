@@ -46,6 +46,25 @@ internal sealed class ChannelState {
 }
 
 /// <summary>
+///     Accumulates the fragments of one partial (multi-packet) bunch on one channel. Real UE splits
+///     a bunch too large for one packet into several raw sends, each with its own bunch header
+///     (bPartial/bPartialInitial/bPartialFinal) but only ONE of them - the FIRST - carries the
+///     semantic flags that describe the logical whole (bHasPackageMapExports,
+///     bHasMustBeMappedGUIDs, ChName): later fragments are lightweight continuations whose own copies
+///     of those bits read back false. Buffering here and dispatching only once, on the final
+///     fragment, is what makes a payload like AFortWeap_BuildingTool's DefaultMetadata (split across
+///     two packets in the PR3.0 capture at #2210, 977 + 379 bits) readable instead of two bunches of
+///     noise - see the README's "Not implemented" section, now implemented.
+/// </summary>
+internal sealed class PartialBunchAccumulator {
+    public required FBitWriter Writer;
+    public required bool HasPackageMapExports;
+    public required bool HasMustBeMappedGUIDs;
+    public required FName ChName;
+    public required bool BOpen;
+}
+
+/// <summary>
 ///     Structural + best-effort semantic decoder for one direction of a captured Fortnite 10.40
 ///     session, replaying it against AFortOnlineBeacon's real PacketHandler (StatelessConnect/AES/
 ///     Oodle) for the handshake/crypto/compression layer, then walking packet/bunch/content-block
@@ -70,6 +89,7 @@ internal sealed class RoleDecoder {
 
     private readonly Dictionary<int, int> _inReliable = new();
     private readonly Dictionary<int, ChannelState> _channels = new();
+    private readonly Dictionary<int, PartialBunchAccumulator> _partialBunches = new();
     /// <summary>
     ///     Exported NetGUID -&gt; path, SHARED between the two role decoders rather than one each.
     ///
@@ -84,6 +104,21 @@ internal sealed class RoleDecoder {
     /// </summary>
     private static readonly Dictionary<uint, string> _guidPaths = new();
 
+    /// <summary>
+    ///     ChIndex -&gt; archetype class path, SHARED between the two RoleDecoder instances for the
+    ///     SAME reason `_guidPaths` is static: a channel index belongs to the CONNECTION, not to a
+    ///     direction. Only the server ever spawns an actor (an ACTOR SPAWN header only ever appears
+    ///     in S-&gt;C traffic), so the C-&gt;S decoder's own per-instance `ChannelState.ActorClassPath`
+    ///     can never be set from anything it reads itself - every RPC a client sends on that channel
+    ///     was doomed to `class~?`, unable to name the field even when the ClassNetCache table
+    ///     already knows it (confirmed: capture packet #2211, a 814-bit C-&gt;S field on the channel
+    ///     used moments before a real building placement succeeded, right where
+    ///     `ServerCreateBuildingActor` would be - unnamed only because of this gap, not because the
+    ///     field is actually unresolvable). Cleared on close so a reused ChIndex can't inherit a
+    ///     stale class the way `ChannelState` itself already guards against per-direction.
+    /// </summary>
+    private static readonly Dictionary<int, string> _sharedChannelClasses = new();
+
     // Per-class-name (best-effort matched from the archetype path string) handle table for RepLayout decode.
     private readonly Dictionary<string, Dictionary<uint, GroundTruth.RepHandleDef>> _handleMaps;
 
@@ -97,6 +132,7 @@ internal sealed class RoleDecoder {
             ["PlayerState"] = GroundTruth.BuildHandleMap(GroundTruth.PlayerStateProps),
             ["Pawn"] = GroundTruth.BuildHandleMap(GroundTruth.PawnProps),
             ["Controller"] = GroundTruth.BuildHandleMap(GroundTruth.ControllerProps),
+            ["Weapon"] = GroundTruth.BuildHandleMap(GroundTruth.WeaponProps),
             ["Actor"] = GroundTruth.BuildHandleMap(GroundTruth.ActorProps)
         };
 
@@ -359,25 +395,100 @@ internal sealed class RoleDecoder {
             return false;
         }
 
+        var chNameStr = chName.ToEName()?.ToString() ?? chName.ToString();
+        if (_verbose) Log($"#{packetIndex}: bunch ChIndex={chIndex} ChName={chNameStr} bOpen={bOpen} bClose={bClose} bReliable={bReliable} bPartial={bPartial}/{bPartialInitial}/{bPartialFinal} bHasPackageMapExports={bHasPackageMapExports} bHasMustBeMappedGUIDs={bHasMustBeMappedGUIDs} bits={bunchDataBits}");
+
+        // A bunch too large for one packet arrives as several fragments, each with its own header -
+        // only the FIRST (bPartialInitial) carries the real bHasPackageMapExports/
+        // bHasMustBeMappedGUIDs/ChName; later fragments are raw continuations whose own copies of
+        // those bits read back false/None. Dispatching each fragment on its own (the previous
+        // behaviour) fed a random continuation of bits into "parse a fresh actor spawn header",
+        // which is exactly the "SUB-OBJECT block claims N bits with only M left" garbage this
+        // produced on the PR3.0 capture's building-tool spawn (#2210: 977 + 379 bits, two
+        // fragments). Buffer instead, and only dispatch once bPartialFinal completes the set.
+        if (bPartial) {
+            if (bPartialInitial) {
+                _partialBunches[chIndex] = new PartialBunchAccumulator {
+                    Writer = new FBitWriter(bunchDataBits, inAllowResize: true, usePool: false),
+                    HasPackageMapExports = false,
+                    HasMustBeMappedGUIDs = false,
+                    ChName = chName,
+                    BOpen = bOpen
+                };
+            }
+
+            if (!_partialBunches.TryGetValue(chIndex, out var partial)) {
+                Log($"#{packetIndex}: partial continuation fragment on ChIndex={chIndex} with no initial fragment buffered - dropping it");
+                return true;
+            }
+
+            // OR across every fragment, not "only the initial fragment's copy counts" (an earlier
+            // version of this fix assumed that, based on bHasPackageMapExports only ever appearing
+            // true on the initial fragment in the one example available - but bHasMustBeMappedGUIDs
+            // on that SAME bunch appeared true on the FINAL fragment instead, false on the initial.
+            // Whichever fragment's send actually needed the flag carries it; the reassembled whole
+            // needs whichever fragment(s) set it.
+            partial.HasPackageMapExports |= bHasPackageMapExports;
+            partial.HasMustBeMappedGUIDs |= bHasMustBeMappedGUIDs;
+
+            fixed (byte* p = payloadBytes) partial.Writer.SerializeBits(p, bunchDataBits);
+
+            if (!bPartialFinal) {
+                if (_verbose) Log($"#{packetIndex}:   buffered partial fragment, {partial.Writer.GetNumBits()} bit(s) accumulated so far");
+                return true;
+            }
+
+            _partialBunches.Remove(chIndex);
+
+            if (_verbose) Log($"#{packetIndex}:   partial bunch complete: {partial.Writer.GetNumBits()} bit(s) reassembled");
+
+            bHasPackageMapExports = partial.HasPackageMapExports;
+            bHasMustBeMappedGUIDs = partial.HasMustBeMappedGUIDs;
+            chName = partial.ChName;
+            bOpen = partial.BOpen;
+            chNameStr = chName.ToEName()?.ToString() ?? chName.ToString();
+            bunchDataBits = (uint) partial.Writer.GetNumBits();
+            payloadBytes = partial.Writer.GetData();
+        }
+
         var bunchReader = new FBitReader(payloadBytes, (int) bunchDataBits);
         bunchReader.SetEngineNetVer(UNetConnection.DefaultEngineNetworkProtocolVersion);
         bunchReader.SetGameNetVer(0);
 
-        if (!_channels.TryGetValue(chIndex, out var state)) {
+        // bOpen means a channel index is starting a NEW lifetime - channel indices are reused
+        // constantly (a weapon closes, the next one equipped reopens the same ChIndex), and without
+        // this reset the new actor's spawn header was read with the PREVIOUS occupant's
+        // SpawnHeaderDecoded=true/ActorClassPath still attached, so the fresh header bytes were
+        // parsed as if they were content - the "class~?" / garbage "SUB-OBJECT" noise this produced
+        // right after a channel reopened is what exposed it.
+        if (bOpen || !_channels.TryGetValue(chIndex, out var state)) {
             state = new ChannelState { ChName = chName };
             _channels[chIndex] = state;
         }
 
-        var chNameStr = chName.ToEName()?.ToString() ?? chName.ToString();
-        if (_verbose) Log($"#{packetIndex}: bunch ChIndex={chIndex} ChName={chNameStr} bOpen={bOpen} bClose={bClose} bReliable={bReliable} bPartial={bPartial}/{bPartialInitial}/{bPartialFinal} bHasPackageMapExports={bHasPackageMapExports} bits={bunchDataBits}");
+        // ORDER MATTERS: UChannel::ReceivedRawBunch calls PackageMap->ReceiveNetGUIDBunch(Bunch)
+        // UNCONDITIONALLY FIRST - before the bunch is ever handed to UActorChannel::ReceivedBunch,
+        // which is the one that reads the must-be-mapped GUID list. Reading must-be-mapped-guids
+        // before the export batch (an earlier version of this code did) is backwards; when both
+        // bits are set on the same bunch, that ordering bug alone is enough to misalign every read
+        // that follows, including the actor's own spawn-header GUID.
+        //
+        // bHasPackageMapExports names WHAT'S AT THE FRONT of this payload, not "the whole payload
+        // IS an export list" - after ReceiveNetGUIDBunch, ReceivedRawBunch STILL dispatches the
+        // remainder to the channel as normal. Treating the two as mutually exclusive (an early
+        // version of this code did) meant every bunch that opened an actor WITH an inline export -
+        // exactly the shape of a building tool's spawn, which exports its own class the moment its
+        // channel opens - decoded the export and then silently never looked at the actor content
+        // that followed it in the same payload.
+        if (bHasPackageMapExports) DecodeExportBunch(packetIndex, bunchReader, chIndex);
 
         // UActorChannel::ReceivedBunch reads the must-be-mapped GUID list off the FRONT of the
-        // payload before anything else - a uint16 count, then that many packed NetGUIDs. The header
-        // bit was being read and the list itself never consumed, so every bunch carrying one began
-        // decoding 16+ bits early. That is why actor GUIDs came out as 0 or 1, why no channel ever
-        // resolved an actor class, and why all 324 RepLayout blobs were skipped: the decoder looked
-        // broken in a dozen places for one missing read.
-        if (bHasMustBeMappedGUIDs) {
+        // payload before anything else IT looks at - a uint16 count, then that many packed
+        // NetGUIDs - but that is still AFTER PackageMap exports, which ReceivedRawBunch already
+        // consumed above. Originally this bit was read and the list itself never consumed at all,
+        // so every bunch carrying one began decoding 16+ bits early: actor GUIDs came out as 0 or
+        // 1, no channel ever resolved an actor class, and all 324 RepLayout blobs were skipped.
+        if (chName == EName.Actor && bHasMustBeMappedGUIDs) {
             var numMustBeMapped = bunchReader.ReadUInt16();
             for (var i = 0; i < numMustBeMapped && !bunchReader.IsError(); i++) {
                 var mapped = new FNetworkGUID();
@@ -387,20 +498,28 @@ internal sealed class RoleDecoder {
             if (_verbose) Log($"#{packetIndex}:   consumed {numMustBeMapped} must-be-mapped GUID(s)");
         }
 
-        if (bHasPackageMapExports) {
-            DecodeExportBunch(packetIndex, bunchReader, chIndex);
-        } else if (chName == EName.Actor) {
+        if (chName == EName.Actor) {
             DecodeActorChannelBunch(packetIndex, bunchReader, chIndex, state);
         } else if (chName == EName.Control) {
             DecodeControlChannelBunch(packetIndex, bunchReader, chIndex);
-        } else if (bunchDataBits > 0 && _verbose) {
+        } else if (!bHasPackageMapExports && bunchDataBits > 0 && _verbose) {
             Log($"#{packetIndex}:   ChIndex={chIndex} ({chNameStr}) content not decoded ({bunchDataBits} bits)");
         }
 
-        if (bClose) Log($"#{packetIndex}: ChIndex={chIndex} ({chNameStr}) CLOSED, reason={closeReason}");
+        if (bClose) {
+            Log($"#{packetIndex}: ChIndex={chIndex} ({chNameStr}) CLOSED, reason={closeReason}");
+            _sharedChannelClasses.Remove(chIndex);
+        }
 
         return true;
     }
+
+    /// <summary>
+    ///     `state.ActorClassPath` falls back to `_sharedChannelClasses` for the direction that never
+    ///     saw this channel's own ACTOR SPAWN header (see that field's declaration for why).
+    /// </summary>
+    private static string? EffectiveClassPath(ChannelState state, int chIndex) =>
+        state.ActorClassPath ?? _sharedChannelClasses.GetValueOrDefault(chIndex);
 
     // ---------------- NetGUID reading (two different wire shapes - see GroundTruth.cs comment) ----------------
 
@@ -414,6 +533,11 @@ internal sealed class RoleDecoder {
     /// </summary>
     private FNetworkGUID ReadGuidRef(FBitReader r) {
         UPackageMapClient.ReadObjectReference(r, out var guid, out _);
+        return guid;
+    }
+
+    private FNetworkGUID ReadGuidRef(FBitReader r, out string path) {
+        UPackageMapClient.ReadObjectReference(r, out var guid, out path);
         return guid;
     }
 
@@ -582,6 +706,15 @@ internal sealed class RoleDecoder {
                 Log($"#{packetIndex}:     export[{i}] guid={guid.Value} (no path)");
             }
         }
+
+        if (Environment.GetEnvironmentVariable("DECODER_BIT_TRACE") == "1") {
+            var pos = r.GetPosBits();
+            var left = r.GetBitsLeft();
+            var peek = Math.Min(left, 128);
+            var bits = new char[peek];
+            for (var i = 0; i < peek; i++) bits[i] = r.BufferBits[pos + i] ? '1' : '0';
+            Log($"#{packetIndex}:     [bit-trace] after export batch: pos={pos} bitsLeft={left} next{peek}bits={new string(bits)}");
+        }
     }
 
     private void DecodeControlChannelBunch(int packetIndex, FBitReader r, int chIndex) {
@@ -599,9 +732,10 @@ internal sealed class RoleDecoder {
                 return;
             }
 
-            var actorGuid = ReadGuidRef(r);
+            var actorGuidPos = r.GetPosBits();
+            var actorGuid = ReadGuidRef(r, out var actorPath);
             state.ActorGuid = actorGuid.Value;
-            Log($"#{packetIndex}:   [ChIndex={chIndex}] ACTOR SPAWN: actorGuid={actorGuid.Value} (dynamic={actorGuid.IsDynamic()})");
+            Log($"#{packetIndex}:   [ChIndex={chIndex}] ACTOR SPAWN: actorGuid={actorGuid.Value} (dynamic={actorGuid.IsDynamic()}) path='{actorPath}' consumedBits={r.GetPosBits() - actorGuidPos}");
 
             state.SpawnHeaderDecoded = true;
 
@@ -613,6 +747,7 @@ internal sealed class RoleDecoder {
             var archetypeGuid = ReadGuidRef(r);
             var archetypePath = _guidPaths.GetValueOrDefault(archetypeGuid.Value, $"(unresolved guid {archetypeGuid.Value} - no preceding export bunch seen on this channel)");
             state.ActorClassPath = archetypePath;
+            _sharedChannelClasses[chIndex] = archetypePath;
             Log($"#{packetIndex}:     archetype guid={archetypeGuid.Value} path={archetypePath}");
 
             var levelGuid = ReadGuidRef(r);
@@ -699,7 +834,7 @@ internal sealed class RoleDecoder {
             var blockStart = r.Pos;
             var blockEnd = Math.Min(blockStart + numPayloadBits, r.GetNumBits());
 
-            var label = state.ActorClassPath ?? "?";
+            var label = EffectiveClassPath(state, chIndex) ?? "?";
             Log($"#{packetIndex}:   [ChIndex={chIndex}, class~{ShortClassName(label)}] content block bHasRepLayout={bHasRepLayout} numPayloadBits={numPayloadBits}");
 
             if (bHasRepLayout) DecodeRepLayoutBlob(packetIndex, r, chIndex, blockEnd, state);
@@ -711,9 +846,10 @@ internal sealed class RoleDecoder {
     }
 
     private void DecodeRepLayoutBlob(int packetIndex, FBitReader r, int chIndex, long blockEnd, ChannelState state) {
-        var handleMap = GetHandleMap(state.ActorClassPath);
+        var classPath = EffectiveClassPath(state, chIndex);
+        var handleMap = GetHandleMap(classPath);
         if (handleMap == null) {
-            Log($"#{packetIndex}:     RepLayout blob present but no ground-truth handle table matched for class '{state.ActorClassPath}', skipping (raw hex below)");
+            Log($"#{packetIndex}:     RepLayout blob present but no ground-truth handle table matched for class '{classPath}', skipping (raw hex below)");
             LogHexRemainder(packetIndex, r, r.Pos, blockEnd);
             return;
         }
@@ -763,9 +899,10 @@ internal sealed class RoleDecoder {
     }
 
     private void DecodeClassNetCacheFields(int packetIndex, FBitReader r, int chIndex, long blockEnd, ChannelState state) {
-        var cache = GuessClassNetCache(state.ActorClassPath);
+        var classPath = EffectiveClassPath(state, chIndex);
+        var cache = GuessClassNetCache(classPath);
         if (cache == null) {
-            Log($"#{packetIndex}:     trailing field data present but no confident ClassNetCache match for class '{state.ActorClassPath}' - skipping field decode (raw hex below)");
+            Log($"#{packetIndex}:     trailing field data present but no confident ClassNetCache match for class '{classPath}' - skipping field decode (raw hex below)");
             LogHexRemainder(packetIndex, r, r.Pos, blockEnd);
             return;
         }
@@ -783,7 +920,65 @@ internal sealed class RoleDecoder {
 
             Log($"#{packetIndex}:     field[{repIndex}] = {fieldName} ({fieldBits} bits)");
 
+            if (fieldName == "ServerCreateBuildingActor") {
+                DecodeCreateBuildingActorField(packetIndex, r, fieldStart, fieldBits);
+            }
+
             r.Pos = fieldEnd;
+        }
+    }
+
+    /// <summary>
+    ///     AFortPlayerController::ServerCreateBuildingActor(FCreateBuildingActorData) - SOLVED.
+    ///
+    ///     The struct is STRUCT_NetSerializeNative, so RepLayout emits one generic cmd for the whole
+    ///     thing and a hand-written native NetSerialize decides the bytes. The layout, how it was
+    ///     derived (from a client memory dump, plus the one AddPropertyCmd log line that proves the
+    ///     flag), and the three things about it that no SDK dump can tell you - BuildLoc is three RAW
+    ///     floats despite being declared FVector_NetQuantize10, only BuildRot.Yaw is sent and only as
+    ///     one of four codes, and BuildingClassData.BuildingClass never reaches the wire at all - are
+    ///     all documented on AFortOnlineBeacon's FCreateBuildingActorData.
+    ///
+    ///     Two earlier hypotheses failed and are worth remembering, because both were reasonable:
+    ///
+    ///     1. A flat per-member sequential dump in declaration order. Wrong on three counts at once -
+    ///     it missed SendPropertiesForRPC's leading per-parameter "send" bit, it read BuildLoc as
+    ///     SerializePackedVector&lt;10,24&gt;, and it expected a full FRotator. It always stalled at a
+    ///     constant 127 of 178 bits with BuildLoc identical across every sample.
+    ///
+    ///     2. A RepLayout handle sequence (packed handle, value, ..., terminator). Wrong because
+    ///     SendPropertiesForRPC only uses that shape on an InternalAck (replay/demo) connection; a
+    ///     live connection writes one presence bit per non-bool parameter and then the cmds back to
+    ///     back with no handles at all.
+    /// </summary>
+    private void DecodeCreateBuildingActorField(int packetIndex, FBitReader r, long fieldStart, uint fieldBits) {
+        var fieldEnd = fieldStart + fieldBits;
+
+        // One leading presence bit for the single (non-bool) parameter - FRepLayout::ReceivePropertiesForRPC.
+        if (!r.ReadBit()) {
+            Log($"#{packetIndex}:       ServerCreateBuildingActor CreateBuildingData: not sent (presence bit 0)");
+            return;
+        }
+
+        var handle = r.ReadInt(0x1FF);
+        var mirrored = r.ReadUInt32() != 0;   // bool serialized as a legacy 32-bit UBOOL
+        var x = r.ReadFloat();
+        var y = r.ReadFloat();
+        var z = r.ReadFloat();
+        var upgradeLevel = r.ReadByte();
+        var syncKey = ((int) r.ReadInt(0x1000000) - 0x800000) / 13f;
+        var yawCode = r.ReadByte();
+        var yaw = yawCode switch { 0 => 180f, 1 => 90f, 2 => 0f, _ => -90f };
+
+        Log($"#{packetIndex}:       ServerCreateBuildingActor BuildLoc=({x:F1}, {y:F1}, {z:F1}) Yaw={yaw} " +
+            $"Mirrored={mirrored} BuildingClassHandle={handle} UpgradeLevel={upgradeLevel} SyncKey={syncKey:F2}");
+
+        // A struct with no internal framing gives no other sign of a misread, so the field's own
+        // declared width is the only check there is - and it is a strict one here.
+        var leftover = fieldEnd - r.Pos;
+        if (leftover != 0) {
+            Log($"#{packetIndex}:       ...decoded {r.Pos - fieldStart} of {fieldBits} bits - {leftover} left over, values above are suspect");
+            LogHexRemainder(packetIndex, r, fieldStart, fieldEnd);
         }
     }
 
@@ -813,6 +1008,10 @@ internal sealed class RoleDecoder {
         if (classPath.Contains("GameState", StringComparison.OrdinalIgnoreCase)) return "GameState";
         if (classPath.Contains("Pawn", StringComparison.OrdinalIgnoreCase) || classPath.Contains("Character", StringComparison.OrdinalIgnoreCase)) return "Pawn";
         if (classPath.Contains("Controller", StringComparison.OrdinalIgnoreCase)) return "Controller";
+        // Every weapon asset this project knows about (rifles, pickaxes, building tools) lives under
+        // a "/Weapons/" content path - the same signal FortWeaponActorClasses.cs's generated table
+        // was built from.
+        if (classPath.Contains("/Weapons/", StringComparison.OrdinalIgnoreCase)) return "Weapon";
         return "Actor";
     }
 

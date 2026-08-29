@@ -22,6 +22,42 @@ public class FRotator {
     private static float DecompressAxisFromShort(uint compressed) => compressed * 360f / 65536f;
 
     /// <summary>
+    ///     Send half of <see cref="NetSerializeRead"/> - FRotator::SerializeCompressedShort's saving
+    ///     branch. Note the presence bit is computed from the COMPRESSED value, not the float: a
+    ///     rotation that rounds to 0/65536 (an exact multiple of 360) sends a clear bit even though
+    ///     the float is nonzero, which is what the reader above expects.
+    /// </summary>
+    public void NetSerializeWrite(FBitWriter ar) {
+        WriteAxis(ar, Pitch);
+        WriteAxis(ar, Yaw);
+        WriteAxis(ar, Roll);
+    }
+
+    private static void WriteAxis(FBitWriter ar, float angle) {
+        var compressed = CompressAxisToShort(angle);
+        ar.WriteBit(compressed != 0);
+        if (compressed != 0) ar.WriteUInt16(compressed);
+    }
+
+    /// <summary>FRotator::CompressAxisToShort - map [0,360) onto [0,65536) and mask off winding.</summary>
+    private static ushort CompressAxisToShort(float angle) =>
+        (ushort) ((int) MathF.Round(angle * 65536f / 360f) & 0xFFFF);
+
+    /// <summary>Matches FRotator::Equals(FRotator::ZeroRotator, epsilon) - SerializeNewActor's own test.</summary>
+    public bool IsNearlyZero(float epsilon = 0.001f) =>
+        MathF.Abs(NormalizeAxis(Pitch)) <= epsilon &&
+        MathF.Abs(NormalizeAxis(Yaw)) <= epsilon &&
+        MathF.Abs(NormalizeAxis(Roll)) <= epsilon;
+
+    /// <summary>FRotator::NormalizeAxis - fold an angle into (-180, 180].</summary>
+    private static float NormalizeAxis(float angle) {
+        angle %= 360f;
+        if (angle > 180f) angle -= 360f;
+        else if (angle <= -180f) angle += 360f;
+        return angle;
+    }
+
+    /// <summary>
     ///     Inverse of UCharacterMovementComponent::PackYawAndPitchTo32 (CharacterMovementComponent.h):
     ///     the "View" uint32 ServerMove-family RPCs carry is just Yaw and Pitch, each independently
     ///     run through FRotator::CompressAxisToShort and packed as (YawShort &lt;&lt; 16) | PitchShort -

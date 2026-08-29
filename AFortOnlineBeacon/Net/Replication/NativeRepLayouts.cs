@@ -387,6 +387,24 @@ internal static class NativeRepLayouts {
                 Name = "bMarkedAlive",
                 Kind = ERepPropertyKind.Bool,
                 GetByteValue = obj => (byte) (((APlayerController) obj).bMarkedAlive ? 1 : 0)
+            },
+
+            // 76-79, same reason as 53-75 above: carrying the numbering as far as
+            // BroadcastRemoteClientInfo at 80. Derived with
+            // `python Tools/RepHandles/rep_handles.py AFortPlayerControllerAthena --from 76 --to 80`.
+            Reserved("CreativeIslands", ERepPropertyKind.EmptyDynamicArray), // 76
+            Reserved("LastUsedCreativeIsland", ERepPropertyKind.String),     // 77
+            Reserved("bIsAllowedToPublish"),                                 // 78
+            Reserved("PartyAssistedMemberData", ERepPropertyKind.EmptyDynamicArray), // 79
+
+            new FRepPropertyDef {
+                // 80, 0x2BF8 - AFortPlayerControllerAthena::BroadcastRemoteClientInfo. A plain
+                // UObjectProperty (AFortBroadcastRemoteClientInfo*), so an ordinary ObjectRef Cmd,
+                // exactly like WorldInventory at handle 34. See AFortBroadcastRemoteClientInfo's own
+                // doc comment for why this actor exists and what silently breaks without it.
+                Name = "BroadcastRemoteClientInfo",
+                Kind = ERepPropertyKind.ObjectRef,
+                GetObjectValue = obj => ((APlayerController) obj).BroadcastRemoteClientInfo
             }
         })
     ).ToArray();
@@ -490,16 +508,18 @@ internal static class NativeRepLayouts {
 
     /// <summary>
     ///     AFortWeapon's own properties, after AActor's 15 - DERIVED by
-    ///     `python Tools/RepHandles/rep_handles.py AFortWeapon`, which reproduces every live-probed
-    ///     handle elsewhere in this file.
+    ///     `python Tools/RepHandles/rep_handles.py AFortWeap_BuildingTool`, which reproduces every
+    ///     live-probed handle elsewhere in this file and, being the deepest subclass with an added
+    ///     property, reaches all the way to handle 36.
     ///
-    ///     Declared only as far as AmmoCount (28); the ability-system handles after it (29-35) are
-    ///     server-side spec handles into a UAbilitySystemComponent this project does not have, so
-    ///     there is nothing honest to put in them.
+    ///     ImpactAbilitySpecHandle (34) and AppliedAlterations (35) are Reserved: server-side spec
+    ///     handles and an always-empty array this project has nothing honest to put in. DefaultMetadata
+    ///     (36, AFortWeap_BuildingTool's own only property) IS sent - see AFortWeapon.DefaultMetadata.
     ///
-    ///     One layout covers every weapon class. AFortWeaponRanged and AFortWeaponPickaxeAthena both
-    ///     append their own properties after these, but nothing here sends any of them, and a
-    ///     subclass only ever APPENDS - so an assault rifle and a pickaxe agree on handles 1-28.
+    ///     One layout covers every weapon class, building tools included. AFortWeaponRanged,
+    ///     AFortWeaponPickaxeAthena and AFortWeap_BuildingTool each append their own properties after
+    ///     these, but a subclass only ever APPENDS - so every weapon agrees on handles 1-35, and only
+    ///     a building tool's client cares that 36 is populated.
     /// </summary>
     private static readonly FRepPropertyDef[] WeaponProps = ActorProps.Concat(new FRepPropertyDef[] {
         Reserved("bIsEquippingWeapon"),  // 16, 0x0248 - bool
@@ -548,6 +568,20 @@ internal static class NativeRepLayouts {
             Name = "ReloadAbilitySpecHandle",
             Kind = ERepPropertyKind.Int32,
             GetIntValue = obj => ((AFortWeapon) obj).ReloadAbilitySpecHandle
+        },
+
+        Reserved("ImpactAbilitySpecHandle", ERepPropertyKind.Int32), // 34, 0x0784
+        Reserved("AppliedAlterations", ERepPropertyKind.EmptyDynamicArray), // 35, 0x07A8
+
+        // 36, 0x09B8, AFortWeap_BuildingTool - the only property that subclass adds over plain
+        // AFortWeapon (rep_handles.py AFortWeap_BuildingTool). Null for every weapon except a
+        // building tool. Its OnRep is what draws the client's ghost/pencil preview; with no value
+        // ever sent the ghost never appears, which is why the table has to reach past handle 33 at
+        // all - see AFortWeapon.DefaultMetadata and FortWeaponActorClasses.BuildingMetadataFor.
+        new() {
+            Name = "DefaultMetadata",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortWeapon) obj).DefaultMetadata
         }
     }).ToArray();
 
@@ -1253,6 +1287,39 @@ internal static class NativeRepLayouts {
     }).ToArray();
 
     /// <summary>
+    ///     AFortBroadcastRemoteClientInfo's own properties, after AActor's 15. DERIVED with
+    ///     `python Tools/RepHandles/rep_handles.py AFortBroadcastRemoteClientInfo`. Only
+    ///     RemoteBuildableClass (20, the ServerSetPlayerBuildableClass target) is actually modeled;
+    ///     everything else here exists purely to carry the handle numbering correctly past it, since
+    ///     the handle stream is positional - see AFortBroadcastRemoteClientInfo's own doc comment for
+    ///     why this actor exists at all.
+    /// </summary>
+    private static readonly FRepPropertyDef[] BroadcastRemoteClientInfoProps = ActorProps.Concat(new[] {
+        new FRepPropertyDef {
+            // Handle 16.
+            Name = "bActive",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AFortBroadcastRemoteClientInfo) obj).bActive ? 1 : 0)
+        },
+        Reserved("bRemoteIsInteracting"),                        // 17
+        Reserved("RemoteEditActor", ERepPropertyKind.ObjectRef), // 18 - class ABuildingSMActor*
+        Reserved("RemoteEditTileData", ERepPropertyKind.EmptyDynamicArray), // 19 - TArray<int32>
+        new FRepPropertyDef {
+            // Handle 20 - the actual target of ServerSetPlayerBuildableClass. TSubclassOf<T> is a
+            // UObjectPropertyBase underneath (a UClass reference), so an ordinary ObjectRef Cmd like
+            // any other object-reference property.
+            Name = "RemoteBuildableClass",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortBroadcastRemoteClientInfo) obj).RemoteBuildableClass
+        },
+        Reserved("RemoteBuildingMaterial", ERepPropertyKind.ByteEnum) // 21 - EFortResourceType
+        // 22 onward (bRemoteIsFullScreenMapActive, bRemoteIsInventoryActive, bRemoteCanDBNORevive,
+        // RemoteChatEntry, RemoteWeakspotData, RemoteRespawnTime, RemotePoiTagID, RemoteEventScore)
+        // is never sent - nothing needs it, so the table simply stops here rather than reserving
+        // handles nothing after them ever has to reach.
+    }).ToArray();
+
+    /// <summary>
     ///     UFortAbilitySystemComponentAthena's RepLayout - the first COMPONENT layout in this
     ///     project. Components chain off UObject, not AActor, so this does NOT start from ActorProps:
     ///     handle 1 is UActorComponent's own first property.
@@ -1472,6 +1539,7 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout PlayerState = new(PlayerStateProps);
 
     public static readonly FRepLayout Inventory = new(InventoryProps);
+    public static readonly FRepLayout BroadcastRemoteClientInfo = new(BroadcastRemoteClientInfoProps);
     public static readonly FRepLayout Pickup = new(PickupProps);
     public static readonly FRepLayout Weapon = new(WeaponProps);
 
@@ -1479,6 +1547,7 @@ internal static class NativeRepLayouts {
         AFortPickup => Pickup,
         AFortWeapon => Weapon,
         AFortInventory => Inventory,
+        AFortBroadcastRemoteClientInfo => BroadcastRemoteClientInfo,
         APlayerController => PlayerController,
         AController => Controller,
         APawn => Pawn,

@@ -73,4 +73,22 @@ public class AFortWeapon : AActor {
     ///     (Default__GA_Ranged_GenericDamage_C and Default__FortGameplayAbility_Reload, packet 1922).
     /// </summary>
     public int ReloadAbilitySpecHandle { get; set; } = -1;
+
+    /// <summary>
+    ///     AFortWeap_BuildingTool::DefaultMetadata - wire handle 36, the only property that class
+    ///     adds over plain AFortWeapon. Null for every weapon except a building tool, where it is the
+    ///     UBuildingEditModeMetadata asset the client's ghost/pencil preview reads to know what to
+    ///     draw (see FortWeaponActorClasses.BuildingMetadataFor). Declared here rather than on a
+    ///     dedicated subclass for the same reason CurrentWeapon lives on APawn: one C# actor type
+    ///     stands in for the whole native hierarchy.
+    /// </summary>
+    public UObject? DefaultMetadata { get; set; }
+
+    /// <summary>
+    ///     Set by APawn.EquipInventoryItem for a building tool only, consumed and cleared by
+    ///     UNetDriver.OpenChannelsForNewlyRelevantActors the moment this weapon's OWN channel opens
+    ///     (not before - see that method's doc comment for why sending
+    ///     AFortPawn::ClientInternalEquipWeapon any earlier fails).
+    /// </summary>
+    public bool bNeedsClientInternalEquipWeaponRpc { get; set; }
 }
