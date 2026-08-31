@@ -398,3 +398,7 @@ FodyWeavers.xsd
 *.sln.iml
 
 PacketReplayDecoder/Captures/
+# Auto-downloaded by CUE4Parse ZlibHelper.Initialize() into whatever the CWD was when a
+# CUE4Parse-based tool (Tools/TerrainHeightMapBaker) ran; it re-downloads on demand, never commit it.
+zlib-ng2.dll
+libz-ng.so

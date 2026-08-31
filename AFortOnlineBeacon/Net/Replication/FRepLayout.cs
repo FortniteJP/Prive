@@ -23,6 +23,16 @@ public sealed class FRepLayoutCmd {
 ///     FRepPropertyDef with no GetByteValue) - they just can't be named in a changed set.
 /// </summary>
 public sealed class FRepLayout {
+    /// <summary>
+    ///     The two magic numbers in FQuantizedBuildingAttribute's native NetSerialize, read straight
+    ///     out of the real client (see ERepPropertyKind.QuantizedBuildingAttribute): the loading
+    ///     branch computes `(SerializeInt(0x10000) - 0x8000) * 0.0018315018f`, and 0.0018315018 is
+    ///     1/546 to within float precision.
+    /// </summary>
+    private const float QuantizedBuildingAttributeScale = 546f;
+
+    private const int QuantizedBuildingAttributeBias = 0x8000;
+
     private readonly List<FRepLayoutCmd> _cmds = new();
 
     public FRepLayout(IEnumerable<FRepPropertyDef> topLevelProps) {
@@ -74,6 +84,7 @@ public sealed class FRepLayout {
             case ERepPropertyKind.Int16:
                 return def.GetIntValue == null ? NotComparable : def.GetIntValue(instance);
             case ERepPropertyKind.Float:
+            case ERepPropertyKind.QuantizedBuildingAttribute:
                 return def.GetFloatValue == null ? NotComparable : def.GetFloatValue(instance);
             case ERepPropertyKind.String:
                 return def.GetStringValue == null ? NotComparable : def.GetStringValue(instance);
@@ -96,6 +107,7 @@ public sealed class FRepLayout {
                     : string.Join('|', def.GetObjectArrayValue(instance)
                         .Select(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode));
             case ERepPropertyKind.VectorQuantize10:
+            case ERepPropertyKind.VectorQuantize100:
                 // Compared by string: FVector is a mutable reference type here, so holding the
                 // instance would compare a value with itself after the actor moved it.
                 return def.GetVectorValue == null ? NotComparable : def.GetVectorValue(instance).ToString();
@@ -227,13 +239,33 @@ public sealed class FRepLayout {
                 continue;
             }
 
-            if (cmd.Def.Kind == ERepPropertyKind.VectorQuantize10) {
+            if (cmd.Def.Kind is ERepPropertyKind.VectorQuantize10 or ERepPropertyKind.VectorQuantize100) {
                 if (cmd.Def.GetVectorValue == null) {
                     throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no vector value serializer yet, can't be in a changed set.");
                 }
 
+                // The two differ only in the packed encoding's scale/width - 10/24 vs 100/30, the
+                // engine's own FVector_NetQuantize10 and FVector_NetQuantize100 template arguments.
+                var (scaleFactor, maxBits) = cmd.Def.Kind == ERepPropertyKind.VectorQuantize10
+                    ? (10u, 24u)
+                    : (100u, 30u);
+
                 payload.SerializeIntPacked(&handle);
-                cmd.Def.GetVectorValue(instance).NetSerializeWriteQuantized(payload, 10, 24);
+                cmd.Def.GetVectorValue(instance).NetSerializeWriteQuantized(payload, scaleFactor, maxBits);
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.QuantizedBuildingAttribute) {
+                if (cmd.Def.GetFloatValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no float value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                var quantized = (ushort) Math.Clamp(
+                    MathF.Round(cmd.Def.GetFloatValue(instance) * QuantizedBuildingAttributeScale)
+                        + QuantizedBuildingAttributeBias,
+                    0, ushort.MaxValue);
+                payload.SerializeBits(&quantized, 16);
                 continue;
             }
 

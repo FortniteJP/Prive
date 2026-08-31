@@ -26,6 +26,20 @@
 internal static class UAssetRegistry {
     private static readonly Dictionary<string, UObject> Assets = new();
 
+    /// <summary>
+    ///     The other direction, for a reference that came BACK from a client as a bare NetGUID.
+    ///
+    ///     A client can only export a path for an object it has no id for; once the server has
+    ///     introduced one (an emote asset, say), the client's own NetGUIDLookup has it and every
+    ///     later reference is just the packed id - a real capture shows the same ServerPlayEmoteItem
+    ///     costing 94.4 bytes the first time and 5.4 bytes the second. The guid resolves back to the
+    ///     very object this registry handed out, so the path is still knowable; it just has to be
+    ///     looked up rather than read off the wire. See FRpcReader's AssetPath kind.
+    /// </summary>
+    private static readonly Dictionary<UObject, string> AssetPaths = new();
+
+    public static string? PathOf(UObject asset) => AssetPaths.GetValueOrDefault(asset);
+
     public static UObject GetOrCreate(string path) {
         if (Assets.TryGetValue(path, out var existing)) return existing;
 
@@ -37,6 +51,7 @@ internal static class UAssetRegistry {
         asset.SetFlags(EObjectFlags.RF_Public | EObjectFlags.RF_WasLoaded);
 
         Assets[path] = asset;
+        AssetPaths[asset] = path;
         return asset;
     }
 
@@ -52,8 +67,17 @@ internal static class UAssetRegistry {
     ///     UPackage -> UWorld -> ULevel("PersistentLevel") -> AActor, and the separators in the path
     ///     ('.' and ':') are both just "next object down".
     /// </summary>
-    public static UObject GetOrCreateSubObject(string path) {
-        if (Assets.TryGetValue(path, out var existing)) return existing;
+    public static UObject GetOrCreateSubObject(string path) => GetOrCreateSubObject<UObject>(path);
+
+    /// <summary>
+    ///     Same as <see cref="GetOrCreateSubObject(string)"/>, but the LEAF of the chain is a real
+    ///     <typeparamref name="T"/> instead of a plain UObject - needed for a net-startup ACTOR placed
+    ///     in a map, where a bare UObject cannot be handed to UActorChannel.SetChannelActor. Everything
+    ///     that makes the chain stably-named (RF_WasLoaded on every link, bContainsMap on the
+    ///     PersistentLevel crossing) is identical; only the leaf's runtime type differs.
+    /// </summary>
+    public static T GetOrCreateSubObject<T>(string path) where T : UObject, new() {
+        if (Assets.TryGetValue(path, out var existing)) return (T) existing;
 
         var lastSlash = path.LastIndexOf('/');
         var firstDot = path.IndexOf('.', lastSlash + 1);
@@ -61,21 +85,26 @@ internal static class UAssetRegistry {
 
         var package = UPackageRegistry.GetOrCreate(path[..firstDot]);
         UObject outer = package;
+        var components = path[(firstDot + 1)..].Split('.', ':');
+        T leaf = null!;
 
-        foreach (var component in path[(firstDot + 1)..].Split('.', ':')) {
+        for (var i = 0; i < components.Length; i++) {
+            var component = components[i];
+
             // "PersistentLevel" only ever exists as a subobject of a UWorld, so a path that walks
             // through one is by definition a path into a map package. That matters on the wire: see
             // UPackage.bContainsMap and FNetGUIDCache.CanClientLoadObject - the client must never be
             // asked to wait on a GUID it can only resolve by loading a map.
             if (component == "PersistentLevel") package.bContainsMap = true;
 
-            var child = new UObject();
+            var isLeaf = i == components.Length - 1;
+            UObject child = isLeaf ? leaf = new T() : new UObject();
             child.InitializeObjectProperties(outer, new FName(component));
             child.SetFlags(EObjectFlags.RF_Public | EObjectFlags.RF_WasLoaded);
             outer = child;
         }
 
-        Assets[path] = outer;
-        return outer;
+        Assets[path] = leaf;
+        return leaf;
     }
 }

@@ -281,6 +281,65 @@ internal static class FFastArraySerializerWriter {
         WriteEmptyArray(payload);                   // ReplicatedInstances - none; the client instances abilities itself
     }
 
+    /// <summary>
+    ///     One FActiveGameplayEffect - an element of UAbilitySystemComponent::ActiveGameplayEffects,
+    ///     and the thing that gives the client's GAS an aggregator for an attribute (see
+    ///     FActiveGameplayEffect's doc comment for why that is the whole point).
+    ///
+    ///     Members in RepLayout order, i.e. by offset with CPF_RepSkip absent. For the item:
+    ///     Spec, PredictionKey, StartServerWorldTime (CachedStartServerWorldTime, StartWorldTime and
+    ///     bIsInhibited are RepSkip). For the Spec: Def, ModifiedAttributes, Duration, Period,
+    ///     ChanceToApplyToTarget, DynamicGrantedTags, DynamicAssetTags, Modifiers, StackCount,
+    ///     GrantedAbilitySpecs, EffectContext, Level.
+    ///
+    ///     Two sub-encodings are exact rather than guessed, both read out of the engine source:
+    ///     an EMPTY FGameplayTagContainer is a single 1 bit and nothing else
+    ///     (GameplayTagContainer.cpp:968), and an INVALID FGameplayEffectContextHandle is a single
+    ///     0 bit (GameplayEffectTypes.cpp:310). The context is sent invalid deliberately - a valid
+    ///     one defers to Fortnite's FFortGameplayEffectContext subclass, whose NetSerialize is
+    ///     native code in the client's encrypted .text, and a guessed layout would corrupt every
+    ///     field after it.
+    /// </summary>
+    public static unsafe void WriteActiveGameplayEffect(FNetBitWriter payload, FActiveGameplayEffect effect) {
+        var packageMap = (UPackageMapClient) payload.PackageMap!;
+        var spec = effect.Spec;
+
+        packageMap.SerializeObject(payload, spec.Def);
+
+        var modifiedCount = (ushort) spec.ModifiedAttributes.Count;
+        payload.SerializeBits(&modifiedCount, 16);
+        foreach (var modified in spec.ModifiedAttributes) {
+            // FGameplayAttribute has no native NetSerialize, so it flattens to its three members in
+            // offset order: AttributeName (0x00), Attribute (0x10), AttributeOwner (0x18).
+            payload.WriteString(modified.AttributeName);
+            packageMap.SerializeObject(payload, modified.Attribute);
+            packageMap.SerializeObject(payload, modified.AttributeOwner);
+            payload.WriteFloat(modified.TotalMagnitude);
+        }
+
+        payload.WriteFloat(spec.Duration);
+        payload.WriteFloat(spec.Period);
+        payload.WriteFloat(spec.ChanceToApplyToTarget);
+
+        payload.WriteBit(true);  // DynamicGrantedTags: IsEmpty
+        payload.WriteBit(true);  // DynamicAssetTags:   IsEmpty
+
+        var modifierCount = (ushort) spec.Modifiers.Count;
+        payload.SerializeBits(&modifierCount, 16);
+        // FModifierSpec is one float - the EVALUATED magnitude. Which attribute it applies to and
+        // with which operation comes from Def's own modifier list, in this same order.
+        foreach (var magnitude in spec.Modifiers) payload.WriteFloat(magnitude);
+
+        WriteInt32(payload, spec.StackCount);
+        WriteEmptyArray(payload); // GrantedAbilitySpecs - this server grants abilities directly
+
+        payload.WriteBit(false);  // EffectContext: ValidData = 0
+        payload.WriteFloat(spec.Level);
+
+        FPredictionKey.Write(payload, effect.PredictionKey);
+        payload.WriteFloat(effect.StartServerWorldTime);
+    }
+
     private static unsafe void WriteInt32(FNetBitWriter payload, int value) {
         payload.SerializeBits(&value, 32);
     }

@@ -115,8 +115,26 @@ public class UPackageMapClient : UPackageMap {
 
         if (!bHasPath) return false;
 
-        ReadObjectReference(ar, out _, out var outerPath, recursionCount + 1);
+        ReadObjectReference(ar, out var outerGuid, out var outerPath, recursionCount + 1);
         if (ar.IsError()) return true;
+
+        // The outer recursion above returns no path whenever the OUTER's own guid is valid but not
+        // the default sentinel - i.e. the client believes it already has an id for the outer and
+        // just sent that instead of re-exporting its path. That is not "no path", it is "path already
+        // known to US": once this server has exported ANY object under a given level/package (Tree_
+        // 03180's own channel-open, say), the client learns a real NetGUID for every link in ITS
+        // outer chain too (RegisterNetGUID_Server recurses on GetOuter()), and a SIBLING actor's later
+        // reference reuses that same id for the shared PersistentLevel/World/Package rather than
+        // re-sending three levels of path. Without this, a hit on that sibling loses everything but
+        // its own bare name (see afortonlinebeacon-status Round 33) - GetOrCreateSubObject then has
+        // no package/object separator to parse. The fix: resolve the outer's guid through our own
+        // cache and rebuild its path from the in-memory Outer/FName chain we ourselves gave it when
+        // WE exported it - see FullPathOf.
+        if (outerPath.Length == 0 && outerGuid.IsValid() && !outerGuid.IsDefault()
+            && ar is FNetBitReader { PackageMap: UPackageMapClient { GuidCache: { } guidCache } }
+            && guidCache.GetObjectFromNetGUID(outerGuid) is { } knownOuter) {
+            outerPath = FullPathOf(knownOuter);
+        }
 
         var name = ar.ReadString();
         if (ar.IsError()) return true;
@@ -136,6 +154,17 @@ public class UPackageMapClient : UPackageMap {
         pathName = string.IsNullOrEmpty(outerPath) ? name : $"{outerPath}.{name}";
         return true;
     }
+
+    /// <summary>
+    ///     Rebuilds a "package.name.name..." path from an object's own Outer/FName chain, for the
+    ///     already-known-outer case in <see cref="ReadObjectReference"/> above. Only meaningful for an
+    ///     object THIS SERVER built via UAssetRegistry's path-export chain (UPackage -> synthetic
+    ///     World/Level UObjects -> the leaf), where every link's Outer/FName was set to exactly match
+    ///     the path it was created from - which is exactly the kind of object a client can end up
+    ///     naming this way, since it is exactly what we export the outer chain of.
+    /// </summary>
+    private static string FullPathOf(UObject obj) =>
+        obj.GetOuter() is { } outer ? $"{FullPathOf(outer)}.{obj.GetFName()}" : obj.GetFName().ToString();
 
     /// <summary>
     ///     Reads one object reference and resolves it if this archive can. Everything a client sends
@@ -207,8 +236,17 @@ public class UPackageMapClient : UPackageMap {
         bunch.SerializeBits(&bSerializeRotation, 1);
         if (bSerializeRotation) rotation.NetSerializeWrite(bunch); // FRotator::NetSerialize -> SerializeCompressedShort
 
-        var bSerializeScale = false;
+        // Scale is how a MIRRORED building piece is expressed, and nothing else here uses it. Real
+        // Fortnite's ABuildingSMActor::SetMirrored (disassembled from the client dump at static
+        // 0x1413D3710) does exactly one thing: it forces the sign of the root component's
+        // RelativeScale3D.X - negative when mirrored, positive when not. bMirrored itself has no
+        // OnRep, so replicating that bool alone tells a client nothing about how to draw the piece;
+        // the scale in this spawn bunch is the entire mechanism. Left at false until Round 58, which
+        // is why half-stairs and the other asymmetric edit pieces always arrived unmirrored.
+        var scale = actor.GetActorScale3D();
+        var bSerializeScale = !scale.EqualsNearly(1f, 1f, 1f);
         bunch.SerializeBits(&bSerializeScale, 1);
+        if (bSerializeScale) scale.NetSerializeWriteQuantized(bunch, 10, 24); // FVector_NetQuantize10
 
         var bSerializeVelocity = false;
         bunch.SerializeBits(&bSerializeVelocity, 1);

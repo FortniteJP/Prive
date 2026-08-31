@@ -201,6 +201,35 @@ foreach (var path in mapPaths) {
             Console.WriteLine();
             Console.WriteLine($"--- {path}");
             Console.WriteLine($"{export.ExportType}  {export.Name}");
+            // Prints one property, descending through structs AND arrays-of-structs. The one-level
+            // struct case below used to be enough; it stopped being enough the moment the question
+            // was "which ATTRIBUTE does this GameplayEffect's modifier target", because
+            // UGameplayEffect::Modifiers is an ARRAY of FGameplayModifierInfo and an array printed
+            // as nothing but its element count. Depth 3 reaches Modifiers -> [0] -> Attribute.
+            static void PrintValue(string name, object? value, int depth) {
+                var pad = new string(' ', 4 * (depth + 1));
+
+                var asStruct = (value as FScriptStruct)?.StructType as FStructFallback
+                               ?? value as FStructFallback;
+
+                if (asStruct != null && depth < 3) {
+                    Console.WriteLine($"{pad}{name} {{");
+                    foreach (var inner in asStruct.Properties) PrintValue(inner.Name.ToString(), inner.Tag?.GenericValue, depth + 1);
+                    Console.WriteLine($"{pad}}}");
+                    return;
+                }
+
+                if (value is UScriptArray array && depth < 3) {
+                    Console.WriteLine($"{pad}{name} [{array.Properties.Count}]");
+                    for (var i = 0; i < array.Properties.Count; i++) {
+                        PrintValue($"[{i}]", array.Properties[i].GenericValue, depth + 1);
+                    }
+                    return;
+                }
+
+                Console.WriteLine($"{pad}{name,-46} {value}");
+            }
+
             foreach (var prop in export.Properties) {
                 // A struct property used to print as its C# type name and nothing else, which hid
                 // exactly the things worth reading - a FDataTableRowHandle's table and row name, a
@@ -211,12 +240,8 @@ foreach (var path in mapPaths) {
                 var nested = (prop.Tag?.GenericValue as FScriptStruct)?.StructType as FStructFallback
                              ?? prop.Tag?.GenericValue as FStructFallback;
 
-                if (nested != null) {
-                    Console.WriteLine($"    {prop.Name,-46} {{");
-                    foreach (var inner in nested.Properties) {
-                        Console.WriteLine($"        {inner.Name,-42} {inner.Tag?.GenericValue}");
-                    }
-                    Console.WriteLine("    }");
+                if (nested != null || prop.Tag?.GenericValue is UScriptArray) {
+                    PrintValue(prop.Name.ToString(), prop.Tag?.GenericValue, 0);
                     continue;
                 }
 

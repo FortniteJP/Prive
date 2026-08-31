@@ -339,6 +339,13 @@ public class AGameModeBase : AInfo {
                         "MovementSet" => (UFortAttributeSet?) UObjectGlobals.NewObject<UFortMovementSet>(
                             playerState, GUClassArray.StaticClass<UFortMovementSet>(), new FName(setName),
                             EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject),
+                        // The third set this server sends VALUES for. Unlike the other two it is
+                        // not a fix for something the client reads as zero - it is the health a
+                        // player is damaged out of, so it has to start full and stay authoritative
+                        // here. See FortDamageSystem.
+                        "HealthSet" => UObjectGlobals.NewObject<UFortHealthSet>(
+                            playerState, GUClassArray.StaticClass<UFortHealthSet>(), new FName(setName),
+                            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject),
                         "PlayerAttrSet" => UObjectGlobals.NewObject<UFortPlayerAttrSet>(
                             playerState, GUClassArray.StaticClass<UFortPlayerAttrSet>(), new FName(setName),
                             EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject),
@@ -352,8 +359,60 @@ public class AGameModeBase : AInfo {
                     playerState.AbilitySystemComponent.SpawnedAttributes.Add(set);
                     if (set is UFortMovementSet movementSet) playerState.MovementSet = movementSet;
                     if (set is UFortPlayerAttrSet playerAttrSet) playerState.PlayerAttrSet = playerAttrSet;
+
+                    if (set is UFortHealthSet healthSet) {
+                        playerState.HealthSet = healthSet;
+                        // Fortnite's real starting values: 100 health, no shield, both capped at
+                        // 100. Env-overridable so a value can be tried against a live client
+                        // without a rebuild - the same knob arrangement UFortPlayerAttrSet uses.
+                        healthSet.MaxHealth = EnvFloat("PLAYER_MAX_HEALTH", 100.0f);
+                        healthSet.Health = EnvFloat("PLAYER_HEALTH", healthSet.MaxHealth);
+                        healthSet.Shield = EnvFloat("PLAYER_MAX_SHIELD", 100.0f);
+                        healthSet.CurrentShield = EnvFloat("PLAYER_SHIELD", 0.0f);
+                    }
                 }
             }
+            // ONE infinite-duration GameplayEffect, applied for its side effect rather than its
+            // number: a client that receives an active effect naming an attribute creates an
+            // AGGREGATOR for it, and an attribute with an aggregator takes the loud branch of
+            // FActiveGameplayEffectsContainer::SetBaseAttributeValueFromReplication - the
+            // OnAttributeAggregatorDirty -> InternalUpdateNumericalAttribute path the HUD health bar
+            // is built on - instead of the silent one. Without it, every health value this server
+            // replicates arrives correctly and redraws nothing; see FActiveGameplayEffect for the
+            // whole evidence chain.
+            //
+            // The magnitude is 0, so nothing about the player's health is actually modified.
+            //
+            // GE_GM_HealthIncrease is used because it is Infinite with exactly one modifier
+            // (confirmed by dumping its CDO out of the pak: DurationPolicy Infinite, Modifiers[1]).
+            // If it turns out to modify MaxHealth rather than Health, the aggregator lands on the
+            // wrong attribute and the bar will still not move - HEALTH_AGGREGATOR_EFFECT swaps the
+            // asset without a rebuild, which is the cheap way to try the next candidate.
+            // OFF BY DEFAULT, and it took a live regression to earn that. Sending
+            // GE_GM_HealthIncrease made the client apply it for real - the top-left health readout
+            // vanished, and the player was locked into build mode until something damaged them.
+            // Nothing was wrong with the encoding (every member and its order was re-checked against
+            // GameplayEffect.h afterwards); the client simply did what it was told and ran that
+            // effect's own tags, abilities and GameplayCue.
+            //
+            // So the aggregator trick still stands as a THEORY, but it needs an effect whose side
+            // effects are harmless, and picking one is now the open question - see
+            // FActiveGameplayEffect. Set HEALTH_AGGREGATOR_EFFECT=<CDO path> to try a candidate;
+            // unset, this server applies nothing and behaves as it did before the experiment.
+            // THE MAGNITUDE MUST BE NEUTRAL FOR THE EFFECT'S OWN ModifierOp, and getting that wrong
+            // is what caused the regression: GE_GM_HealthIncrease modifies MaxHealth with
+            // EGameplayModOp::Multiplicitive, so a magnitude of 0 gave the client MaxHealth = base
+            // * 0 = ZERO - which is exactly what a vanished health readout, a frozen bar and a
+            // player locked out of leaving build mode look like. 0 is neutral for Additive; 1 is
+            // neutral for Multiplicitive and Division. HEALTH_AGGREGATOR_MAGNITUDE overrides.
+            if (playerState.AbilitySystemComponent != null &&
+                Environment.GetEnvironmentVariable("HEALTH_AGGREGATOR_EFFECT") is { Length: > 0 } effectPath) {
+                playerState.AbilitySystemComponent.AddActiveGameplayEffect(
+                    UAssetRegistry.GetOrCreate(effectPath),
+                    magnitude: EnvFloat("HEALTH_AGGREGATOR_MAGNITUDE", 0.0f),
+                    startServerWorldTime: GetWorld()?.TimeSeconds ?? 0.0f);
+            }
+
             Console.WriteLine($"AGameModeBase.Login: PlayerState UniqueId={uniqueId.ToDebugString()}");
 
             // Mirror the same player into the GameState's roster. Add() hands out the ReplicationID
@@ -446,6 +505,10 @@ public class AGameModeBase : AInfo {
 
         return new FVector { X = x, Y = y, Z = z };
     }
+
+    /// <summary>Reads a float knob from the environment, falling back when unset or unparseable.</summary>
+    private static float EnvFloat(string name, float fallback) =>
+        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
 
     /// <summary>
     ///     The PlayerState's attribute sets, in the order a real server sends them (recovered from

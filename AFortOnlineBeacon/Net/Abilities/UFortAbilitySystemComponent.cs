@@ -69,6 +69,45 @@ public class UFortAbilitySystemComponent : UObject {
     public FFastArraySerializer<FGameplayAbilitySpec> ActivatableAbilities { get; } = new();
 
     /// <summary>
+    ///     UAbilitySystemComponent::ActiveGameplayEffects - the other FastArraySerializer on this
+    ///     component, and the one the HUD ultimately depends on.
+    ///
+    ///     A client that receives an active effect naming an attribute creates an AGGREGATOR for it,
+    ///     and from then on every replicated change to that attribute takes
+    ///     SetBaseAttributeValueFromReplication's aggregator branch - the full
+    ///     OnAttributeAggregatorDirty -> InternalUpdateNumericalAttribute notification path the
+    ///     health bar listens to - instead of the silent one. See FActiveGameplayEffect for the
+    ///     evidence chain that led here.
+    /// </summary>
+    public FFastArraySerializer<FActiveGameplayEffect> ActiveGameplayEffects { get; } = new();
+
+    /// <summary>
+    ///     Adds one active GameplayEffect and marks the array dirty so it goes out.
+    ///
+    ///     The POINT is the side effect on the client, not the effect itself: receiving an active
+    ///     effect that names an attribute makes the client's GAS create an aggregator for it, and an
+    ///     attribute with an aggregator takes the loud branch of
+    ///     SetBaseAttributeValueFromReplication ever after. A magnitude of 0 is therefore a perfectly
+    ///     good argument - it changes no number and still builds the aggregator.
+    ///
+    ///     Which ATTRIBUTE that is comes from <paramref name="def"/>'s own modifier list, not from
+    ///     here; this server only supplies the evaluated magnitudes, one per modifier the definition
+    ///     declares, in its order.
+    /// </summary>
+    public FActiveGameplayEffect AddActiveGameplayEffect(UObject? def, float magnitude, float startServerWorldTime) {
+        var effect = new FActiveGameplayEffect { StartServerWorldTime = startServerWorldTime };
+        effect.Spec.Def = def;
+        effect.Spec.Modifiers.Add(magnitude);
+
+        ActiveGameplayEffects.Add(effect);
+
+        Console.WriteLine($"UFortAbilitySystemComponent.AddActiveGameplayEffect: {def?.GetFName().ToString() ?? "(null def)"} " +
+                          $"magnitude={magnitude} - now {ActiveGameplayEffects.Count} active effect(s)");
+
+        return effect;
+    }
+
+    /// <summary>
     ///     UAbilitySystemComponent::SpawnedAttributes - wire handle 4, and the reason a player could
     ///     only crawl. Fortnite reads walk speed through the ASC
     ///     (GetNumericAttribute -> GetAttributeSubobject), which searches THIS array; an empty one

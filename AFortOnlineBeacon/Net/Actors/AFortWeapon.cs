@@ -91,4 +91,16 @@ public class AFortWeapon : AActor {
     ///     AFortPawn::ClientInternalEquipWeapon any earlier fails).
     /// </summary>
     public bool bNeedsClientInternalEquipWeaponRpc { get; set; }
+
+    /// <summary>
+    ///     AFortWeap_EditingTool::EditActor - SAME wire handle as AFortWeap_BuildingTool's
+    ///     DefaultMetadata (36): both classes add exactly one property after AFortWeapon's own 35,
+    ///     confirmed by `rep_handles.py AFortWeap_EditingTool` landing EditActor at 0x0968, the
+    ///     identical index DefaultMetadata gets from `rep_handles.py AFortWeap_BuildingTool` - see
+    ///     NativeRepLayouts.WeaponProps. Null for every weapon except the edit tool, where it is the
+    ///     piece currently being edited; the client's OnRep_EditActor is what raises/lowers its own
+    ///     edit UI. See NativeRpcHandlers' ServerBeginEditingBuildingActor/ServerEditBuildingActor/
+    ///     ServerEndEditingBuildingActor.
+    /// </summary>
+    public ABuildingActor? EditActor { get; set; }
 }

@@ -475,7 +475,14 @@ internal static class NativeRepLayouts {
 
         // ---------------------------------- AFortPawn ----------------------------------
         Reserved("bIgnoreNextFallingDamage"), // 46, 0x06A8 - uint8
-        Reserved("bIsDying"), // 47, 0x06A8 - uint8
+        new FRepPropertyDef {
+            // 47, 0x06A8. AFortPawn::bIsDying - the one bit that tells a client this pawn is dead.
+            // A plain replicated bool, so 1 bit on the wire and no width risk; the client's own
+            // death handling (ragdoll, hiding the pawn, the death camera) hangs off it.
+            Name = "bIsDying",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsDying ? 1 : 0)
+        },
         Reserved("bIsHiddenForDeath"), // 48, 0x06A8 - uint8
         Reserved("bIsKnockedback"), // 49, 0x06A8 - uint8
         Reserved("bIsStaggered"), // 50, 0x06A8 - uint8
@@ -503,7 +510,41 @@ internal static class NativeRepLayouts {
             Name = "CurrentWeapon",
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((APawn) obj).CurrentWeapon
-        }
+        },
+
+        Reserved("SpawnImmunityTime", ERepPropertyKind.Float),       // 63, 0x0760 - float
+        Reserved("bIsStunned"),                                      // 64, 0x0788 - bool
+        Reserved("PushMomentum", ERepPropertyKind.StructAtomic),     // 65, 0x0798 - atomic FVector_NetQuantize
+        Reserved("LocalSpin", ERepPropertyKind.Float),               // 66, 0x07A8 - float
+        Reserved("DamageZoneActiveBitMask", ERepPropertyKind.ByteEnum), // 67, 0x08F8 - uint8
+        Reserved("JumpFlashCountPacked", ERepPropertyKind.ByteEnum),    // 68, 0x0900 - uint8
+        Reserved("LandingFlashCountPacked", ERepPropertyKind.ByteEnum), // 69, 0x0901 - uint8
+
+        new FRepPropertyDef {
+            // 70, 0x0A30 - class UFortItemDefinition*, RepNotify. The emote a pawn is CURRENTLY
+            // playing, and the only way a player OTHER than the emoter ever sees it.
+            //
+            // The emoter's own client plays the montage from the granted GAB_Emote_Generic ability
+            // (see FortEmoteSystem); that whole path is owner-only - the ability spec goes out on
+            // the PlayerState channel, which is bOnlyRelevantToOwner, and ClientActivateAbilitySucceed
+            // is a client RPC to one connection. Nothing in it reaches a spectator. This property is
+            // what does: AFortPawn::OnRep_LastReplicatedEmoteExecuted is the hook Fortnite itself
+            // uses, and two independent server reconstructions (Erbium, Magnesium) set exactly this
+            // straight after granting the ability.
+            //
+            // Cleared back to null when the emote ends (the client's own ServerCancelAbility /
+            // ServerEndAbility) - the RepNotify only fires on a CHANGE, so a value left standing
+            // would make the same emote played twice in a row invisible to everyone else.
+            Name = "LastReplicatedEmoteExecuted",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).LastReplicatedEmoteExecuted
+        },
+
+        // 71, 0x0A40 - float. How fast a MOVING emote walks. Reserved rather than sent: the value
+        // lives on the emote asset itself (UAthenaDanceItemDefinition::WalkForwardSpeed), which an
+        // out-of-process server has no way to read - see FortEmoteSystem for the same limitation on
+        // bMovingEmote (52) / bMovingEmoteForwardOnly (53).
+        Reserved("EmoteWalkSpeed", ERepPropertyKind.Float)
     }).ToArray();
 
     /// <summary>
@@ -573,15 +614,18 @@ internal static class NativeRepLayouts {
         Reserved("ImpactAbilitySpecHandle", ERepPropertyKind.Int32), // 34, 0x0784
         Reserved("AppliedAlterations", ERepPropertyKind.EmptyDynamicArray), // 35, 0x07A8
 
-        // 36, 0x09B8, AFortWeap_BuildingTool - the only property that subclass adds over plain
-        // AFortWeapon (rep_handles.py AFortWeap_BuildingTool). Null for every weapon except a
-        // building tool. Its OnRep is what draws the client's ghost/pencil preview; with no value
-        // ever sent the ghost never appears, which is why the table has to reach past handle 33 at
-        // all - see AFortWeapon.DefaultMetadata and FortWeaponActorClasses.BuildingMetadataFor.
+        // 36, 0x09B8/0x0968 - the ONE slot two different sibling subclasses of AFortWeapon each add,
+        // and each lands here for the same reason: AFortWeap_BuildingTool's DefaultMetadata
+        // (rep_handles.py AFortWeap_BuildingTool) and AFortWeap_EditingTool's EditActor
+        // (rep_handles.py AFortWeap_EditingTool) are both the ONLY own property their class adds
+        // after AFortWeapon's shared 35, so both land on handle 36 - never both on the same weapon
+        // instance, since a weapon is never both a building tool and an edit tool. DefaultMetadata's
+        // OnRep draws the ghost/pencil preview; EditActor's OnRep raises/lowers the edit UI. See
+        // AFortWeapon.DefaultMetadata/EditActor and FortWeaponActorClasses.BuildingMetadataFor.
         new() {
-            Name = "DefaultMetadata",
+            Name = "DefaultMetadata/EditActor",
             Kind = ERepPropertyKind.ObjectRef,
-            GetObjectValue = obj => ((AFortWeapon) obj).DefaultMetadata
+            GetObjectValue = obj => ((AFortWeapon) obj).DefaultMetadata ?? (UObject?) ((AFortWeapon) obj).EditActor
         }
     }).ToArray();
 
@@ -1196,10 +1240,39 @@ internal static class NativeRepLayouts {
         Reserved("CarriedObject"), // 213, 0x0BF0 - class AFortCarriedObject*
         Reserved("NumRejoins"), // 214, 0x0BF8 - int32
         Reserved("bInvincibleDueToUI"), // 215, 0x0C18 - bool
-        Reserved("CurrentHealth"), // 216, 0x0C1C - float
-        Reserved("MaxHealth"), // 217, 0x0C20 - float
-        Reserved("CurrentShield"), // 218, 0x0C24 - float
-        Reserved("MaxShield"), // 219, 0x0C28 - float
+        // 216-219, 0x0C1C-0x0C28. The PlayerState's OWN plain-float mirror of what the GAS
+        // HealthSet holds - four ordinary replicated floats, nothing to do with attribute sets.
+        // Fortnite keeps both because a simulated proxy (a teammate on the HUD, a spectated player)
+        // has no local attribute set to read; the values are pushed here by the server instead.
+        //
+        // Sent alongside the attribute set, not instead of it, and that is deliberate: this is the
+        // second independent path a client could be reading a health bar from, and running both at
+        // once is what makes the round-9 question answerable - if the player's bar tracks damage
+        // while a building's still does not, the difference is that a building has no such mirror
+        // and the honest conclusion follows. Values come from the HealthSet so there is exactly one
+        // source of truth (see APlayerState.HealthSet).
+        new FRepPropertyDef {
+            Name = "CurrentHealth", // 216
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APlayerState) obj).HealthSet?.Health ?? 0.0f
+        },
+        new FRepPropertyDef {
+            Name = "MaxHealth", // 217
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APlayerState) obj).HealthSet?.MaxHealth ?? 0.0f
+        },
+        new FRepPropertyDef {
+            Name = "CurrentShield", // 218
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APlayerState) obj).HealthSet?.CurrentShield ?? 0.0f
+        },
+        new FRepPropertyDef {
+            // The cap. Named MaxShield on the PlayerState even though the attribute set calls the
+            // same quantity plain "Shield" - both names are the SDK's own.
+            Name = "MaxShield", // 219
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APlayerState) obj).HealthSet?.Shield ?? 0.0f
+        },
         Reserved("CurrentSignalInStorm"), // 220, 0x0C2C - float
         Reserved("MaxSignalInStorm"), // 221, 0x0C30 - float
         Reserved("AccumulatedItems"), // 222, 0x0C38 - DynamicArray TArray<struct FAccumulatedItemEntry>
@@ -1252,6 +1325,62 @@ internal static class NativeRepLayouts {
             EnumMaxValue = 256,
             GetByteValue = obj => ((APlayerState) obj).SquadId
         },
+        Reserved("Banner.IconId"), // 249, 0x0F00 - FString
+        Reserved("Banner.ColorId"), // 250, 0x0F00 - FString
+        Reserved("Banner.Level"), // 251, 0x0F00 - int32
+        Reserved("bInAircraft"), // 252, 0x0F28 - uint8
+        Reserved("bThankedBusDriver"), // 253, 0x0F28 - uint8
+        Reserved("bUsingAnonymousCharacterMode"), // 254, 0x0F28 - uint8
+        Reserved("bUsingAnonymousMode"), // 255, 0x0F28 - uint8
+        Reserved("StreamerModeName"), // 256, 0x0F30 - FText
+        Reserved("bIsDisconnected"), // 257, 0x1150 - bool
+
+        // FDeathInfo (0x1180), recursed into its non-RepSkip members - Downer and DeathLocation are
+        // RepSkip and take no handle at all, which is why FinisherOrDowner is followed straight by
+        // bDBNO. This is the struct the client's elimination feed and death screen read; setting
+        // bInitialized is what marks it as a real death rather than the empty default.
+        new FRepPropertyDef {
+            // 258. The killer - a pawn, not a PlayerState. Left null for a death nobody caused
+            // (fall damage, the storm), which is exactly what real Fortnite does with it.
+            Name = "DeathInfo.FinisherOrDowner",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).DeathInfoFinisherOrDowner
+        },
+        new FRepPropertyDef {
+            // 259. Downed-but-not-out, i.e. a squad revive state. Always false here: solo has no
+            // DBNO, and this project does not model it.
+            Name = "DeathInfo.bDBNO",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APlayerState) obj).DeathInfoDBNO ? 1 : 0)
+        },
+        new FRepPropertyDef {
+            // 260. EDeathCause, 49 values in the 10.40 SDK (EDeathCause_MAX = 49), so
+            // UEnumProperty::NetSerializeItem writes CeilLogTwo(49) = 6 bits - NOT a full byte.
+            // Getting this width wrong desyncs the rest of the stream, the way a wrong cmd width
+            // always does here.
+            Name = "DeathInfo.DeathCause",
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 49,
+            GetByteValue = obj => (byte) ((APlayerState) obj).DeathInfoCause
+        },
+        new FRepPropertyDef {
+            // 261. Metres between killer and victim, for the elimination feed's "at 42m".
+            Name = "DeathInfo.Distance",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APlayerState) obj).DeathInfoDistance
+        },
+        new FRepPropertyDef {
+            // 262. The flag that makes the whole struct count. Sent LAST of the five in handle
+            // order anyway, since the handle stream is ascending - the client reads the cause and
+            // the distance before it reads the bit that says to believe them.
+            Name = "DeathInfo.bInitialized",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APlayerState) obj).DeathInfoInitialized ? 1 : 0)
+        },
+        // 263, DeathInfo.DeathTags - an FGameplayTagContainer, atomic (one handle carrying its own
+        // NetSerialize). Deliberately NOT sent: this project has no tag-container serializer, and
+        // an empty container is what a death with no special tags looks like anyway.
+        Reserved("DeathInfo.DeathTags", ERepPropertyKind.StructAtomic), // 263
     })).ToArray();
 
     /// <summary>
@@ -1526,8 +1655,311 @@ internal static class NativeRepLayouts {
         return props.ToArray();
     }
 
+    /// <summary>
+    ///     UFortBuildingActorSet (: UFortHealthSet), the attribute set a placed building keeps its
+    ///     health in - see UFortBuildingActorSet's doc comment for why a building's set travels
+    ///     differently from the PlayerState's ten.
+    ///
+    ///     Handles from `python Tools/RepHandles/rep_handles.py UFortHealthSet`: every
+    ///     FFortGameplayAttributeData is nine handles wide, so Health starts at 1 and MaxHealth at
+    ///     10, exactly the nine-wide stride UFortPlayerAttrSet above already depends on. Only the
+    ///     first two of each nine (BaseValue, CurrentValue) are sent; the remaining seven are the
+    ///     clamping bookkeeping, which the client recomputes.
+    /// </summary>
+    private static readonly FRepPropertyDef[] BuildingActorSetProps = BuildBuildingActorSetProps();
+
+    private static FRepPropertyDef[] BuildBuildingActorSetProps() {
+        var props = new List<FRepPropertyDef>();
+        foreach (var name in new[] { "Health", "MaxHealth" }) {
+            foreach (var member in new[] {
+                         "BaseValue", "CurrentValue", "Minimum", "Maximum", "bIsCurrentClamped",
+                         "bIsBaseClamped", "bShouldClampBase", "UnclampedBaseValue", "UnclampedCurrentValue"
+                     }) {
+                props.Add(Reserved($"{name}.{member}"));
+            }
+        }
+
+        // Four leaves per attribute, exactly as the player's health set sends them and for the same
+        // measured reason - see BuildHealthSetProps above for the GetAll output that showed the
+        // unclamped pair left at 0 behind a correct BaseValue/CurrentValue. A building's set is the
+        // same class, so it had the same hole.
+        void Send(int baseHandle, string name, Func<UFortBuildingActorSet, float> get) {
+            float Value(object obj) => get((UFortBuildingActorSet) obj);
+
+            props[baseHandle - 1] = new FRepPropertyDef {
+                Name = $"{name}.BaseValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+            props[baseHandle] = new FRepPropertyDef {
+                Name = $"{name}.CurrentValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+            props[baseHandle + 6] = new FRepPropertyDef {
+                Name = $"{name}.UnclampedBaseValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+            props[baseHandle + 7] = new FRepPropertyDef {
+                Name = $"{name}.UnclampedCurrentValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+        }
+
+        Send(1, "Health", set => set.Health);
+        Send(10, "MaxHealth", set => set.MaxHealth);
+
+        return props.ToArray();
+    }
+
+    /// <summary>
+    ///     UFortHealthSet - the PLAYER's health and shield, handles 1-36, derived with
+    ///     `python Tools/RepHandles/rep_handles.py UFortHealthSet`: Health 1, MaxHealth 10,
+    ///     CurrentShield 19, Shield (the shield CAP - see UFortHealthSet on that name) 28. Nine
+    ///     handles per attribute, of which only BaseValue and CurrentValue are sent.
+    ///
+    ///     Structurally identical to BuildingActorSetProps below, and deliberately so: it is the
+    ///     same class, sent to the same client, through the same sub-object content block. The one
+    ///     difference is WHOSE - this set hangs off the PlayerState, where it is a stably named
+    ///     default subobject the client already built for itself.
+    /// </summary>
+    private static readonly FRepPropertyDef[] HealthSetProps = BuildHealthSetProps();
+
+    private static FRepPropertyDef[] BuildHealthSetProps() {
+        var props = new List<FRepPropertyDef>();
+        foreach (var name in new[] { "Health", "MaxHealth", "CurrentShield", "Shield" }) {
+            foreach (var member in new[] {
+                         "BaseValue", "CurrentValue", "Minimum", "Maximum", "bIsCurrentClamped",
+                         "bIsBaseClamped", "bShouldClampBase", "UnclampedBaseValue", "UnclampedCurrentValue"
+                     }) {
+                props.Add(Reserved($"{name}.{member}"));
+            }
+        }
+
+        // FOUR leaves per attribute travel together, not two. BaseValue/CurrentValue for the same
+        // reason as UFortPlayerAttrSet (a client holding only one would have an attribute whose base
+        // and current disagree) - and UnclampedBaseValue/UnclampedCurrentValue because a live client
+        // proved they matter. `GetAll FortRegenHealthSet Health` on a damaged player reported:
+        //
+        //   bShouldClampBase=True, UnclampedBaseValue=0.000000, UnclampedCurrentValue=0.000000,
+        //   BaseValue=59.260422, CurrentValue=59.260422
+        //
+        // i.e. the damage arrived exactly (59.260422 was the server's value to the last digit - so
+        // this push is NOT where the health-bar problem lives), but the struct was left internally
+        // inconsistent: every healthy attribute in that same dump - the AI proxy's, built by the
+        // client itself - reads UnclampedBaseValue == UnclampedCurrentValue == BaseValue ==
+        // CurrentValue. Fortnite's own FFortGameplayAttributeData keeps the unclamped pair as the
+        // raw value behind the clamp, and it is what bShouldClampBase clamps FROM.
+        void Send(int baseHandle, string name, Func<UFortHealthSet, float> get) {
+            float Value(object obj) => get((UFortHealthSet) obj);
+
+            props[baseHandle - 1] = new FRepPropertyDef {
+                Name = $"{name}.BaseValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+            props[baseHandle] = new FRepPropertyDef {
+                Name = $"{name}.CurrentValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+            // +7 and +8 from the attribute's base handle - the last two of its nine leaves.
+            props[baseHandle + 6] = new FRepPropertyDef {
+                Name = $"{name}.UnclampedBaseValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+            props[baseHandle + 7] = new FRepPropertyDef {
+                Name = $"{name}.UnclampedCurrentValue", Kind = ERepPropertyKind.Float, GetFloatValue = Value
+            };
+        }
+
+        Send(1, "Health", set => set.Health);
+        Send(10, "MaxHealth", set => set.MaxHealth);
+        Send(19, "CurrentShield", set => set.CurrentShield);
+        Send(28, "Shield", set => set.Shield);
+
+        return props.ToArray();
+    }
+
+    /// <summary>
+    ///     ABuildingActor's own replicated properties, handles 16 onward - derived with
+    ///     `python Tools/RepHandles/rep_handles.py ABuildingActor`, and re-checked against
+    ///     ABuildingSMActor (the class a real PBWA_* piece actually derives from) to confirm the
+    ///     numbering is unchanged there: ABuildingActor's own properties come first either way, and
+    ///     ABuildingSMActor's start at 38.
+    ///
+    ///     Only three are sent. ReplicatedBuildingAttributeSet (19) is the object reference that
+    ///     points the client at the health values; bDestroyed (24) is what tells it the piece was
+    ///     destroyed rather than merely going out of relevance - it is Net + RepNotify on the real
+    ///     class, so the client has an OnRep to run off it; bPlayerPlaced (25) marks the piece as
+    ///     player-built. Everything else is reserved to hold the handle numbering.
+    ///
+    ///     NOT live-verified yet, and the one thing to reach for first if a health bar does not
+    ///     appear: ReplicatedAbilitySystemComponent (20), left reserved here. The bet this makes is
+    ///     that the client reads a building's health straight off the attribute set it caches in
+    ///     OnRep_BuildingAttributeSet - which is why that RepNotify exists as its own function
+    ///     separate from OnRep_AbilitySystemComponent. If it instead goes through GAS proper
+    ///     (UAbilitySystemComponent::GetNumericAttribute searches SpawnedAttributes, and an empty
+    ///     one reads every attribute as zero - the exact failure that once left walk speed clamped
+    ///     at 1 uu/s, see UFortAttributeSet), then the building needs its own ASC introducing the
+    ///     set, the same way APlayerState's does. That is the next lever, not a rewrite.
+    /// </summary>
+    private static readonly int HealthBarDifficultyRating =
+        int.TryParse(Environment.GetEnvironmentVariable("HEALTH_BAR_DIFFICULTY"), out var rating) ? rating : 1;
+
+    private static readonly FRepPropertyDef[] BuildingActorProps = ActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("OwnerPersistentID", ERepPropertyKind.Int32),                    // 16
+        new() { Name = "InitialOverlappingVehicles", Kind = ERepPropertyKind.EmptyDynamicArray }, // 17
+        Reserved("CurrentBuildingLevel", ERepPropertyKind.Int32),                 // 18
+        new() {
+            // Written only after the sub-object content block carrying the set has gone out on this
+            // same channel, so the reference resolves. See UActorChannel.ReplicateBuildingAttributeSet
+            // for the ordering, and for the MarkPropertyDirty that repairs the case where the
+            // actor's own initial push got here first.
+            Name = "ReplicatedBuildingAttributeSet",                              // 19
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((ABuildingActor) obj).BuildingAttributeSet
+        },
+        new() {
+            // Sent for the same reason handle 19 is, and with the same ordering care: the sub-object
+            // block carrying the component goes out before the actor's own bunch, so this reference
+            // resolves. Without it the attribute set is inert - see ABuildingActor.AbilitySystemComponent.
+            Name = "ReplicatedAbilitySystemComponent",                            // 20
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((ABuildingActor) obj).AbilitySystemComponent
+        },
+        new() {
+            // The ONLY replicated property on the whole class whose name mentions the health bar.
+            // Its siblings that gate the indicator (bUseFortHealthBarIndicator, bSurpressHealthBar)
+            // are Edit-only Blueprint defaults and cannot be sent at all, so this is the single
+            // lever the wire has over the health-bar indicator. Sent non-zero on the chance the
+            // client only builds an indicator for a piece it has been given a rating for; costs one
+            // int32 once per building, and sits well inside the handle range already proven correct
+            // (bDestroyed at 24 works). HEALTH_BAR_DIFFICULTY overrides it without a rebuild.
+            Name = "HealthBarIndicatorDifficultyRating",                          // 21
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = _ => HealthBarDifficultyRating
+        },
+        Reserved("ForceMetadataRelevant"),                                        // 22
+        Reserved("bIsInvulnerable"),                                              // 23
+        new() {
+            Name = "bDestroyed",                                                  // 24
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingActor) obj).bDestroyed ? 1 : 0)
+        },
+        new() {
+            Name = "bPlayerPlaced",                                               // 25
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingActor) obj).bPlayerPlaced ? 1 : 0)
+        },
+        Reserved("bDestroyOnPlayerBuildingPlacement"),                            // 26
+        Reserved("bDoNotBlockBuildings"),                                         // 27
+        Reserved("bForceBlockBuildings"),                                         // 28
+        Reserved("bUseCentroidForBlockBuildingsCheck"),                           // 29
+        Reserved("bInstantDeath"),                                                // 30
+        Reserved("bCollisionBlockedByPawns"),                                     // 31
+        Reserved("bForceReplayRollback"),                                         // 32
+        Reserved("TeamIndex", ERepPropertyKind.ByteEnum),                           // 33
+        Reserved("AssociatedMissionParam", ERepPropertyKind.ObjectRef),           // 34
+        Reserved("OriginatingPlacementActor", ERepPropertyKind.ObjectRef),        // 35
+        Reserved("CustomState", ERepPropertyKind.String),                         // 36
+        Reserved("BaselineScale", ERepPropertyKind.Float),                        // 37
+
+        // ------------------------------------------------------------------ ABuildingSMActor
+        Reserved("TextureData[0]", ERepPropertyKind.ObjectRef),                   // 38
+        Reserved("TextureData[1]", ERepPropertyKind.ObjectRef),                   // 39
+        Reserved("TextureData[2]", ERepPropertyKind.ObjectRef),                   // 40
+        Reserved("TextureData[3]", ERepPropertyKind.ObjectRef),                   // 41
+        Reserved("StaticMesh", ERepPropertyKind.ObjectRef),                       // 42
+        Reserved("AltMeshIdx", ERepPropertyKind.Int32),                           // 43
+        Reserved("ResourceType", ERepPropertyKind.ByteEnum),                      // 44
+        new() {
+            // 45. See ABuildingActor.bMirrored - carries ServerEditBuildingActor's own bMirrored
+            // parameter through to the client for a piece whose edit pattern is left/right-handed.
+            Name = "bMirrored",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingActor) obj).bMirrored ? 1 : 0)
+        },
+        Reserved("bNoCameraCollision"),                                           // 46
+        Reserved("bNoCollision"),                                                 // 47
+        Reserved("bNoPhysicsCollision"),                                          // 48
+        Reserved("bSupportsRepairing"),                                           // 49
+        Reserved("bAttachmentPlacementBlockedFront"),                             // 50
+        Reserved("bHiddenDueToTrapPlacement"),                                    // 51
+        Reserved("bAttachmentPlacementBlockedBack"),                              // 52
+        Reserved("bIsForPreviewing"),                                             // 53
+        new() {
+            Name = "bUnderConstruction",                                          // 54
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingActor) obj).bUnderConstruction ? 1 : 0)
+        },
+        Reserved("bUnderRepair"),                                                 // 55
+        new() {
+            Name = "bIsInitiallyBuilding",                                        // 56
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingActor) obj).bIsInitiallyBuilding ? 1 : 0)
+        },
+        new() {
+            Name = "BuildingAnimation",                                           // 57
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = (int) EBuildingAnim.EBA_MAX,
+            GetByteValue = obj => (byte) ((ABuildingActor) obj).BuildingAnimation
+        },
+        // A building's scale, and the ONLY way a client ever learns a piece is MIRRORED. Round 58
+        // established what mirroring is - real ABuildingSMActor::SetMirrored just forces the sign of
+        // RelativeScale3D.X - and sent that scale in the actor's spawn bunch, which changed nothing:
+        // `ABuildingSMActor` has its own replicated scale with its own RepNotify,
+        // `OnRep_ReplicatedDrawScale3D`, and that is what the client applies to the mesh. A scale sent
+        // only in the spawn bunch is overwritten by whatever this property says, and this property was
+        // `Reserved` - declared, never sent - so every mirrored piece arrived at scale (1,1,1) and drew
+        // the unmirrored half. That is the "preview and result are complementary halves of one stair"
+        // report. bMirrored (handle 45) still goes out too, as the real server does, but it has no
+        // OnRep and drives nothing visual on its own.
+        new() {
+            Name = "ReplicatedDrawScale3D",                                       // 58
+            Kind = ERepPropertyKind.VectorQuantize100,
+            GetVectorValue = obj => ((ABuildingActor) obj).GetActorScale3D()
+        },
+
+        // MinimalReplicationProxy recurses into its four leaves rather than occupying one handle.
+        // PROVEN, not assumed: its TCppStructOps vtable in a real 10.40 memory dump has
+        // HasNetSerializer as `xor al,al; ret` (found via the FStructParams -> NewStructOps ->
+        // vtable route, struct size 0x18 and alignment 8 both matching). This mattered - had it
+        // been NetSerializeNative it would be ONE handle, handles 60-62 would not exist at all, and
+        // writing them would have killed the connection outright the way the weapon handle-36 bug
+        // once did.
+        new() {
+            // NOT a float on the wire despite its single float member - FQuantizedBuildingAttribute
+            // is STRUCT_NetSerializeNative (proven from the client's own CppStructOps vtable) and
+            // writes 16 quantized bits. See ERepPropertyKind.QuantizedBuildingAttribute for the
+            // decoded format and for what sending it as a 32-bit float did to everything after it.
+            Name = "MinimalReplicationProxy.BuildTime",                           // 59
+            Kind = ERepPropertyKind.QuantizedBuildingAttribute,
+            GetFloatValue = obj => ((ABuildingActor) obj).BuildTime
+        },
+        Reserved("MinimalReplicationProxy.RepairTime", ERepPropertyKind.QuantizedBuildingAttribute), // 60
+        new() {
+            Name = "MinimalReplicationProxy.Health",                              // 61
+            Kind = ERepPropertyKind.Int16,
+            GetIntValue = obj => ((ABuildingActor) obj).CurrentHitPoints
+        },
+        new() {
+            Name = "MinimalReplicationProxy.MaxHealth",                           // 62
+            Kind = ERepPropertyKind.Int16,
+            GetIntValue = obj => ((ABuildingActor) obj).MaxHitPoints
+        },
+        Reserved("BuildingReplacementType", ERepPropertyKind.ByteEnum),           // 63
+        new() {
+            // 64 - who has this piece locked into the edit tool right now, or null. See
+            // ABuildingActor.EditingPlayer and NativeRpcHandlers' Server*EditingBuildingActor family.
+            Name = "EditingPlayer",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((ABuildingActor) obj).EditingPlayer
+        },
+        Reserved("DamagerOwner", ERepPropertyKind.ObjectRef),                     // 65
+        Reserved("RelevantBASE", ERepPropertyKind.ObjectRef),                     // 66
+        new() {
+            Name = "ProxyGameplayCueDamagePhysical.ProxyGameplayCueDamagePhysicalMagnitude", // 67
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((ABuildingActor) obj).DamageMagnitude
+        }
+        // 68 is ProxyGameplayCueDamagePhysical.EffectContext, an FGameplayEffectContextHandle -
+        // atomic, format not decoded, deliberately not declared and never written.
+    }).ToArray();
+
     public static readonly FRepLayout PlayerAttrSet = new(PlayerAttrSetProps);
     public static readonly FRepLayout MovementSet = new(MovementSetProps);
+    public static readonly FRepLayout BuildingActorSet = new(BuildingActorSetProps);
+    public static readonly FRepLayout HealthSet = new(HealthSetProps);
 
     public static readonly FRepLayout AbilitySystemComponent = new(AbilitySystemComponentProps);
 
@@ -1543,7 +1975,10 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout Pickup = new(PickupProps);
     public static readonly FRepLayout Weapon = new(WeaponProps);
 
+    public static readonly FRepLayout BuildingActor = new(BuildingActorProps);
+
     public static FRepLayout Get(AActor actor) => actor switch {
+        ABuildingActor => BuildingActor,
         AFortPickup => Pickup,
         AFortWeapon => Weapon,
         AFortInventory => Inventory,

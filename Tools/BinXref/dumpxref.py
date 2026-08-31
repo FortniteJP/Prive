@@ -191,17 +191,62 @@ def cmd_ranges(mem):
 
 
 def cmd_xref(mem, target):
+    _scan_rip_refs(mem, target, {0x8D: "lea"})
+
+
+def cmd_refs(mem, target):
+    """Every rip-relative reference to a VA, not just `lea`.
+
+    `lea` finds code that wants a POINTER to something - a string, a table. It does not find code
+    that READS it, and that gap is not academic: a cached FName is written once by a generated
+    initializer (which does use lea) and then read by its real user with `mov reg,[rip+disp]`, so a
+    lea-only search finds the initializer and nothing else. That dead end cost a whole round of the
+    health-bar investigation before this mode existed.
+    """
+    _scan_rip_refs(mem, target, {0x8D: "lea", 0x8B: "mov r,[m]", 0x89: "mov [m],r", 0x63: "movsxd"})
+
+
+def cmd_calls(mem, target):
+    """Direct `call rel32` sites targeting a VA.
+
+    The counterpart to ptr/refs: a non-virtual call leaves no pointer and no rip-relative operand,
+    only a relative displacement, so neither of the other modes can find who calls a plain native
+    function - which is exactly what a BlueprintImplementableEvent thunk is.
+    """
     import re
-    LEA = re.compile(rb"[\x48\x4C\x49\x4D]\x8D[\x05\x0D\x15\x1D\x25\x2D\x35\x3D]", re.S)
+    # E8 = call rel32, E9 = jmp rel32. The jmp matters: an optimised build tail-calls, so a caller
+    # that does nothing after the call leaves a jmp and no call at all.
+    rx = re.compile(b"[\xe8\xe9]", re.S)
     hits = 0
     for base, data in mem.text_blocks():
-        for m in LEA.finditer(data):
+        for m in rx.finditer(data):
+            o = m.start()
+            if o + 5 > len(data):
+                continue
+            rel = struct.unpack_from("<i", data, o + 1)[0]
+            if base + o + 5 + rel == target:
+                print("%s @ 0x%X" % ("call" if data[o] == 0xE8 else "jmp ", base + o))
+                hits += 1
+    print("%d call site(s)." % hits)
+
+
+def _scan_rip_refs(mem, target, opcodes):
+    import re
+    # REX.W-prefixed, rip-relative (mod=00, rm=101), so modrm is 0x05 + (reg << 3).
+    rex = bytes([0x48, 0x4C, 0x49, 0x4D])
+    modrm = bytes([0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D])
+    pattern = (b"[" + re.escape(rex) + b"][" + re.escape(bytes(sorted(opcodes))) + b"]"
+               b"[" + re.escape(modrm) + b"]")
+    rx = re.compile(pattern, re.S)
+    hits = 0
+    for base, data in mem.text_blocks():
+        for m in rx.finditer(data):
             o = m.start()
             if o + 7 > len(data):
                 continue
             disp = struct.unpack_from("<i", data, o + 3)[0]
             if base + o + 7 + disp == target:
-                print("lea @ 0x%X" % (base + o))
+                print("%s @ 0x%X" % (opcodes[data[o + 1]], base + o))
                 hits += 1
     print("%d xref(s)." % hits)
 
@@ -246,6 +291,10 @@ def main():
         cmd_ranges(mem)
     elif cmd == "ptr":
         cmd_ptr(mem, int(sys.argv[3], 16), int(sys.argv[4]) if len(sys.argv) > 4 else 2)
+    elif cmd == "calls":
+        cmd_calls(mem, int(sys.argv[3], 16))
+    elif cmd == "refs":
+        cmd_refs(mem, int(sys.argv[3], 16))
     elif cmd == "xref":
         cmd_xref(mem, int(sys.argv[3], 16))
     elif cmd == "dis":

@@ -108,6 +108,16 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
             gameState.UpdateServerTimeSeconds();
         }
 
+        // Deferred structural-integrity recheck, the same shape real Fortnite gives it (queued by
+        // ABuildingSMActor::MarkConnectedBuildingsForStructuralIntegrityCheck, paced by
+        // BuildingRetestSupportedByWorldDelay) rather than running inline off each destruction.
+        // Ahead of the NetDriver below so a cascade's channel closes go out on this same tick.
+        BuildingStructuralSupportSystem.Tick(TimeSeconds);
+
+        // Diagnostic only, off unless HEALTH_DEBUG_RAMP=1 - see FortDamageSystem.DebugRamp for the
+        // question it answers.
+        FortDamageSystem.DebugRamp(this, TimeSeconds);
+
         if (NetDriver != null) {
             NetDriver.TickDispatch(deltaTime);
             NetDriver.PostTickDispatch();
@@ -563,6 +573,15 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                         OpenActorChannelFor(ownerConnection, newPlayerController.Pawn.CurrentWeapon);
 
                     OpenActorChannelFor(ownerConnection, newPlayerController.Pawn);
+
+                    // Same cycle as broadcastInfoChannel's Owner above, one property later: PostLogin
+                    // (line 466) already possessed this pawn before pcChannel opened and pushed its
+                    // initial properties, so that first push named AController::Pawn (handle 17) as an
+                    // ObjectRef to an actor with no NetGUID yet - the client reads it NULL and never
+                    // reconsiders. Dirty it now that the pawn's own channel exists, so the next
+                    // ServerReplicateActors tick resends it resolvable.
+                    pcChannel.MarkPropertyDirty("Pawn");
+
                     // See UActorChannel.SendClientRestart's doc comment - without this, a real client
                     // never recognizes it controls this pawn and keeps calling
                     // ServerSetSpectatorLocation forever instead of actually moving.

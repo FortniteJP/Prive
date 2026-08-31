@@ -18,10 +18,23 @@ public class AActor : UObject {
     public FVector Location { get; private set; } = new();
     public FRotator Rotation { get; private set; } = new();
 
+    /// <summary>
+    ///     RelativeScale3D, in the same stand-in-for-the-RootComponent sense as Location/Rotation.
+    ///     Defaults to (1,1,1) because that is what a client that receives no scale in the spawn bunch
+    ///     falls back to (PackageMapClient.cpp's SerializeCompressedInitial), so anything else here has
+    ///     to actually be sent.
+    ///
+    ///     Not cosmetic: a NEGATIVE component is how Fortnite mirrors a building piece. See
+    ///     ABuildingActor.SetMirrored.
+    /// </summary>
+    public FVector Scale3D { get; private set; } = new() { X = 1f, Y = 1f, Z = 1f };
+
     public FVector GetActorLocation() => Location;
     public void SetActorLocation(FVector newLocation) => Location = newLocation;
     public FRotator GetActorRotation() => Rotation;
     public void SetActorRotation(FRotator newRotation) => Rotation = newRotation;
+    public FVector GetActorScale3D() => Scale3D;
+    public void SetActorScale3D(FVector newScale) => Scale3D = newScale;
     
     // TODO: UPROPERTY(BlueprintReadWrite, ReplicatedUsing=OnRep_Instigator, meta=(ExposeOnSpawn=true, AllowPrivateAccess=true), Category=Actor)
     /// <summary>
@@ -155,7 +168,15 @@ public class AActor : UObject {
 
         bActorIsBeingDestroyed = true;
         GetWorld()?.NetDriver?.RemoveNetworkActor(this);
+        Destroyed();
     }
+
+    /// <summary>
+    ///     AActor::Destroyed - the subclass's chance to drop out of whatever server-side registry it
+    ///     put itself in, once per actor no matter which path destroyed it (Destroy's own guard above
+    ///     is what makes that "once"). No-op by default.
+    /// </summary>
+    protected virtual void Destroyed() {}
 
     /// <summary>
     ///     AActor::Owner - wire handle 13, live-probe-confirmed. Replicated as a plain ObjectRef, so

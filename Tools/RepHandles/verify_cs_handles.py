@@ -25,6 +25,10 @@ TABLES = [
     ("PickupProps", ["ActorProps"], "AFortPickupAthena"),
     ("PawnProps", ["ActorProps"], "AFortPlayerPawnAthena"),
     ("WeaponProps", ["ActorProps"], "AFortWeapon"),
+    # A placed piece is really an ABuildingSMActor subclass (PBWA_*_C), but every handle this table
+    # covers belongs to ABuildingActor, which sits above it - checking against the derived class is
+    # the stricter of the two, since it would also catch anything wrongly inserted in between.
+    ("BuildingActorProps", ["ActorProps"], "ABuildingSMActor"),
 ]
 
 ENTRY_RE = re.compile(

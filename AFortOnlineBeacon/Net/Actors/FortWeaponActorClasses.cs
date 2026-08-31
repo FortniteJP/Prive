@@ -167,9 +167,10 @@ internal static partial class FortWeaponActorClasses {
     public static UClass? BuildingActorClassFor(UObject? itemDefinition) {
         if (itemDefinition == null) return null;
         var path = BuildingActorClassTable.GetValueOrDefault(itemDefinition.GetFName().ToString());
-        // Same pattern as ClassFor above: no dedicated C# type for a building actor (this project
-        // never simulates building health/interaction, only needs it to exist, replicate its real
-        // Blueprint Archetype, and sit at the right transform), so a plain AActor stands in.
-        return path == null ? null : GUClassArray.StaticClassForPath<AActor>(path);
+        // Same pattern as ClassFor above - must use the SAME C# type (ABuildingActor) that resolves
+        // this path everywhere else, or the same content path would export as two different NetGUIDs
+        // to the client depending on which lookup found it first (StaticClassForPath is cached per
+        // (Type, path) key - see its own doc comment).
+        return path == null ? null : GUClassArray.StaticClassForPath<ABuildingActor>(path);
     }
 }

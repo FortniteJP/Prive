@@ -25,6 +25,7 @@ public static class FRpcReader {
                 ERpcParamKind.Guid => ReadGuid(bunch),
                 ERpcParamKind.Object => ReadObject(bunch),
                 ERpcParamKind.ObjectPath => ReadObjectPath(bunch),
+                ERpcParamKind.AssetPath => ReadAssetPath(bunch),
                 ERpcParamKind.Float => bunch.ReadFloat(),
                 ERpcParamKind.Vector => FVector.NetSerializeRead(bunch),
                 ERpcParamKind.VectorQuantize10 => FVector.NetSerializeReadQuantized(bunch, 10, 24),
@@ -58,6 +59,17 @@ public static class FRpcReader {
     private static string? ReadObjectPath(FArchive bunch) {
         UPackageMapClient.ReadObjectRef(bunch, out var path);
         return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    /// <summary>
+    ///     See <see cref="ERpcParamKind.AssetPath"/> - the exported path, or, for a reference the
+    ///     client sent back as a bare id, the path this server registered that id against.
+    /// </summary>
+    private static string? ReadAssetPath(FArchive bunch) {
+        var resolved = UPackageMapClient.ReadObjectRef(bunch, out var path);
+        if (!string.IsNullOrEmpty(path)) return path;
+
+        return resolved == null ? null : UAssetRegistry.PathOf(resolved);
     }
 
     /// <summary>Mirrors FFastArraySerializerWriter's GuidToAbcd - four int32s in A/B/C/D order.</summary>

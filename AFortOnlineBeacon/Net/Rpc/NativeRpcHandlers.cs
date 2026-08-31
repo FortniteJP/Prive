@@ -176,6 +176,34 @@ internal static class NativeRpcHandlers {
             }
         ),
 
+        // AFortPlayerController::ServerPlayEmoteItem(const UFortMontageItemDefinitionBase* EmoteAsset)
+        // - the player picking something off the emote wheel. One object-reference parameter, and it
+        // arrives in BOTH of the two shapes an object reference has: a full path export the first
+        // time this client names the asset, and the bare NetGUID the server assigned it every time
+        // after. AssetPath is the kind that copes with both - see its doc comment for the measured
+        // 94.4-then-5.4-byte proof, and for what reading only the path would have cost.
+        //
+        // The path is all the server needs either way. What plays the emote is an ability spec whose
+        // SourceObject is this same asset, and that goes back out as a path export of its own, so the
+        // server is only ever relaying a name it never has to understand. See FortEmoteSystem.
+        ["ServerPlayEmoteItem"] = new FRpcDef(
+            "ServerPlayEmoteItem",
+            new[] { new FRpcParamDef("EmoteAsset", ERpcParamKind.AssetPath) },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+
+                if (values[0] is not string emoteAssetPath) {
+                    Console.WriteLine("NativeRpcHandlers: ServerPlayEmoteItem named no asset this server can " +
+                                      "identify (no path export), ignoring");
+                    return;
+                }
+
+                Console.WriteLine($"NativeRpcHandlers: ServerPlayEmoteItem on {pc.GetFName()} -> {emoteAssetPath}");
+                FortEmoteSystem.PlayEmoteItem(pc, emoteAssetPath);
+            },
+            expectsFullDecode: true
+        ),
+
         // AFortPlayerController::ServerCreateBuildingActor(FCreateBuildingActorData) - the RPC that
         // places a building piece, and now fully decoded: the client sends the exact, already
         // grid-snapped transform its own ghost was standing on, and a real server uses it verbatim
@@ -202,16 +230,6 @@ internal static class NativeRpcHandlers {
                 var world = pc.GetWorld();
                 if (world == null) return;
 
-                // A real placement has been observed sending this RPC twice back to back for what
-                // the player experiences as one confirm; without this each send spawns its own
-                // building actor on top of the last one. See APawn.LastBuildingPlaceKey.
-                var placeKey = $"{buildData.BuildLoc},{buildData.BuildRot.Yaw}";
-                if (placeKey == pawn.LastBuildingPlaceKey) {
-                    Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - same transform as the " +
-                                      $"last placement for this pawn ({placeKey}), ignoring (duplicate send)");
-                    return;
-                }
-
                 // Which piece, in descending order of how much the source actually knows:
                 //
                 //  1. BuildingClassHandle, via the measured table - the ONLY signal that tracks a
@@ -228,7 +246,7 @@ internal static class NativeRpcHandlers {
 
                 if (buildingClass == null) {
                     buildingClass = pawn.SelectedBuildingActorClassPath is { } selectedPath
-                        ? GUClassArray.StaticClassForPath<AActor>(selectedPath)
+                        ? GUClassArray.StaticClassForPath<ABuildingActor>(selectedPath)
                         : FortWeaponActorClasses.BuildingActorClassFor(pawn.CurrentWeapon?.WeaponData);
 
                     Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - BuildingClassHandle " +
@@ -252,20 +270,42 @@ internal static class NativeRpcHandlers {
                 var placeAt = buildData.BuildLoc;
                 var buildYaw = buildData.BuildRot.Yaw;
 
+                // A real placement has been observed sending this RPC twice back to back for what the
+                // player experiences as one confirm; without this each send spawns its own building
+                // actor on top of the last one.
+                //
+                // The test is "is a piece of this KIND standing there right now", not "was the last
+                // thing this pawn placed here". Remembering the last transform (which is what this
+                // used to do) never expired: destroy a piece and the slot stayed permanently
+                // unbuildable. Asking the support grid instead rejects the genuine double-send just
+                // as well - the first of the two has already registered by the time the second
+                // arrives - while a destroyed piece unregisters immediately and frees the slot.
+                //
+                // It runs HERE, after the class is resolved, and not before it: the kind of piece is
+                // part of the test, and it is only known once the class is. Matching on the
+                // transform alone rejected a roof placed over a floor on the same tile - see
+                // BuildingStructuralSupportSystem.IsOccupied for the whole failure.
+                var placeKey = $"{placeAt},{buildYaw}";
+                var placeType = ABuildingActor.BuildingTypeFromClassPath(buildingClass.NativePackagePath);
+                if (BuildingStructuralSupportSystem.IsOccupied(placeAt, buildYaw, placeType)) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - a {placeType} is already " +
+                                      $"standing at {placeKey}, ignoring (duplicate send)");
+                    return;
+                }
+
                 // Escape hatch (toggle via SKIP_BUILDING_SPAWN=1): log the decoded placement without
                 // spawning anything, leaving the client's own locally-predicted ghost uncorrected.
                 // Originally the only way to see where the client really wanted the piece, back when
                 // the RPC's parameters could not be decoded; now just a way to watch placements go
                 // by without building up world state.
                 if (Environment.GetEnvironmentVariable("SKIP_BUILDING_SPAWN") == "1") {
-                    pawn.LastBuildingPlaceKey = placeKey;
                     Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - SKIP_BUILDING_SPAWN=1, " +
                                       $"not spawning (class would have been {buildingClass.NativePackagePath}, " +
                                       $"{buildData})");
                     return;
                 }
 
-                var building = world.SpawnActor<AActor>(buildingClass, new FActorSpawnParameters {
+                var building = world.SpawnActor<ABuildingActor>(buildingClass, new FActorSpawnParameters {
                     ObjectFlags = EObjectFlags.RF_Transient
                 });
                 if (building == null) return;
@@ -273,8 +313,20 @@ internal static class NativeRpcHandlers {
                 building.SetRole(ENetRole.ROLE_Authority);
                 building.SetActorLocation(placeAt);
                 building.SetActorRotation(new FRotator { Yaw = buildYaw });
+                building.SetMirrored(buildData.bMirrored);
                 building.SetReplicates(true);
-                pawn.LastBuildingPlaceKey = placeKey;
+
+                // HP/material/slot kind and the structural-support grid - see ABuildingActor and
+                // BuildingStructuralSupportSystem's doc comments for what these feed. Register only
+                // once the transform is set: the grid buckets on the piece's placed location.
+                building.InitializeFromClass(buildingClass);
+
+                // The fixed reference every future edit of this piece computes against - see
+                // ABuildingActor.AnchorLocation/AnchorYaw. Set here, at the ONE point a piece's slot
+                // is genuinely chosen, and carried forward unchanged by ServerEditBuildingActor.
+                building.SetAnchor(placeAt, buildYaw);
+
+                BuildingStructuralSupportSystem.Register(building);
 
                 // A real server's own ServerCreateBuildingActor hook deducts a flat 10 units of
                 // whatever resource the spawned class costs (confirmed independently: matches
@@ -297,6 +349,256 @@ internal static class NativeRpcHandlers {
 
                 Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - spawned {buildingClass.NativePackagePath} " +
                                   $"at {buildData}");
+            }
+        ),
+
+        // AFortPlayerController::ServerBeginEditingBuildingActor(ABuildingSMActor* BuildingActorToEdit)
+        // - the player aiming at a placed piece and pressing Edit. A real (injected) server's own
+        // hook (Project-Reboot-3.0's ServerBeginEditingBuildingActorHook) does exactly three things,
+        // none of which need the native engine to do: equip the EditTool item (already granted at
+        // spawn - see AGameModeBase), point that tool's EditActor at the target so its OnRep raises
+        // the client's edit UI, and lock the piece to this player via EditingPlayer so a second
+        // player can't edit it out from under the first. All three are ordinary property pushes in
+        // this project - see AFortWeapon.EditActor and ABuildingActor.EditingPlayer.
+        ["ServerBeginEditingBuildingActor"] = new FRpcDef(
+            "ServerBeginEditingBuildingActor",
+            new[] { new FRpcParamDef("BuildingActorToEdit", ERpcParamKind.Object) },
+            (actor, values) => {
+                if (actor is not APlayerController { Pawn: { } pawn, PlayerState: { } playerState } pc) return;
+
+                if (values[0] is not ABuildingActor building) {
+                    Console.WriteLine("NativeRpcHandlers: ServerBeginEditingBuildingActor named no building actor this server can resolve, ignoring");
+                    return;
+                }
+
+                if (!building.bPlayerPlaced || building.bDestroyed) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerBeginEditingBuildingActor on {building.GetFName()} - not a live player-placed piece, ignoring");
+                    return;
+                }
+
+                if (building.EditingPlayer != null && !ReferenceEquals(building.EditingPlayer, playerState)) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerBeginEditingBuildingActor on {building.GetFName()} - " +
+                                      $"already locked to {building.EditingPlayer.GetFName()}, ignoring");
+                    return;
+                }
+
+                if (pc.WorldInventory is not { } inventory) return;
+
+                var editToolDef = UAssetRegistry.GetOrCreate("/Game/Items/Weapons/BuildingTools/EditTool.EditTool");
+                var editToolItem = inventory.Inventory.Items.FirstOrDefault(item => item.ItemDefinition == editToolDef);
+                if (editToolItem == null) {
+                    Console.WriteLine("NativeRpcHandlers: ServerBeginEditingBuildingActor - no EditTool in this player's inventory, ignoring");
+                    return;
+                }
+
+                pawn.EquipInventoryItem(editToolItem);
+                if (pawn.CurrentWeapon is { } editTool) editTool.EditActor = building;
+
+                building.SetEditingPlayer(playerState);
+                Console.WriteLine($"NativeRpcHandlers: ServerBeginEditingBuildingActor - {playerState.GetFName()} began editing {building.GetFName()}");
+            }
+        ),
+
+        // AFortPlayerController::ServerEditBuildingActor(ABuildingSMActor* BuildingActorToEdit,
+        // TSubclassOf<ABuildingSMActor> NewBuildingClass, uint8 RotationIterations, bool bMirrored) -
+        // the player confirming an edit pattern. NewBuildingClass is a class the CLIENT already
+        // resolved (which real Wall/Door/Window/etc. variant the chosen pattern means) and this
+        // server never assigned a NetGUID to, so - exactly like ServerSetPlayerBuildableClass's
+        // BuildableClass - it always arrives as an unresolvable path export; ObjectPath keeps the
+        // path instead of discarding it.
+        //
+        // bMirrored IS applied (Round 44): it replicates straight through to the new piece's own
+        // bMirrored (wire handle 45, see ABuildingActor.bMirrored) - that property already existed,
+        // reserved and unsent, for exactly this.
+        //
+        // RotationIterations -> yaw offset is applied to EVERY family as of Round 56, including Stairs
+        // and Pillar for the first time (Round 47/49/50 had added Wall, then Roof, then Floor one live
+        // test at a time; that gate existed only to contain a rotation whose position half was wrong,
+        // and the position half is now read from the game's own constants). RotationIterations is a
+        // DELTA from the piece's current rotation - Round 52 had made it absolute, measured from a
+        // fixed per-piece anchor, to stop a drift that turned out to be entirely in the position
+        // maths; Round 57 put it back once stairs produced a test that could tell the two apart. See
+        // the comment on targetYaw below.
+        //
+        // The PIVOT, separately, is Round 56's fix, and it is no longer inferred from anything: a
+        // building pivot is a cell EDGE midpoint, and ABuildingActor's own BaseLocToPivotOffset /
+        // CentroidOffset - read out of all 132 building CDOs in the client memory dump - say exactly
+        // where. What must stay still across an edit is the piece's CENTROID; see the comment on
+        // placeAt below, which also records why Round 53 (pin the pivot) and Round 55 (rotate about a
+        // cell centre derived from the wrong local axis) both moved the body instead of holding it.
+        //
+        // Separately, Round 52 fixed WHY Floor's own round trip broke even once Round 51's type gate
+        // started reading oldBuilding.BuildingType: a floor's "raise one corner" class - PBWA_W1_BalconyI, seen
+        // directly in a live capture - contains neither "Floor" nor anything else
+        // BuildingTypeFromClassPath recognises, so InitializeFromClass classified IT as None the
+        // moment it was spawned as an edit result, and the NEXT edit (editing back to plain Floor)
+        // inherited that wrong classification from oldBuilding.BuildingType and silently skipped
+        // rotation. ABuildingActor.OverrideBuildingType now forces the ORIGINAL type through on every
+        // edit-spawn rather than trusting the new class's name a second time - editing never changes
+        // the base slot kind, so there is nothing left to re-derive.
+        //
+        // AnchorLocation/AnchorYaw are no longer what the transform is computed from, but they are
+        // still carried forward and logged: they are the only record of where a piece's slot started,
+        // which is what makes a drift visible at a glance if one ever comes back.
+        //
+        // "Replace" here means what it does for a weapon swap (APawn.EquipInventoryItem): destroy the
+        // old actor outright and spawn a fresh one, rather than MarkDestroyed()'s flag-then-defer
+        // dance - an edit is not a kill, and should not play the crumble animation MarkDestroyed
+        // drives (EBA_Destruction). Old actor first, so BuildingStructuralSupportSystem never sees
+        // both registered in the same cell at once (Destroy -> ABuildingActor.Destroyed -> Unregister
+        // runs synchronously, before the new actor is spawned or registered).
+        ["ServerEditBuildingActor"] = new FRpcDef(
+            "ServerEditBuildingActor",
+            new[] {
+                new FRpcParamDef("BuildingActorToEdit", ERpcParamKind.Object),
+                new FRpcParamDef("NewBuildingClass", ERpcParamKind.ObjectPath),
+                new FRpcParamDef("RotationIterations", ERpcParamKind.Byte),
+                new FRpcParamDef("bMirrored", ERpcParamKind.Bool)
+            },
+            (actor, values) => {
+                if (actor is not APlayerController { Pawn: { } pawn, PlayerState: { } playerState } pc) return;
+
+                if (values[0] is not ABuildingActor oldBuilding) {
+                    Console.WriteLine("NativeRpcHandlers: ServerEditBuildingActor named no building actor this server can resolve, ignoring");
+                    return;
+                }
+
+                if (values[1] is not string newClassPath) {
+                    Console.WriteLine("NativeRpcHandlers: ServerEditBuildingActor named no resolvable NewBuildingClass path, ignoring");
+                    return;
+                }
+
+                if (oldBuilding.bDestroyed || !ReferenceEquals(oldBuilding.EditingPlayer, playerState)) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerEditBuildingActor on {oldBuilding.GetFName()} - " +
+                                      "not this player's edit lock, ignoring");
+                    return;
+                }
+
+                var world = pc.GetWorld();
+                if (world == null) return;
+
+                var newClass = GUClassArray.StaticClassForPath<ABuildingActor>(newClassPath);
+                if (newClass == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerEditBuildingActor - '{newClassPath}' is not a known building class, ignoring");
+                    return;
+                }
+
+                var rotationIterations = values[2] as byte? ?? 0;
+                var bMirrored = values[3] as bool? ?? false;
+
+                // Editing never changes the base slot kind - a Floor edits into Floor variants, never
+                // a Wall - so the type and the anchor both come from the piece already on hand, not
+                // re-derived from the new class in any way. See ABuildingActor.OverrideBuildingType and
+                // AnchorLocation/AnchorYaw for why each of these specifically has to be carried forward
+                // rather than recomputed.
+                var editedType = oldBuilding.BuildingType;
+                var currentLocation = oldBuilding.GetActorLocation();
+                var currentYaw = oldBuilding.GetActorRotation().Yaw;
+
+                // Round 56 drops the per-type gate that Round 45-50 built up one live test at a time.
+                // That gate only ever existed to contain the damage from a rotation whose POSITION
+                // half was wrong; with the pivot maths read from the game's own constants below,
+                // rotating is correct for every family, and RotationIterations=0 is an exact identity
+                // in all of them anyway. Stairs and Pillar rotate for the first time here - the client
+                // has always sent them RotationIterations 1/2/3 (visible throughout the capture logs)
+                // and this server has always thrown it away.
+                //
+                // Normalised because it is otherwise cumulative in the LOG only - anchorYaw 180 plus
+                // two iterations printed as "Yaw=360", which is correct but unreadable next to the
+                // -90 it should be compared against.
+                // Round 57: RotationIterations counts from the piece's CURRENT rotation, not from a
+                // fixed per-piece anchor. Round 52 introduced the anchor to kill a drift that was
+                // really in the position maths, and every test since then hid the difference: the
+                // user's own test pattern is base -> variant -> base, and on the base piece the
+                // current yaw IS the anchor yaw, so both models agree. Stairs finally separated them,
+                // because a stair is edited variant -> variant, staying rotated the whole time:
+                // the capture shows StairW -> StairW with RotationIterations=2 sent THREE TIMES IN A
+                // ROW, then 3 and 1 alternating. Anchor-relative makes all three of those land on the
+                // same yaw - the ramp visibly refuses to turn, which is the report - while
+                // current-relative reads them as the player flipping the ramp back and forth, which is
+                // what repeating an edit is for. (The symmetric pieces hid it too: a plain Floor or a
+                // RoofC looks identical at any yaw.)
+                //
+                // Nothing can accumulate any more the way Round 52 feared, and not because a fixed
+                // reference forbids it: the transform below preserves the centroid EXACTLY
+                // (placeAt + Rotate(C, targetYaw) == centroid by construction, with the rotation
+                // rounded to exact 0/+-1), so a chain of a hundred edits leaves the piece's body
+                // where the first one put it.
+                var targetYaw = NormalizeYaw(currentYaw + rotationIterations * 90f);
+                var placeRot = new FRotator { Yaw = targetYaw };
+
+                // A building pivot is NOT the centre of the piece - it is a cell-EDGE midpoint 256 out
+                // along the piece's local -Y (ABuildingActor::BaseLocToPivotOffset, read from the real
+                // CDOs; see FBuildingSupportCellIndex). Rotate an actor about a point that is not its
+                // own centre and the BODY swings a half-tile arc somewhere else, so holding the pivot
+                // still across a yaw change is precisely what MAKES the piece appear to move. Round 53
+                // pinning the pivot could therefore never have worked, and Round 55 rotating about a
+                // cell centre derived from the wrong local axis moved the body just as far.
+                //
+                // What has to stay still is the piece's CENTROID, and that one rule covers every
+                // family without a special case, because ABuildingActor::CentroidOffset differs
+                // between them exactly where the geometry does:
+                //
+                //   * Floor/Roof/Stair/Pillar - CentroidOffset cancels BaseLocToPivotOffset, so the
+                //     centroid IS the cell centre. Holding it still holds the CELL still, which is what
+                //     picking a different corner of the same 2x2 pattern has to do. The pivot itself
+                //     moves between the cell's four edge midpoints, as it must.
+                //   * Wall - CentroidOffset has no horizontal part, so the centroid is the pivot, out
+                //     on the cell edge where a wall lives. Holding it still means A WALL NEVER MOVES
+                //     AT ALL, whatever RotationIterations says - it turns in place on its own edge.
+                //     That is the bug the live capture caught: walls DO send RotationIterations 2
+                //     (Solid -> Brace, Solid -> ArchwayLargeSupport), and Round 55 was swinging them a
+                //     full 512 onto the far edge of the cell.
+                //
+                // RotationIterations=0 is an exact identity for every family, so an unrotated edit
+                // still returns the anchor bit-for-bit.
+                var centroid = FBuildingSupportCellIndex.CentroidOf(currentLocation, currentYaw, editedType);
+                var placeAt = FBuildingSupportCellIndex.PivotForCentroid(centroid, targetYaw, editedType);
+
+                oldBuilding.SetEditingPlayer(null);
+                oldBuilding.Destroy();
+
+                var building = world.SpawnActor<ABuildingActor>(newClass, new FActorSpawnParameters {
+                    ObjectFlags = EObjectFlags.RF_Transient
+                });
+                if (building == null) return;
+
+                building.SetRole(ENetRole.ROLE_Authority);
+                building.SetActorLocation(placeAt);
+                building.SetActorRotation(placeRot);
+                building.SetMirrored(bMirrored);
+                building.SetReplicates(true);
+                building.InitializeFromClass(newClass);
+                building.OverrideBuildingType(editedType);
+                building.SetAnchor(oldBuilding.AnchorLocation, oldBuilding.AnchorYaw);
+                BuildingStructuralSupportSystem.Register(building);
+
+                if (pawn.CurrentWeapon is { } editTool) editTool.EditActor = null;
+
+                Console.WriteLine($"NativeRpcHandlers: ServerEditBuildingActor - replaced {oldBuilding.GetFName()} with " +
+                                  $"{newClass.NativePackagePath} ({editedType}) at {placeAt} Yaw={placeRot.Yaw} " +
+                                  $"(RotationIterations={rotationIterations}, from={currentLocation}/{currentYaw}, " +
+                                  $"centroid={centroid}, base={FBuildingSupportCellIndex.BaseLocationOf(placeAt, targetYaw)}), " +
+                                  $"bMirrored={bMirrored}");
+            }
+        ),
+
+        // AFortPlayerController::ServerEndEditingBuildingActor(ABuildingSMActor* BuildingActorToStopEditing)
+        // - the player backing out of edit mode without confirming a pattern (moving the crosshair
+        // off the piece, swapping weapons). Only undoes what ServerBeginEditingBuildingActor set up;
+        // it does not touch the piece's shape.
+        ["ServerEndEditingBuildingActor"] = new FRpcDef(
+            "ServerEndEditingBuildingActor",
+            new[] { new FRpcParamDef("BuildingActorToStopEditing", ERpcParamKind.Object) },
+            (actor, values) => {
+                if (actor is not APlayerController { Pawn: { } pawn, PlayerState: { } playerState }) return;
+                if (values[0] is not ABuildingActor building) return;
+                if (!ReferenceEquals(building.EditingPlayer, playerState)) return;
+
+                building.SetEditingPlayer(null);
+                if (pawn.CurrentWeapon is { } editTool) editTool.EditActor = null;
+
+                Console.WriteLine($"NativeRpcHandlers: ServerEndEditingBuildingActor - {playerState.GetFName()} stopped editing {building.GetFName()}");
             }
         ),
 
@@ -342,7 +644,13 @@ internal static class NativeRpcHandlers {
     /// <summary>Slightly above the pawn's origin so the item is not half-buried in the ground.</summary>
     private const float TossHeight = 40.0f;
 
-    private static void SpawnDroppedPickup(APlayerController pc, FFortItemEntry item, int count) {
+    /// <summary>
+    ///     internal rather than private since Round 47: FortHarvestResources.Grant calls this
+    ///     directly for a resource stack that has no more room (drop the overflow instead of
+    ///     discarding it) - the exact same "put it on the ground as a real pickup" mechanism an
+    ///     inventory drop already uses, not a second implementation of it.
+    /// </summary>
+    internal static void SpawnDroppedPickup(APlayerController pc, FFortItemEntry item, int count) {
         var world = pc.GetWorld();
         if (world == null) return;
 
@@ -511,6 +819,11 @@ internal static class NativeRpcHandlers {
                 if (actor is APawn trackedPawn && actor.GetWorld()?.NetDriver is { } driver) {
                     trackedPawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
                     trackedPawn.TrackMoveFlags(values[3] as byte? ?? 0, values[6] as byte? ?? 0);
+                    // Fall damage. Only this move variant carries a location AND a movement mode -
+                    // the based ServerMove* variants below are decoded as a timestamp-only prefix -
+                    // and a falling character is by definition not based on anything, so this is
+                    // where a fall is visible.
+                    trackedPawn.TrackFallDamage(clientLoc, values[6] as byte? ?? 0);
                 }
 
                 var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
@@ -638,6 +951,31 @@ internal static class NativeRpcHandlers {
             }
         ),
 
+        // The two ways a client tells the server an ability it was running has finished.
+        // UAbilitySystemComponent::ReplicateEndOrCancelAbility picks between them for any
+        // LocalPredicted or ServerInitiated ability, and takes the CLIENT branch whenever the
+        // ability's owner is not the authority - so an emote, which the SERVER starts, is still
+        // ended by the client. A live Project-Reboot-3.0 capture shows exactly that: a
+        // ServerCancelAbility [12.1 bytes] immediately before the client logs
+        // "GAB_Emote_Generic_C EndAbility".
+        //
+        // Declared to the FIRST PARAMETER AND NO FURTHER, the same way ServerSetReplicatedTargetData
+        // is. What follows is an FGameplayAbilityActivationInfo, an ordinary (non-NetSerialize)
+        // struct that RepLayout walks member by member - decodable in principle, but nothing here
+        // reads it, so deriving its layout would only be a chance to get it wrong. Stopping is free:
+        // UActorChannel.ReadContentBlockFields resynchronises to the field's own declared bit count.
+        // (Which is also why neither is marked ExpectsFullDecode - leftover bits are expected.)
+        ["ServerCancelAbility"] = new FRpcDef(
+            "ServerCancelAbility",
+            new[] { new FRpcParamDef("AbilityToCancel", ERpcParamKind.Int32) },
+            (actor, values) => OnAbilityEndReported(actor, values[0], "ServerCancelAbility")
+        ),
+        ["ServerEndAbility"] = new FRpcDef(
+            "ServerEndAbility",
+            new[] { new FRpcParamDef("AbilityToEnd", ERpcParamKind.Int32) },
+            (actor, values) => OnAbilityEndReported(actor, values[0], "ServerEndAbility")
+        ),
+
         // The client reporting where a shot went - one per bullet, and the only honest "a round
         // left the barrel" signal this server has. Real Fortnite spends ammo through the ability's
         // cost GameplayEffect, which needs ability instances to run; nothing here can run one, and
@@ -698,6 +1036,39 @@ internal static class NativeRpcHandlers {
     ///     only reported - but it is now READ, which it was not before, and that is what any damage,
     ///     harvesting or hit-marker work needs first.
     /// </summary>
+    /// <summary>
+    ///     One ability the client says it has finished, from either ServerEndAbility or
+    ///     ServerCancelAbility. Both arrive on the ability system COMPONENT, so the actor here is the
+    ///     PlayerState that owns it, not the controller.
+    ///
+    ///     Only the emote acts on this so far. A spec this server granted but does not track (a
+    ///     weapon's fire ability, jump, sprint) simply ends client-side and is left alone: real UE
+    ///     would run the ability instance's EndAbility, and there is no instance here to end.
+    /// </summary>
+    /// <summary>
+    ///     A yaw folded back into (-180, 180]. Only cosmetic - an FRotator serialises the same either
+    ///     way - but a chain of edits otherwise prints "Yaw=360" or "Yaw=630" in the log, which is
+    ///     impossible to compare against the -90 the anchor is recorded at.
+    /// </summary>
+    private static float NormalizeYaw(float yaw) {
+        var wrapped = yaw % 360f;
+        if (wrapped > 180f) wrapped -= 360f;
+        if (wrapped <= -180f) wrapped += 360f;
+        return wrapped;
+    }
+
+    private static void OnAbilityEndReported(AActor actor, object? handleValue, string source) {
+        if (handleValue is not int handle) return;
+        if (actor is not APlayerState playerState) return;
+        if (playerState.GetOwningController() is not APlayerController pc) return;
+
+        if (NetDebugLog.VerboseEnabled) {
+            Console.WriteLine($"NativeRpcHandlers: {source} on {actor.GetFName()} Handle={handle}");
+        }
+
+        FortEmoteSystem.OnAbilityEnded(pc, handle, $"the client sent {source}");
+    }
+
     private static void OnShotReported(AActor actor, object? handleValue,
                                        FGameplayAbilityTargetDataHandle? targetData, string source) {
         ReportTargetData(actor, targetData, source);
@@ -781,25 +1152,421 @@ internal static class NativeRpcHandlers {
                                   $"physMaterial='{hit.PhysMaterialPath}' item={hit.Item} face={hit.FaceIndex}");
             }
 
-            Harvest(actor, hit);
+            // A hit's Actor only ever resolves to a real object when the thing hit has its own
+            // NetGUID - true for a placed building (this server spawned it and replicated it) but
+            // essentially never true for map geometry (a tree, a rock - see FHitResult's own doc
+            // comment on why ActorPath is the fallback for everything else). That is exactly the
+            // split needed here: a building takes HP damage and can bring its neighbours down with
+            // it, scenery just harvests.
+            //
+            // bPlayerPlaced:true is required, not just "is ABuildingActor" - DamageLevelActor's own
+            // stand-in for a piece of LEVEL geometry is an ABuildingActor too (see there for why),
+            // and once it has a NetGUID a client names it directly on every later hit exactly like a
+            // real building. Without this guard that second hit lands here instead of in
+            // DamageLevelActor, whose ApplyDamage/MarkDestroyed the stand-in expects - and reaching
+            // BuildingStructuralSupportSystem's cascade/Destroy() through THIS branch crashed outright
+            // the first time it was tried live: the stand-in's outer chain is UAssetRegistry's
+            // synthetic Package/World/Level objects, none of which carry a UClass, and
+            // AActor.Destroy -> GetWorld -> GetLevel -> GetTypedOuter -> IsA NREs walking it
+            // (UObjectBaseUtility.IsA now null-guards that too, but the real fix is not reaching
+            // Destroy() on this object at all).
+            if (hit.Actor is ABuildingActor { bPlayerPlaced: true } building) {
+                // Weak spots on a player-placed piece, not just level-actor scenery (Round 46) - the
+                // detection (IsWeakspotHit) and the reveal/relocate latch (ShouldSpawnWeakSpot/
+                // ResetWeakSpot) were never level-actor-specific, they just hadn't been wired in here
+                // yet. Same sequence DamageLevelActor already uses: reset (this hit consumed the
+                // current marker) before checking whether it's time to reveal the next one.
+                if (actor is APlayerState weakSpotInstigator) {
+                    if (IsWeakspotHit(hit)) building.ResetWeakSpot();
+
+                    if (weakSpotInstigator.GetOwningPawn()?.GetWorld() is { } world
+                        && building.ShouldSpawnWeakSpot(world.TimeSeconds, WeakSpotRevealDelaySeconds)) {
+                        SpawnWeakSpot(weakSpotInstigator, building, hit);
+                    }
+                }
+
+                var damage = DamageFor(hit);
+                var wasKilled = building.CurrentHitPoints <= damage;
+                BuildingStructuralSupportSystem.ApplyDamage(building, damage);
+                ReportDamagedBuilding(actor, building, wasKilled, IsWeakspotHit(hit));
+                continue;
+            }
+
+            // A hit on another PLAYER. Reachable for the same reason a hit on a building is: the
+            // pawn is an actor this server spawned and replicated, so it has a NetGUID and the
+            // client's FHitResult names it by that rather than by a path.
+            //
+            // The client's word is taken at face value here, exactly as it is for buildings - no
+            // re-trace, no range check, no line of sight. That is a cheat surface and a knowing one;
+            // the honest fix is a server-side trace, which needs collision geometry this project
+            // does not have (only the baked terrain heightmap, see TerrainHeightMap).
+            if (hit.Actor is APawn victimPawn) {
+                DamagePlayer(actor as APlayerState, victimPawn);
+                continue;
+            }
+
+            var damagedLevelActor = (ABuildingActor?) null;
+            var bFelledThisHit = DestructibleSceneryEnabled && DamageLevelActor(actor, hit, out damagedLevelActor);
+
+            Harvest(actor, hit, bFelledThisHit, damagedLevelActor);
         }
     }
 
     /// <summary>
+    ///     Per-hit damage, boosted for a weak-spot hit (Round 36's `IsWeakspotHit`) - real Fortnite
+    ///     rewards aiming for the weak spot with more than just bonus resources, and this project had
+    ///     no way to model that until the weak-spot detection itself existed. `WeakspotDamageMultiplier`
+    ///     is NOT ground truth, same footing as `FellingBonusMultiplier`/`WeakspotBonusMultiplier` -
+    ///     only the WEAK-SPOT DETECTION (`IsWeakspotHit`) is derived from the real PAK data; how much
+    ///     extra damage/resources it's worth is a placeholder throughout this file.
+    /// </summary>
+    private static int DamageFor(FHitResult hit) =>
+        IsWeakspotHit(hit) ? BuildingDamagePerHit * WeakspotDamageMultiplier : BuildingDamagePerHit;
+
+    /// <summary>See DamageFor. Placeholder, like FellingBonusMultiplier/WeakspotBonusMultiplier.</summary>
+    private const int WeakspotDamageMultiplier = 3;
+
+    /// <summary>DESTRUCTIBLE_SCENERY=1 gates <see cref="DamageLevelActor"/> - see there for what it does and why it defaults off.</summary>
+    private static bool DestructibleSceneryEnabled =>
+        Environment.GetEnvironmentVariable("DESTRUCTIBLE_SCENERY") == "1";
+
+    /// <summary>
+    ///     Round 29's live experiment (see [[afortonlinebeacon-status]]): does a real client accept a
+    ///     server-opened channel for an actor it already loaded from the LEVEL, the way it does for
+    ///     one this server spawned? A map prop's FHitResult never resolves to an object (this server
+    ///     never gave it a NetGUID), only to <see cref="FHitResult.ActorPath"/> - the exact exported
+    ///     path the client itself sent, which is by construction the one string the client's own
+    ///     package map already knows how to resolve back to that actor.
+    ///
+    ///     <see cref="UAssetRegistry.GetOrCreateSubObject{T}"/> turns that path into a stably-named
+    ///     (RF_WasLoaded) <see cref="ABuildingActor"/> stand-in - the same mechanism already used for
+    ///     AGameModeBase's WorldManager reference, just with an AActor leaf instead of a plain UObject
+    ///     so it can go through a real actor channel. Reusing ABuildingActor rather than inventing a
+    ///     new type means bDestroyed/BuildingAnimation (NativeRepLayouts, UActorChannel) and the
+    ///     UNetDriver per-tick diff walk all apply unmodified - see that class and
+    ///     UPackageMapClient.SerializeNewActor's `if (!netGuid.IsDynamic()) return;` early-out, which
+    ///     is what should make the channel-open header carry ONLY the identity and none of a dynamic
+    ///     spawn's class/location/rotation, exactly as a real net-startup actor's does.
+    ///
+    ///     Registering via UNetDriver.AddNetworkActor (rather than opening a channel by hand here) is
+    ///     deliberate: OpenChannelsForNewlyRelevantActors already opens a channel for anything new in
+    ///     NetworkObjectList on its own very next tick, and the same per-tick walk that already
+    ///     replicates ABuildingActor property changes for player builds picks this instance up too -
+    ///     nothing about that path needs to know its actor came from a hit rather than
+    ///     ServerCreateBuildingActor. No BuildingStructuralSupportSystem.Register call and no Destroy()
+    ///     - a broken piece of level geometry does not cascade and, unlike a player-placed piece, is
+    ///     not expected to vanish, only to switch to its destroyed look.
+    ///
+    ///     Called on EVERY hit that reaches here, not just the first: once the stand-in has a
+    ///     NetGUID, a live client stops re-exporting ActorPath and names it directly instead (see
+    ///     UAssetRegistry's own doc comment on an emote asset's second reference for the identical
+    ///     behaviour), so hit.Actor resolves on later hits and the caller routes those here too -
+    ///     see the dispatch loop's bPlayerPlaced:true guard on the ABuildingActor branch above.
+    ///     MarkAsLevelActor() is what keeps that guard correctly excluding this stand-in every time.
+    ///
+    ///     UNTESTED against a live client - the whole point of turning this on is to find out.
+    ///
+    ///     Returns true on the ONE hit that actually broke the piece - the caller uses that to pay a
+    ///     felling bonus, see <see cref="Harvest"/>. <paramref name="levelActorOut"/> comes back set
+    ///     whenever a stand-in was actually touched (destroyed or not), so <see cref="Harvest"/> can
+    ///     send the same damaged-resource popup a player-placed building already gets.
+    /// </summary>
+    private static bool DamageLevelActor(AActor actor, FHitResult hit, out ABuildingActor? levelActorOut) {
+        levelActorOut = null;
+
+        if (actor is not APlayerState playerState) return false;
+        if (playerState.GetOwningPawn()?.GetWorld() is not { } world) return false;
+        if (world.NetDriver is not { } netDriver) return false;
+
+        ABuildingActor levelActor;
+        if (hit.Actor is ABuildingActor resolved) {
+            levelActor = resolved;
+        } else {
+            if (hit.ActorPath.Length == 0) return false;
+
+            // Round 37 tried refusing only UE's auto-generated actor-label shape
+            // (LooksLikeEngineDefaultActorLabel - "StaticMeshActor17", no level-designer name) and it
+            // was not enough: "S_Elevation_Ground_Z_127" - a HAND-NAMED prop, no different in shape
+            // from Tree_0839 or Car_KCar4 - crashed the client the same way, and the client's own log
+            // named its real class too: FortStaticMeshActor, same as StaticMeshActor17. So an
+            // actor's NAME simply does not predict its class; something that actually tracks class
+            // identity is needed instead.
+            //
+            // FortHarvestResources.StemYields is exactly that, already built and already proven: it
+            // is generated by Tools/HarvestTable from real CDOs, and a stem only ever lands in it
+            // because ITS CLASS's CDO carries BuildingResourceAmountOverride - a property that only
+            // exists on ABuildingSMActor. A stem the harvest table does not recognise is therefore a
+            // class this project has no evidence is building-shaped, which is precisely the
+            // uncertainty that crashed the client twice now. Gating on it means DamageLevelActor only
+            // ever runs against a class independently confirmed, from the PAK itself, to be an
+            // ABuildingSMActor - not a guess about the actor's NAME.
+            //
+            // The real cost: a genuinely destructible prop that yields NO resource
+            // (bAllowResourceDrop=false on its CDO, per Erbium's OnDamageServer) will not break
+            // either, since it never entered StemYields in the first place. Under-covering
+            // destructibility is the acceptable failure here; disconnecting the client is not.
+            if (FortHarvestResources.ResolveHit(hit.ActorPath) == null) return false;
+
+            try {
+                levelActor = UAssetRegistry.GetOrCreateSubObject<ABuildingActor>(hit.ActorPath);
+            } catch (Exception ex) {
+                Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY could not turn '{hit.ActorPath}' " +
+                                  $"into a level-actor path - {ex.Message}");
+                return false;
+            }
+        }
+
+        levelActor.MarkAsLevelActor();
+        levelActorOut = levelActor;
+
+        if (!netDriver.NetworkObjectList.Contains(levelActor)) {
+            levelActor.SetReplicates(true);
+            netDriver.AddNetworkActor(levelActor);
+            Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY registered level actor " +
+                              $"'{hit.ActorPath}' for replication - its channel opens on the next tick");
+        }
+
+        // This hit landed on the marker that's currently up (Round 36's PhysMaterial detection) -
+        // that marker is spent. Reset before the ShouldSpawnWeakSpot check below so a replacement
+        // starts revealing again immediately, the same way the very first one did - real Fortnite
+        // relocates the weak spot once it's struck rather than leaving one in place all match.
+        if (IsWeakspotHit(hit)) levelActor.ResetWeakSpot();
+
+        if (levelActor.ShouldSpawnWeakSpot(world.TimeSeconds, WeakSpotRevealDelaySeconds)) {
+            SpawnWeakSpot(playerState, levelActor, hit);
+        }
+
+        if (!levelActor.ApplyDamage(DamageFor(hit)) || !levelActor.MarkDestroyed()) return false;
+
+        Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY marked '{hit.ActorPath}' destroyed " +
+                          $"({levelActor.CurrentHitPoints}/{levelActor.MaxHitPoints} HP)");
+        return true;
+    }
+
+    /// <summary>
+    ///     How long after a piece's first hit (or after its last marker was struck - see
+    ///     ABuildingActor.ResetWeakSpot) its weak-spot marker appears.
+    ///
+    ///     Round 39 sent this at 3.0f and the RPC itself worked perfectly - the client's own log shows
+    ///     it actually spawning `WeakSpot_C`, identical to a real ProjectReboot3.0 capture. What was
+    ///     wrong: at BuildingDamagePerHit=40 against DefaultHitPoints=200, any piece dies in exactly 5
+    ///     hits, which at ordinary swing speed took barely longer than 3 seconds - so the marker kept
+    ///     spawning on the SAME hit that destroyed the piece and was never actually seen. Round 40
+    ///     lowered this to 1.0f, which fixed visibility but meant the marker only ever appeared from
+    ///     the SECOND hit onward (first hit merely starts the clock) - not what a live test expected.
+    ///     0f makes it appear on the piece's very FIRST hit, and - combined with ResetWeakSpot - on
+    ///     the very same hit that consumes the previous one, matching real Fortnite's "always exactly
+    ///     one marker up somewhere on the piece" feel far more closely than an authentic multi-second
+    ///     delay would on a piece this cheap to destroy. See ABuildingActor.BaseHitPointsFor for why
+    ///     the HP side of this tradeoff is still a placeholder.
+    /// </summary>
+    private const float WeakSpotRevealDelaySeconds = 0.0f;
+
+    /// <summary>
+    ///     Sends ClientSpawnWeakSpotOnBuildingActor to the instigator only - a real server would send
+    ///     it to every connection that can see the piece (ActiveWeakSpots is per-PlayerController),
+    ///     but this project only ever has the one player to test with. Uses the TRIGGERING hit's own
+    ///     impact point/normal as the marker's position, since this project has no collision geometry
+    ///     to pick a point on the mesh surface the way a real server presumably does - see
+    ///     UActorChannel.SendClientSpawnWeakSpotOnBuildingActor for the wire encoding and how
+    ///     confident that part is.
+    ///
+    ///     Shared by both hit-dispatch branches: originally DESTRUCTIBLE_SCENERY-only (Round 36-41),
+    ///     now also called for a player-placed piece (the dispatch loop's `bPlayerPlaced:true` branch,
+    ///     Round 46) - <see cref="ABuildingActor"/>'s own ShouldSpawnWeakSpot/ResetWeakSpot latch is
+    ///     not level-actor-specific, it just went unused for a player build until now.
+    /// </summary>
+    private static void SpawnWeakSpot(APlayerState playerState, ABuildingActor building, FHitResult hit) {
+        if (playerState.GetOwningController() is not APlayerController pc) return;
+        var connection = pc.GetWorld()?.NetDriver?.ClientConnections
+            .FirstOrDefault(candidate => candidate.PlayerController == pc);
+
+        if (connection?.FindActorChannel(pc) is not { } pcChannel) return;
+
+        pcChannel.SendClientSpawnWeakSpotOnBuildingActor(building, hit.ImpactNormal, hit.ImpactPoint);
+        Console.WriteLine($"NativeRpcHandlers: spawned a weak spot on '{building.GetFName()}' at {hit.ImpactPoint}");
+    }
+
+    /// <summary>
+    ///     Per-hit building damage. Like <see cref="ABuildingActor.BaseHitPointsFor"/>, NOT read off a
+    ///     real weapon stat row (WeaponStatHandle -&gt; a DataTable this project does not parse) - a
+    ///     flat placeholder, pickaxe-sized, so a wall visibly comes down over several hits rather
+    ///     than in one. Neither the per-weapon damage nor the pickaxe/gun split real Fortnite makes
+    ///     (guns do less damage to builds than harvesting tools) is modelled; when they are, this is
+    ///     the constant that becomes a lookup off the instigator's CurrentWeapon.
+    /// </summary>
+    private const int BuildingDamagePerHit = 40;
+
+    /// <summary>
+    ///     Tells the player who landed the hit that they hit this building - the HUD half of building
+    ///     damage, which is local to the instigator and does NOT come from replicated actor state.
+    ///     See UActorChannel.SendClientReportDamagedResourceBuilding.
+    ///
+    ///     PotentialResourceCount is 0 because a player-built piece yields nothing when broken (only
+    ///     map scenery does); the parameter still has to be sent, since only bools may be omitted.
+    /// </summary>
+    private static void ReportDamagedBuilding(AActor actor, ABuildingActor building, bool bDestroyed, bool bJustHitWeakspot) {
+        if (actor is not APlayerState playerState) return;
+        if (playerState.GetOwningController() is not APlayerController pc) return;
+        // UNetConnection::PlayerController is the back-link; there is no GetNetConnection() on the
+        // controller itself in this project, so the owning connection is found by matching it.
+        var connection = pc.GetWorld()?.NetDriver?.ClientConnections
+            .FirstOrDefault(candidate => candidate.PlayerController == pc);
+
+        if (connection?.FindActorChannel(pc) is not { } pcChannel) return;
+
+        pcChannel.SendClientReportDamagedResourceBuilding(
+            building, ResourceTypeFor(building.Material), resourceCount: 0, bDestroyed, bJustHitWeakspot);
+    }
+
+    /// <summary>
+    ///     Whether a hit landed on a weak spot - DERIVED, not guessed: the PAK ships four physical
+    ///     material assets in `/Game/FortressPhysicalMaterials/`, one plain per resource
+    ///     (Wood/Stone/Metal, already seen live on ordinary hits as `hit.PhysMaterialPath`) and one
+    ///     "WeakSpot" variant each (`WeakSpot`, `WeakSpot_Wood`, `WeakSpot_Stone`, `WeakSpot_Metal`) -
+    ///     confirming FortGameData's WeakSpotWoodPhysicalMaterial/WeakSpotStonePhysicalMaterial/
+    ///     WeakSpotMetalPhysicalMaterial properties (found via Explore agent research into raider3.5's
+    ///     SDK dumps) name exactly these. A weak spot is therefore a specific FACE of the mesh painted
+    ///     with the WeakSpot material rather than the ordinary one - so the client reporting a
+    ///     PhysMaterial from this set IS the weak-spot signal, with no bone/component guessing
+    ///     required. `bIsWeakspot = Damage == 100.0f` (seen in several other reimplemented servers in
+    ///     PriveDev, all flagged in their own comments as guesses, two of four shipped disabled) was
+    ///     deliberately NOT used - it is not derived from anything.
+    /// </summary>
+    private static bool IsWeakspotHit(FHitResult hit) =>
+        hit.PhysMaterialPath.Contains("/FortressPhysicalMaterials/WeakSpot", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    ///     One reported hit on a player. Damage, and the elimination if it was the last one, both
+    ///     live in <see cref="FortDamageSystem"/>; this only works out who shot whom with what.
+    ///
+    ///     The death cause is taken from the weapon the shooter is holding rather than from the hit,
+    ///     which is what the elimination feed's icon is driven by. It is a coarse mapping - see
+    ///     <see cref="DeathCauseFor"/> - because a precise one needs the weapon stat table.
+    /// </summary>
+    private static void DamagePlayer(APlayerState? instigator, APawn victimPawn) {
+        if (victimPawn.PlayerState is not { } victim) {
+            Console.WriteLine($"NativeRpcHandlers: hit on {victimPawn.GetFName()}, which has no PlayerState - " +
+                              "nothing to damage");
+            return;
+        }
+
+        // Self-inflicted gunfire is not a thing, and a client reporting it would mean the hit
+        // decode is wrong rather than that the player shot themselves.
+        if (ReferenceEquals(victim, instigator)) {
+            Console.WriteLine($"NativeRpcHandlers: {victim.GetFName()} reported hitting THEMSELVES - ignoring; " +
+                              "this points at a bad FHitResult decode, not at anything a client can really do.");
+            return;
+        }
+
+        FortDamageSystem.ApplyDamage(victim, FortDamageSystem.WeaponDamage,
+                                     DeathCauseFor(instigator?.GetOwningPawn()?.CurrentWeapon), instigator);
+    }
+
+    /// <summary>
+    ///     What killed someone, for the elimination feed. Only the pickaxe is told apart with any
+    ///     confidence (it is the one weapon whose class this project already keys on); everything
+    ///     else reports as Rifle, which is what an unspecified gun looks like in the feed.
+    ///
+    ///     A real mapping is per-weapon and comes out of the same stat table the damage numbers do.
+    /// </summary>
+    private static EDeathCause DeathCauseFor(AFortWeapon? weapon) {
+        if (weapon?.WeaponData == null) return EDeathCause.Unspecified;
+
+        var name = weapon.WeaponData.GetFName().ToString();
+        if (name.Contains("Pickaxe", StringComparison.OrdinalIgnoreCase)) return EDeathCause.Melee;
+        if (name.Contains("Shotgun", StringComparison.OrdinalIgnoreCase)) return EDeathCause.Shotgun;
+        if (name.Contains("Sniper", StringComparison.OrdinalIgnoreCase)) return EDeathCause.Sniper;
+        if (name.Contains("Pistol", StringComparison.OrdinalIgnoreCase)) return EDeathCause.Pistol;
+        if (name.Contains("SMG", StringComparison.OrdinalIgnoreCase)) return EDeathCause.SMG;
+
+        return EDeathCause.Rifle;
+    }
+
+    /// <summary>EFortResourceType, whose ordering (Wood=0, Stone=1, Metal=2, Permanite=3, None=4) is the real enum's.</summary>
+    private static byte ResourceTypeFor(EBuildingMaterial material) => material switch {
+        EBuildingMaterial.Wood => 0,
+        EBuildingMaterial.Stone => 1,
+        EBuildingMaterial.Metal => 2,
+        _ => 4
+    };
+
+    /// <summary>
     ///     Pays out whatever the thing that was hit is made of. Every swing at a tree yields, the way
-    ///     it does in the real game - resources are granted per hit as damage is dealt, not in one
-    ///     lump when the tree falls (there is no health model here to fell it with).
+    ///     it does in the real game - resources are granted per hit as damage is dealt, not only in
+    ///     one lump when the tree falls.
     ///
     ///     Any weapon counts, not just the pickaxe. That matches Fortnite, where shooting scenery
     ///     harvests it too, and it costs nothing to allow: the yield comes from what was hit.
     /// </summary>
-    private static void Harvest(AActor actor, FHitResult hit) {
+    /// <param name="bFellingBonus">
+    ///     True on the one hit DamageLevelActor reports as having just broken the piece - see there.
+    ///     Real Fortnite pays substantially more for the hit that fells a tree/rock than for an
+    ///     ordinary chip, which this server had no way to know before DESTRUCTIBLE_SCENERY gave a
+    ///     piece of level geometry an actual HP/destruction state to ask about. FellingBonusMultiplier
+    ///     is NOT ground truth, same as every other number in FortHarvestResources - chosen to make
+    ///     finishing a tree feel like it paid off, pending the real per-material table.
+    /// </param>
+    /// <param name="levelActor">
+    ///     The stand-in DamageLevelActor resolved for this hit, when DESTRUCTIBLE_SCENERY actually
+    ///     touched one - null otherwise (feature off, or the hit didn't resolve to a recognised
+    ///     class). When set, this also sends the SAME damaged-resource popup a player-placed building
+    ///     already gets (see ReportDamagedBuilding) - previously harvesting scenery granted the
+    ///     resource silently with no client-side popup at all.
+    /// </param>
+    private static void Harvest(AActor actor, FHitResult hit, bool bFellingBonus = false, ABuildingActor? levelActor = null) {
         if (actor is not APlayerState playerState) return;
         if (playerState.GetOwningPawn()?.Controller is not APlayerController controller) return;
 
         if (FortHarvestResources.ResolveHit(hit.ActorPath) is not { } yield) return;
 
-        FortHarvestResources.Grant(controller, yield.ItemPath, yield.Amount);
+        // IsWeakspotHit is DERIVED (the four WeakSpot* physical materials the PAK actually ships -
+        // see there); WeakspotBonusMultiplier, like FellingBonusMultiplier, is not - only the
+        // DETECTION is ground truth here, not the payout size.
+        var bJustHitWeakspot = IsWeakspotHit(hit);
+        var multiplier = 1;
+        if (bFellingBonus) multiplier *= FellingBonusMultiplier;
+        if (bJustHitWeakspot) multiplier *= WeakspotBonusMultiplier;
+        var amount = yield.Amount * multiplier;
+
+        FortHarvestResources.Grant(controller, yield.ItemPath, amount);
+
+        if (levelActor != null) {
+            ReportHarvestedScenery(playerState, levelActor, ResourceTypeForItemPath(yield.ItemPath), amount,
+                                   levelActor.bDestroyed, bJustHitWeakspot);
+        }
+    }
+
+    /// <summary>See Harvest's bFellingBonus parameter. Placeholder, like every other harvest amount in this project.</summary>
+    private const int FellingBonusMultiplier = 3;
+
+    /// <summary>Bonus for IsWeakspotHit - detection is derived, this multiplier is not (see IsWeakspotHit).</summary>
+    private const int WeakspotBonusMultiplier = 2;
+
+    /// <summary>EFortResourceType off the item path Harvest already resolved, rather than off a building's Material - a level-actor stand-in never has one (see ABuildingActor.Material's default).</summary>
+    private static byte ResourceTypeForItemPath(string itemPath) {
+        if (itemPath.Contains("WoodItemData", StringComparison.OrdinalIgnoreCase)) return 0;
+        if (itemPath.Contains("StoneItemData", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (itemPath.Contains("MetalItemData", StringComparison.OrdinalIgnoreCase)) return 2;
+        return 4;
+    }
+
+    /// <summary>
+    ///     The scenery counterpart to ReportDamagedBuilding - same RPC, same HUD popup, just for a
+    ///     DamageLevelActor stand-in instead of a player-placed piece, and with the ACTUAL granted
+    ///     amount (bonuses included) rather than the hardcoded 0 a player build always sends (a
+    ///     player-placed piece yields nothing when broken; scenery does, and the popup is supposed to
+    ///     say how much).
+    /// </summary>
+    private static void ReportHarvestedScenery(APlayerState playerState, ABuildingActor levelActor,
+                                               byte resourceType, int amount, bool bDestroyed, bool bJustHitWeakspot) {
+        if (playerState.GetOwningController() is not APlayerController pc) return;
+        var connection = pc.GetWorld()?.NetDriver?.ClientConnections
+            .FirstOrDefault(candidate => candidate.PlayerController == pc);
+
+        if (connection?.FindActorChannel(pc) is not { } pcChannel) return;
+
+        pcChannel.SendClientReportDamagedResourceBuilding(levelActor, resourceType, amount, bDestroyed, bJustHitWeakspot);
     }
 
     /// <summary>

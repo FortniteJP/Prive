@@ -63,6 +63,12 @@ public class GUClassArray {
         // parent, so either class name gives the same field index space (see the component's own
         // doc comment).
         [typeof(UFortAbilitySystemComponent)] = "/Script/FortniteGame.FortAbilitySystemComponentAthena",
+        // A placed building's health attribute set. Native, and it MUST be: unlike the PlayerState's
+        // stably-named sets, this one is created at runtime and so travels as a sub-object content
+        // block carrying its class, which the client has to be able to resolve to construct it - the
+        // same requirement (and the same failure mode when unmet) as the AbilitySystemComponent
+        // above. See UFortBuildingActorSet's own doc comment.
+        [typeof(UFortBuildingActorSet)] = "/Script/FortniteGame.FortBuildingActorSet",
         // Athena's real TimeOfDayManager Blueprint - its CDO carries the SkyboxFog*/day-phase
         // settings, so this is what makes the match look like daytime rather than the native
         // defaults' permanent dark. Override with TODM_CLASS

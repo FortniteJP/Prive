@@ -10,20 +10,6 @@ public class APawn : AActor {
     public FRotator? LastClientViewRotation { get; set; }
 
     /// <summary>
-    ///     The exact transform NativeRpcHandlers.ServerCreateBuildingActor last spawned something at
-    ///     for this pawn, as "X,Y,Z,Yaw" - a duplicate filter, since the client can send this RPC
-    ///     more than once for what is really a single confirm and each send would otherwise become
-    ///     its own building actor stacked on the last one.
-    ///
-    ///     This used to be a 0.3s time debounce, from back when the RPC's parameters could not be
-    ///     decoded and "same placement" was unknowable. Now that FCreateBuildingActorData decodes,
-    ///     the duplicates can be recognised for what they are - byte-identical transforms - which
-    ///     also stops the filter from swallowing the genuinely distinct, genuinely fast placements
-    ///     that turbo building produces well inside 0.3s.
-    /// </summary>
-    public string? LastBuildingPlaceKey { get; set; }
-
-    /// <summary>
     ///     The building actor class path the client's own ServerSetPlayerBuildableClass last named
     ///     (see NativeRpcHandlers - arrives on the pawn's BroadcastRemoteClientInfo, routed here via
     ///     its Owner). Cycling pieces while ALREADY in build mode only ever sends this, never a fresh
@@ -54,6 +40,28 @@ public class APawn : AActor {
     ///     what encodes the real hierarchy.
     /// </summary>
     public AFortWeapon? CurrentWeapon { get; set; }
+
+    /// <summary>
+    ///     AFortPawn::LastReplicatedEmoteExecuted - wire handle 70, an ObjectRef to the emote's own
+    ///     UFortMontageItemDefinitionBase asset (an EID_/SPID_/TOY_ item definition), and RepNotify.
+    ///
+    ///     This is the ONLY part of an emote that anybody other than the emoting player ever sees:
+    ///     the ability that actually plays the montage is granted on the PlayerState's channel,
+    ///     which is owner-only, and confirmed with a client RPC to one connection. See
+    ///     <see cref="FortEmoteSystem"/> for the whole flow and NativeRepLayouts for the handle.
+    ///
+    ///     Null means "not emoting". It is set back to null when the emote ends so that playing the
+    ///     same emote twice in a row is still two changes, and therefore two OnReps.
+    /// </summary>
+    public UObject? LastReplicatedEmoteExecuted { get; set; }
+
+    /// <summary>
+    ///     The FGameplayAbilitySpec handle of the emote ability currently granted to this pawn's
+    ///     player, or 0 for none. Server-side bookkeeping only - it never reaches the wire itself,
+    ///     it is what lets an incoming ServerCancelAbility/ServerEndAbility be recognised as "the
+    ///     emote stopped" rather than as some other ability ending. See <see cref="FortEmoteSystem"/>.
+    /// </summary>
+    public int ActiveEmoteAbilityHandle { get; set; }
 
     /// <summary>
     ///     The part of AFortPawn::EquipWeaponDefinition this server can actually do: spawn the item's
@@ -281,6 +289,80 @@ public class APawn : AActor {
 
         _lastMovementMode = clientMovementMode;
     }
+
+    private static float Env(string name, float fallback) =>
+        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+
+    /// <summary>
+    ///     How far a player may fall for free. 1152 uu is three Fortnite storeys (a wall is 384),
+    ///     which is roughly where the real game starts hurting. FALL_DAMAGE_MIN_DISTANCE overrides.
+    /// </summary>
+    private static readonly float FallDamageMinDistance = Env("FALL_DAMAGE_MIN_DISTANCE", 1152.0f);
+
+    /// <summary>Damage per storey fallen beyond the free distance. FALL_DAMAGE_PER_STOREY overrides.</summary>
+    private static readonly float FallDamagePerStorey = Env("FALL_DAMAGE_PER_STOREY", 10.0f);
+
+    /// <summary>One Fortnite storey, the unit both constants above are expressed in.</summary>
+    private const float StoreyHeight = 384.0f;
+
+    /// <summary>True once this pawn has been seen on the ground at least once - see TrackFallDamage.</summary>
+    private bool _hasBeenGrounded;
+
+    /// <summary>The highest Z reached during the fall currently in progress; null when not falling.</summary>
+    private float? _fallPeakZ;
+
+    /// <summary>
+    ///     Fall damage, worked out from the movement mode and location every client move carries.
+    ///
+    ///     This is the FIRST damage source this server has that needs no second player, which is the
+    ///     whole reason it exists: a solo session cannot shoot anyone, so without it the health and
+    ///     death paths could not be exercised against a real client at all.
+    ///
+    ///     UE computes fall damage from impact VELOCITY, in ACharacter::Landed. Velocity is not
+    ///     replicated to a server that runs no physics of its own, so the height dropped stands in
+    ///     for it - the two agree closely enough under gravity, and the numbers are placeholders
+    ///     regardless (the real curve is in a DataTable, like every other damage value here).
+    ///
+    ///     The first fall of a session is DELIBERATELY exempt. A player spawns in the air and drops
+    ///     onto the terrain, and a drop of unknown height is exactly what this would otherwise
+    ///     charge for - the client would take damage, or die outright, before it had control.
+    ///     Nothing is tracked until the pawn has been seen standing on something once.
+    /// </summary>
+    public void TrackFallDamage(FVector location, byte clientMovementMode) {
+        const byte falling = 3;
+
+        if (clientMovementMode == falling) {
+            // Only the peak matters: a fall that goes up first (a jump, a bounce) is measured from
+            // the top, the same way UE's own impact velocity would be.
+            if (_hasBeenGrounded) _fallPeakZ = MathF.Max(_fallPeakZ ?? location.Z, location.Z);
+            return;
+        }
+
+        _hasBeenGrounded = true;
+
+        if (_fallPeakZ is not { } peak) return;
+        _fallPeakZ = null;
+
+        var dropped = peak - location.Z;
+        if (dropped <= FallDamageMinDistance) return;
+
+        var damage = (dropped - FallDamageMinDistance) / StoreyHeight * FallDamagePerStorey;
+
+        Console.WriteLine($"APawn.TrackFallDamage: {GetFName()} fell {dropped:F0}uu " +
+                          $"({dropped / StoreyHeight:F1} storeys) - {damage:F0} damage");
+
+        FortDamageSystem.ApplyDamage(PlayerState, damage, EDeathCause.FallDamage);
+    }
+
+    /// <summary>
+    ///     AFortPawn::bIsDying - wire handle 47, and the whole of what this server tells a client
+    ///     about a dead pawn today. A plain replicated bool, so there is no width risk in sending
+    ///     it; the client's own death handling runs off it.
+    ///
+    ///     Set by FortDamageSystem.Kill and never cleared - this project has no respawn, and Athena
+    ///     would not respawn a pawn anyway (a dead BR player becomes a spectator).
+    /// </summary>
+    public bool bIsDying { get; set; }
 
     public void SetController(AController? controller) => Controller = controller;
 

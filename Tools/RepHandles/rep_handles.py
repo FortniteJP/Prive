@@ -56,6 +56,13 @@ ATOMIC_STRUCTS = {
     "FRootMotionSource_JumpForce", "FRootMotionSource_MoveToDynamicForce",
     "FRootMotionSource_MoveToForce", "FRootMotionSource_RadialForce",
     "FHitResult",
+    # FortniteGame, and NOT from the source scan (the scan only sees the UE tree, which has no
+    # FortniteGame in it). Proven directly from the real 10.40 client's TCppStructOps vtable:
+    # slot 12 HasNetSerializer is `mov al,1; ret`, and slot 14 reads
+    # `(SerializeInt(0x10000) - 0x8000) * (1/546)`. It wraps exactly one float, so listing it does
+    # not change any handle COUNT - but it changes the wire WIDTH from 32 bits to 16, which is what
+    # actually matters, and it is listed so the model is right for the right reason.
+    "FQuantizedBuildingAttribute",
     "FGameplayAbilityTargetData_ActorArray", "FGameplayAbilityTargetData_LocationInfo",
     "FGameplayAbilityTargetData_SingleTargetHit", "FGameplayAbilityTargetingLocationInfo",
     "FGameplayEffectContext", "FMinimalReplicationTagCountMap", "FNetQuantizeFaceCurve",

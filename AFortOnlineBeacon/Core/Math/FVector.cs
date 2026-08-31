@@ -66,6 +66,44 @@ public class FVector {
     }
 
     /// <summary>
+    ///     Matches SerializeFixedVector&lt;MaxValue, NumBits&gt; on the WRITE side - the send half of
+    ///     <see cref="NetSerializeReadFixed"/>, and nothing like the packed encoding below it: no
+    ///     bit-count header, three flat biased ints of NumBits each.
+    ///
+    ///     FVector_NetQuantizeNormal is 1/16, i.e. three 16-bit fields - the shape an
+    ///     FAthenaBatchedDamageGameplayCues_Shared::Normal and an FHitResult's normals use.
+    /// </summary>
+    public void NetSerializeWriteFixed(FBitWriter ar, int maxValue, int numBits) {
+        WriteFixedCompressedFloat(ar, X, maxValue, numBits);
+        WriteFixedCompressedFloat(ar, Y, maxValue, numBits);
+        WriteFixedCompressedFloat(ar, Z, maxValue, numBits);
+    }
+
+    /// <summary>
+    ///     WriteFixedCompressedFloat&lt;MaxValue, NumBits&gt; (NetSerialization.h:1782). Note the
+    ///     asymmetry with the read: the clamp saturates at MaxDelta = (1&lt;&lt;NumBits)-1 while the
+    ///     value itself is written with SerializeInt(SerIntMax = 1&lt;&lt;NumBits), so the widest
+    ///     legal value is one below the int bound.
+    /// </summary>
+    private static void WriteFixedCompressedFloat(FBitWriter ar, float value, int maxValue, int numBits) {
+        var maxBitValue = (1 << (numBits - 1)) - 1;
+        var bias = 1 << (numBits - 1);
+        var serIntMax = (uint) (1 << numBits);
+        var maxDelta = (uint) ((1 << numBits) - 1);
+
+        // Scaling UP (MaxValue <= MaxBitValue) is the normal case and rounds; scaling down
+        // truncates. Both branches are the engine's, including which one rounds.
+        var scaled = maxValue > maxBitValue
+            ? (int) (value * (maxBitValue / (float) maxValue))
+            : (int) MathF.Round(value * (maxBitValue / maxValue));
+
+        var delta = (uint) (scaled + bias);
+        if (delta > maxDelta) delta = (int) delta > 0 ? maxDelta : 0;
+
+        ar.WriteIntWrapped(delta, serIntMax);
+    }
+
+    /// <summary>
     ///     Matches WritePackedVector&lt;ScaleFactor, MaxBitsPerComponent&gt; (NetSerialization.h) - the
     ///     send half of NetSerializeReadQuantized above, and the encoding
     ///     UPackageMapClient::SerializeNewActor uses for a spawned actor's Location (FVector_NetQuantize10,
@@ -113,6 +151,13 @@ public class FVector {
     /// <summary>Matches FVector::Equals(FVector::ZeroVector, epsilon) - SerializeNewActor's own test.</summary>
     public bool IsNearlyZero(float epsilon = 0.001f) =>
         MathF.Abs(X) <= epsilon && MathF.Abs(Y) <= epsilon && MathF.Abs(Z) <= epsilon;
+
+    /// <summary>
+    ///     Matches FVector::Equals(Other, epsilon). SerializeNewActor tests the scale against
+    ///     (1,1,1) rather than zero, which is what this exists for.
+    /// </summary>
+    public bool EqualsNearly(float x, float y, float z, float epsilon = 0.001f) =>
+        MathF.Abs(X - x) <= epsilon && MathF.Abs(Y - y) <= epsilon && MathF.Abs(Z - z) <= epsilon;
 
     public override string ToString() => $"({X:F2}, {Y:F2}, {Z:F2})";
 }

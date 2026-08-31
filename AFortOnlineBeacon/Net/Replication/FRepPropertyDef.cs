@@ -82,10 +82,43 @@ public enum ERepPropertyKind {
     VectorQuantize10,
 
     /// <summary>
+    ///     FVector_NetQuantize100 - the same packed encoding as
+    ///     <see cref="ERepPropertyKind.VectorQuantize10"/> with a finer scale factor (100/30 rather
+    ///     than 10/24), and atomic for the same reason. `ABuildingSMActor::ReplicatedDrawScale3D` is
+    ///     the one this project sends; see NativeRepLayouts handle 58 for why a building's scale has
+    ///     to travel as a property and not only in its spawn bunch.
+    /// </summary>
+    VectorQuantize100,
+
+    /// <summary>
     ///     A UInt16Property / UInt16 leaf (e.g. FFortItemEntry::OrderIndex) - no NetSerializeItem
     ///     override, so UProperty's default SerializeItem runs: 16 raw little-endian bits.
     /// </summary>
     Int16,
+
+    /// <summary>
+    ///     An FQuantizedBuildingAttribute (FortniteGame) - a struct that IS
+    ///     STRUCT_NetSerializeNative, so it occupies ONE handle and carries a hand-written wire
+    ///     format that is emphatically NOT the 32-bit float its single `Value` member looks like.
+    ///
+    ///     Decoded from the real 10.40 client via the CppStructOps vtable route (slot 12
+    ///     HasNetSerializer is `mov al,1; ret`; slot 14's loading branch reads):
+    ///
+    ///         SerializeInt(&amp;tmp, 0x10000)          -&gt; exactly 16 bits
+    ///         Value = (tmp - 0x8000) * (1.0f/546)
+    ///
+    ///     so writing it is the inverse: round(Value * 546) + 0x8000, in 16 bits. For a power-of-two
+    ///     ValueMax, FBitWriter::SerializeInt is bit-for-bit identical to writing the value LSB-first
+    ///     in CeilLogTwo(ValueMax) bits, which is what this does.
+    ///
+    ///     Getting the WIDTH right is the load-bearing part. Sending this as a plain 32-bit float put
+    ///     16 extra bits into the stream, the client read them as the next property handle, and every
+    ///     property after it in the same push - Health and MaxHealth - never arrived at all, leaving
+    ///     MaxHealth at its class default of 0. A building with 0 max health reads as already
+    ///     destroyed, which is exactly how it presented in-game: the destruction animation firing the
+    ///     instant a piece was placed, and the piece then sitting there transparent.
+    /// </summary>
+    QuantizedBuildingAttribute,
 
     /// <summary>
     ///     A TArray-typed leaf sent as an always-empty array - the minimal, self-terminating

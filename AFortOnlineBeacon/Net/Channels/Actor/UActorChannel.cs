@@ -93,6 +93,16 @@ public class UActorChannel : UChannel {
         },
         APlayerState => new HashSet<string> { "RemoteRole", "Role", "UniqueId", "PlayerNamePrivate", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
             "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]",
+            // The plain-float health mirror (216-219), the second of the two paths a client could be
+            // drawing a health bar from - see NativeRepLayouts for why both are sent. These CHANGE
+            // during a match, so they have to be listed here or the per-tick diff would never
+            // compare them (the same reason AFortPickup.bPickedUp is listed).
+            "CurrentHealth", "MaxHealth", "CurrentShield", "MaxShield",
+            // FDeathInfo (258-262), all default until the player is killed - see
+            // FortDamageSystem.Kill. DeathTags (263) is never sent; there is no tag-container
+            // serializer here and an empty container is what an ordinary death carries anyway.
+            "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
+            "DeathInfo.Distance", "DeathInfo.bInitialized",
             "TeamIndex", "SquadId" },
         // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
@@ -165,7 +175,14 @@ public class UActorChannel : UChannel {
             // Null at spawn and set by ServerExecuteInventoryItem. Listed here because
             // ReplicatedProperties doubles as the set the per-tick diff walks - a property absent
             // from it is never compared, so it could never start being sent later either.
-            "CurrentWeapon"
+            "CurrentWeapon",
+            // False until the player is killed - see FortDamageSystem.Kill. Listed for the same
+            // reason CurrentWeapon is: it only ever changes after the initial burst.
+            "bIsDying",
+            // Null until this player emotes, and back to null when they stop - the only part of an
+            // emote that reaches anybody but the emoter. See APawn.LastReplicatedEmoteExecuted;
+            // listed here for the same reason as the two above.
+            "LastReplicatedEmoteExecuted"
         },
         APlayerController => new HashSet<string> {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
@@ -183,6 +200,42 @@ public class UActorChannel : UChannel {
         // becomes non-default once ServerSetPlayerBuildableClass actually sets it (see
         // NativeRpcHandlers), same as AFortPickup.bPickedUp above.
         AFortBroadcastRemoteClientInfo => new HashSet<string> { "RemoteRole", "Role", "Owner", "bActive" },
+        // A placed building piece. ReplicatedBuildingAttributeSet (handle 19) is what points the
+        // client at the health values it draws a health bar from; bDestroyed (24) is what
+        // distinguishes "this was destroyed" from "this went out of relevance" when the channel
+        // later closes. Both start at their defaults and only ever change afterwards, which is
+        // exactly why they have to be listed HERE too - this set doubles as the per-tick diff's
+        // walk list, so a property missing from it is never compared and could never start being
+        // sent later (same reason AFortPickup.bPickedUp and APawn.CurrentWeapon are listed).
+        ABuildingActor => new HashSet<string> {
+            "RemoteRole", "Role", "ReplicatedBuildingAttributeSet", "HealthBarIndicatorDifficultyRating",
+            // The component the attribute set has to be reachable through before its OnRep can
+            // broadcast anything - see ABuildingActor.AbilitySystemComponent.
+            "ReplicatedAbilitySystemComponent",
+            "bDestroyed", "bPlayerPlaced",
+            // MIRRORING (45 and 58). Both of these had a working getter in NativeRepLayouts and
+            // were never named here, so neither had ever gone out on the wire - which is why three
+            // rounds of increasingly correct mirror code changed nothing on screen. This whitelist
+            // is the gate: a property absent from it is not in the initial burst AND is never
+            // compared by the per-tick diff, so it can never start being sent later either.
+            //
+            // ReplicatedDrawScale3D is the one that actually draws the mirror: real
+            // ABuildingSMActor::SetMirrored only forces the sign of RelativeScale3D.X, and this
+            // property (with its own OnRep_ReplicatedDrawScale3D) is how that scale reaches a
+            // client. bMirrored has no OnRep and changes nothing visual by itself, but a real
+            // server replicates it, so it goes too.
+            "bMirrored", "ReplicatedDrawScale3D",
+            // The build-in and destruction animations (54/56/57) - without BuildingAnimation a piece
+            // just pops in and pops out.
+            "bUnderConstruction", "bIsInitiallyBuilding", "BuildingAnimation",
+            // The compact health path (59/61/62). This, not the attribute set, is what carries a
+            // LIVE health update: it is RepNotify on the actor itself, so the client is told health
+            // changed instead of only finding out next time something re-reads the value.
+            "MinimalReplicationProxy.BuildTime",
+            "MinimalReplicationProxy.Health", "MinimalReplicationProxy.MaxHealth",
+            // The damage cue (67) - see ABuildingActor.OnDamaged.
+            "ProxyGameplayCueDamagePhysical.ProxyGameplayCueDamagePhysicalMagnitude"
+        },
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
 
@@ -254,7 +307,7 @@ public class UActorChannel : UChannel {
             Console.WriteLine($"ReplicateActor: REPLAYOUT_PROBE_HANDLE={probeHandle} on {Actor.GetType().Name} - sending TRUNCATED name probe (RemoteRole anchor + bare handle, no value bits, no terminator) instead of the normal layout");
             HandleProbe.WriteTruncatedNameProbe(payload, Actor, probeHandle);
         } else {
-            NativeRepLayouts.Get(Actor).WriteChangedProperties(payload, Actor, ReplicatedProperties);
+            NativeRepLayouts.Get(Actor).WriteChangedProperties(payload, Actor, InitiallySentProperties);
             WriteCustomDeltaProperties(payload);
         }
 
@@ -291,6 +344,36 @@ public class UActorChannel : UChannel {
 
     private HashSet<string> ReplicatedProperties =>
         _replicatedProperties ??= GetInitialReplicatedProperties(Actor!);
+
+    /// <summary>
+    ///     Of those, the ones the OPEN bunch actually writes - everything except the properties
+    ///     below, whose default already matches what a freshly constructed client-side actor has.
+    ///
+    ///     Real UE does the same thing for a better reason than caution: FRepLayout compares against
+    ///     the archetype at open and only sends what differs, so a default-valued property costs no
+    ///     bits. Here it is also a deliberate narrowing of risk. The join path works and is the most
+    ///     expensive thing in this project to break; a property that can only ever matter later has
+    ///     no business widening the one bunch every session depends on.
+    ///
+    ///     The shadow is still seeded from the FULL set (see the SeedShadowState call), so an
+    ///     unsent default is recorded as "the client has this" and the first tick does not resend it
+    ///     - which is true, because it is the value the client built the actor with.
+    /// </summary>
+    private HashSet<string> InitiallySentProperties =>
+        _initiallySentProperties ??= ReplicatedProperties.Except(NeverSentAtOpen).ToHashSet();
+
+    private HashSet<string>? _initiallySentProperties;
+
+    /// <summary>
+    ///     Properties whose default IS the client's default, and which only ever become interesting
+    ///     once something happens in the match - death, so far. Listed here rather than left out of
+    ///     ReplicatedProperties entirely, because the per-tick diff still has to walk them.
+    /// </summary>
+    private static readonly HashSet<string> NeverSentAtOpen = new() {
+        "bIsDying", "LastReplicatedEmoteExecuted",
+        "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
+        "DeathInfo.Distance", "DeathInfo.bInitialized"
+    };
 
     /// <summary>
     ///     What this channel has already put on the wire, per property name. Stands in for real UE's
@@ -346,6 +429,8 @@ public class UActorChannel : UChannel {
         wroteSomething |= ReplicateAbilitySystemComponent();
         wroteSomething |= ReplicateMovementSet();
         wroteSomething |= ReplicatePlayerAttrSet();
+        wroteSomething |= ReplicateHealthSet();
+        wroteSomething |= ReplicateBuildingAttributeSet();
 
         if (changed.Count == 0) return wroteSomething;
 
@@ -610,7 +695,18 @@ public class UActorChannel : UChannel {
     ///     cannot corrupt the actor's own property stream while this path is new.
     /// </summary>
     private unsafe bool ReplicateAbilitySystemComponent() {
-        if (Connection == null || Actor is not APlayerState { AbilitySystemComponent: { } asc }) return false;
+        if (Connection == null) return false;
+
+        // A building carries its own ASC for exactly one reason - to make its attribute set's
+        // OnRep able to broadcast (see ABuildingActor.AbilitySystemComponent) - but it rides the
+        // wire through the identical sub-object block a PlayerState's does, so the two share this.
+        var asc = Actor switch {
+            APlayerState playerState => playerState.AbilitySystemComponent,
+            ABuildingActor building => building.AbilitySystemComponent,
+            _ => null
+        };
+
+        if (asc == null) return false;
 
         using var payload = new FNetBitWriter(Connection.PackageMap, 256);
 
@@ -628,6 +724,16 @@ public class UActorChannel : UChannel {
             "ActivatableAbilities", fieldPayload =>
                 FFastArraySerializerWriter.WriteDelta(fieldPayload, asc.ActivatableAbilities,
                     BaseStateFor("ActivatableAbilities"), FFastArraySerializerWriter.WriteAbilitySpec));
+
+        // The second fast array on this component. Only sent once something is actually in it -
+        // an empty one has nothing to say, and a bare header would make the client run its whole
+        // PostReceiveCleanup for no reason (see WriteCustomDeltaField's own note).
+        if (asc.ActiveGameplayEffects.Count > 0) {
+            wroteDelta |= WriteCustomDeltaField(payload, NativeClassNetCache.FortAbilitySystemComponentCache,
+                "ActiveGameplayEffects", fieldPayload =>
+                    FFastArraySerializerWriter.WriteDelta(fieldPayload, asc.ActiveGameplayEffects,
+                        BaseStateFor("ActiveGameplayEffects"), FFastArraySerializerWriter.WriteActiveGameplayEffect));
+        }
 
         if (changedNames.Count == 0 && !wroteDelta) return false;
 
@@ -656,8 +762,27 @@ public class UActorChannel : UChannel {
         // Only after the bunch is away, for the same reason ReplicateActorUpdate commits late.
         FRepLayout.CommitShadowState(changed, _ascShadowState);
 
+        // Same repair as handle 19's: a building's own initial push named this component before it
+        // had a NetGUID, so the client read it null and would never reconsider.
+        if (Actor is ABuildingActor && !_sentBuildingAbilitySystem) {
+            _sentBuildingAbilitySystem = true;
+            MarkPropertyDirty("ReplicatedAbilitySystemComponent");
+        }
+
         return true;
     }
+
+    private bool _sentBuildingAbilitySystem;
+
+    /// <summary>
+    ///     Runs the ability-system push out of band, outside the per-tick replication pass. The one
+    ///     caller is <see cref="FortEmoteSystem"/>: an emote grants a spec and then immediately tells
+    ///     the client to activate it, and putting the grant on the wire first spares that a tick.
+    ///
+    ///     Safe to call at any time - it is the same idempotent compare-and-send ReplicateActorUpdate
+    ///     runs, and it sends nothing when nothing changed.
+    /// </summary>
+    public bool FlushAbilitySystemComponent() => ReplicateAbilitySystemComponent();
 
     /// <summary>
     ///     Sends the PlayerState's MovementSet attribute values as a sub-object content block - the
@@ -667,6 +792,73 @@ public class UActorChannel : UChannel {
     ///     client (its log prints WalkSpeed 200, RunSpeed 410), so re-sending them would be noise;
     ///     SpeedMultiplier is the one that never appears there at all.
     /// </summary>
+    /// <summary>
+    ///     Sends a placed building's health attribute set as a sub-object content block - the same
+    ///     framing the AbilitySystemComponent and MovementSet use, and the thing a client needs
+    ///     before it can put a health bar over a piece.
+    ///
+    ///     ORDERING MATTERS HERE. The building's own handle 19
+    ///     (ReplicatedBuildingAttributeSet) is an ObjectRef naming this set, and this project's
+    ///     known hazard is that an ObjectRef written before its target has a NetGUID arrives null
+    ///     and STAYS null, because a property matching the shadow is never reconsidered. Two things
+    ///     keep that from happening: this runs from ReplicateActorUpdate BEFORE the actor's own
+    ///     bunch is written, so WriteContentBlockHeader has already exported the set's GUID by the
+    ///     time handle 19 is serialised; and on the first send it re-dirties handle 19 outright, to
+    ///     cover the case where the channel's initial open push already sent it as null.
+    /// </summary>
+    private unsafe bool ReplicateBuildingAttributeSet() {
+        if (Connection == null || Actor is not ABuildingActor { BuildingAttributeSet: { } attributeSet }) return false;
+
+        var layout = NativeRepLayouts.BuildingActorSet;
+        var changed = layout.CompareProperties(attributeSet, BuildingAttributeSetProperties, _buildingAttrSetShadowState);
+        if (changed.Count == 0) return false;
+
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 128);
+        layout.WriteChangedProperties(payload, attributeSet, changedNames);
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        WriteContentBlockHeader(attributeSet, bunch, hasRepLayout: true);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"ReplicateBuildingAttributeSet: ChIndex={ChIndex} Actor={Actor.GetFName()} " +
+                          $"Health={attributeSet.Health}/{attributeSet.MaxHealth} " +
+                          $"changed=[{string.Join(", ", changedNames)}] numPayloadBits={numPayloadBits}");
+
+        SendBunch(bunch, false);
+        FRepLayout.CommitShadowState(changed, _buildingAttrSetShadowState);
+
+        if (!_sentBuildingAttributeSet) {
+            _sentBuildingAttributeSet = true;
+            MarkPropertyDirty("ReplicatedBuildingAttributeSet");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Health and MaxHealth, four leaves each - the value pair plus the unclamped pair, matched
+    ///     to the player's health set after a live client showed the unclamped half staying at 0.
+    ///     The other five leaves of each attribute are clamp configuration the client owns.
+    /// </summary>
+    private static readonly HashSet<string> BuildingAttributeSetProperties = new() {
+        "Health.BaseValue", "Health.CurrentValue",
+        "Health.UnclampedBaseValue", "Health.UnclampedCurrentValue",
+        "MaxHealth.BaseValue", "MaxHealth.CurrentValue",
+        "MaxHealth.UnclampedBaseValue", "MaxHealth.UnclampedCurrentValue"
+    };
+
+    private readonly Dictionary<string, object?> _buildingAttrSetShadowState = new();
+    private bool _sentBuildingAttributeSet;
+
     private unsafe bool ReplicateMovementSet() {
         if (Connection == null || Actor is not APlayerState { MovementSet: { } movementSet }) return false;
 
@@ -765,6 +957,67 @@ public class UActorChannel : UChannel {
     };
 
     private readonly Dictionary<string, object?> _playerAttrSetShadowState = new();
+
+    /// <summary>
+    ///     The player's health set, sent exactly like the two sets above it.
+    ///
+    ///     This is the first attribute set on the PlayerState whose value CHANGES during a match -
+    ///     stamina and the speeds are pushed once and never move - which makes it the first real
+    ///     test of whether a GAS attribute arriving over the wire drives anything on the HUD. That
+    ///     question is the open one from the building health-bar work: a building's set is this same
+    ///     class at these same handles, and its bar never updates.
+    /// </summary>
+    private unsafe bool ReplicateHealthSet() {
+        if (Connection == null || Actor is not APlayerState { HealthSet: { } healthSet }) return false;
+
+        var layout = NativeRepLayouts.HealthSet;
+        var changed = layout.CompareProperties(healthSet, HealthSetProperties, _healthSetShadowState);
+        if (changed.Count == 0) return false;
+
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 128);
+        layout.WriteChangedProperties(payload, healthSet, changedNames);
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        WriteContentBlockHeader(healthSet, bunch, hasRepLayout: true);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        Console.WriteLine($"ReplicateHealthSet: ChIndex={ChIndex} Health={healthSet.Health}/{healthSet.MaxHealth} " +
+                          $"Shield={healthSet.CurrentShield}/{healthSet.Shield} " +
+                          $"changed=[{string.Join(", ", changedNames)}] numPayloadBits={numPayloadBits}");
+
+        SendBunch(bunch, false);
+        FRepLayout.CommitShadowState(changed, _healthSetShadowState);
+        return true;
+    }
+
+    /// <summary>
+    ///     Health and shield, current and max - four leaves each, not two. The unclamped pair is
+    ///     sent because a live client showed it staying at 0 while BaseValue/CurrentValue carried
+    ///     the real damage, which no correctly-built Fortnite attribute ever looks like; see
+    ///     NativeRepLayouts.BuildHealthSetProps for the GetAll output that measured it. The
+    ///     remaining five leaves of each attribute are clamp configuration the client owns.
+    /// </summary>
+    private static readonly HashSet<string> HealthSetProperties = new() {
+        "Health.BaseValue", "Health.CurrentValue",
+        "Health.UnclampedBaseValue", "Health.UnclampedCurrentValue",
+        "MaxHealth.BaseValue", "MaxHealth.CurrentValue",
+        "MaxHealth.UnclampedBaseValue", "MaxHealth.UnclampedCurrentValue",
+        "CurrentShield.BaseValue", "CurrentShield.CurrentValue",
+        "CurrentShield.UnclampedBaseValue", "CurrentShield.UnclampedCurrentValue",
+        "Shield.BaseValue", "Shield.CurrentValue",
+        "Shield.UnclampedBaseValue", "Shield.UnclampedCurrentValue"
+    };
+
+    private readonly Dictionary<string, object?> _healthSetShadowState = new();
     /// <summary>
     ///     The AbilitySystemComponent properties this server sends. Deliberately just the two links
     ///     that make the component usable - everything else on it is either server bookkeeping or a
@@ -1043,6 +1296,169 @@ public class UActorChannel : UChannel {
     ///     of 0, which is all the client's ReadFieldHeaderAndPayload needs to dispatch the call.
     /// </summary>
     public void SendParameterlessRpc(string fieldName) => SendRpc(fieldName, static _ => {});
+
+    /// <summary>
+    ///     AFortPlayerController::ClientReportDamagedResourceBuilding(ABuildingSMActor*,
+    ///     TEnumAsByte&lt;EFortResourceType&gt;, int32, bool, bool) - how a real server tells the player
+    ///     who just hit a building that they hit it. A working injected server (the Nebula
+    ///     reconstruction's AttemptSpawnResources) calls exactly this on every building hit, computing
+    ///     bDestroyed as `(GetHealth() - ActualDamageDealt) &lt;= 0`.
+    ///
+    ///     Sent to the INSTIGATOR only, which is the point: the damage number and the health bar over
+    ///     a build are local HUD, not replicated actor state. This project spent three rounds pushing
+    ///     replicated health at the problem - the piece's health value does reach the client (the
+    ///     breaking animation on the very same push proves the transport works), it simply is not what
+    ///     the HUD listens to.
+    ///
+    ///     Parameter encoding is FRepLayout::SendPropertiesForRPC: every non-bool parameter is
+    ///     preceded by a "was it sent" bit, bools are the bare value bit with no such prefix. The
+    ///     resource type is a TEnumAsByte, so CeilLogTwo(EFortResourceType_MAX=5) = 3 bits.
+    /// </summary>
+    public unsafe void SendClientReportDamagedResourceBuilding(UObject building, byte resourceType,
+                                                               int resourceCount, bool bDestroyed,
+                                                               bool bJustHitWeakspot) =>
+        SendRpc("ClientReportDamagedResourceBuilding", writer => {
+            writer.WriteBit(true);
+            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, building);
+
+            writer.WriteBit(true);
+            var resourceBits = resourceType;
+            writer.SerializeBits(&resourceBits, 3);
+
+            writer.WriteBit(true);
+            writer.WriteInt32(resourceCount);
+
+            writer.WriteBit(bDestroyed);
+            writer.WriteBit(bJustHitWeakspot);
+        });
+
+    /// <summary>
+    ///     AFortPlayerController::ClientSpawnWeakSpotOnBuildingActor(const FBuildingWeakSpotData&amp;) -
+    ///     the RPC that actually puts the weak-spot marker on screen (bJustHitWeakspot above only
+    ///     reports that an EXISTING one was hit; nothing shows without this one firing first). See
+    ///     NativeRpcHandlers.DamageLevelActor for when this is called - a few seconds after the
+    ///     piece's first recorded hit, an approximation of Fortnite's own timed reveal - and for why
+    ///     the position/normal are the triggering hit's own impact point rather than a real point
+    ///     picked on the mesh surface (this project has no collision geometry to pick one from).
+    ///
+    ///     FBuildingWeakSpotData (raider3.5's SDK dump, ScriptStruct FortniteGame.BuildingWeakSpotData,
+    ///     0x38 bytes) is a plain reflected struct, not a NetSerialize-native one: ParentBuilding
+    ///     (TWeakObjectPtr&lt;ABuildingSMActor&gt;, offset 0x0), Normal (FVector_NetQuantizeNormal, 0x8),
+    ///     Position (FVector_NetQuantize10, 0x14), then 0x18 bytes of engine bookkeeping with no
+    ///     reflected properties (not serialized) - so the wire shape is the same "one presence bit per
+    ///     parameter, then its members in offset order" rule BatchedDamageCues above already proved,
+    ///     with the one struct parameter's three real members following its single presence bit.
+    ///
+    ///     UNTESTED against a live client - this RPC has never been sent by this project before.
+    /// </summary>
+    public void SendClientSpawnWeakSpotOnBuildingActor(UObject parentBuilding, FVector normal, FVector position) =>
+        SendRpc("ClientSpawnWeakSpotOnBuildingActor", writer => {
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+            writer.WriteBit(true); // ReplicatedWeakSpotData parameter present
+            packageMap.SerializeObject(writer, parentBuilding);
+            normal.NetSerializeWriteFixed(writer, 1, 16);        // FVector_NetQuantizeNormal
+            position.NetSerializeWriteQuantized(writer, 10, 24); // FVector_NetQuantize10
+        });
+
+    /// <summary>
+    ///     AFortPawn::NetMulticast_InvokeGameplayCueExecuted_FromSpec - the RPC a real 10.40 server
+    ///     sends in the SAME PACKET as the attribute update whenever a player's health changes.
+    ///
+    ///     Ground truth, one storm-damage tick from the reference capture (client log 20:01:17.440):
+    ///
+    ///         Channel 12 (the PAWN):       Received RPC: NetMulticast_InvokeGameplayCueExecuted_FromSpec [93.0 bytes]
+    ///                                      resolving Default__GE_OutsideSafeZoneDamage_C, the PlayerState and the pawn
+    ///         Channel 4 (the PLAYERSTATE): Unreliable Bunch, Size 3.6+50.1   &lt;- the health set update
+    ///
+    ///     This server sent the second half and not the first, which is the whole of why its health
+    ///     bar never redrew: the value arrived (a live `GetAll` proved it matches to the last digit)
+    ///     but nothing told the HUD a gameplay effect had happened, and the bar's only inputs take a
+    ///     modification REASON.
+    ///
+    ///     Encoding is the same rule the working BatchedDamageCues RPC established - one presence
+    ///     bit per non-bool PARAMETER, then that parameter's flattened leaves. See
+    ///     FGameplayEffectSpecForRPC for the spec's own layout and for why the effect context goes
+    ///     out as invalid.
+    ///
+    ///     PredictionKey's presence bit is 0 on purpose: a server-originated cue has no client
+    ///     prediction to reconcile, so the parameter is identical to its default and a real server
+    ///     would not send it either (FRepLayout::SendPropertiesForRPC only sets the bit when the
+    ///     value differs from the default).
+    /// </summary>
+    public unsafe void SendNetMulticastInvokeGameplayCueExecutedFromSpec(FGameplayEffectSpecForRPC spec) =>
+        SendRpc("NetMulticast_InvokeGameplayCueExecuted_FromSpec", writer => {
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+            writer.WriteBit(true);                       // the Spec parameter is present
+            packageMap.SerializeObject(writer, spec.Def);
+
+            // A dynamic array inside an RPC parameter is a raw uint16 count followed by each
+            // element's own leaves - SerializeProperties_DynamicArray_r, RepLayout.cpp:5240. Not a
+            // packed int, and no per-element header.
+            var count = (ushort) spec.ModifiedAttributes.Count;
+            writer.WriteUInt16(count);
+            foreach (var modified in spec.ModifiedAttributes) {
+                writer.WriteString(modified.AttributeName);
+                packageMap.SerializeObject(writer, modified.Attribute);
+                packageMap.SerializeObject(writer, modified.AttributeOwner);
+                writer.WriteFloat(modified.TotalMagnitude);
+            }
+
+            writer.WriteBit(false);   // FGameplayEffectContextHandle: ValidData = 0
+            writer.WriteBit(true);    // AggregatedSourceTags: IsEmpty = 1
+            writer.WriteBit(true);    // AggregatedTargetTags: IsEmpty = 1
+            writer.WriteFloat(spec.Level);
+            writer.WriteFloat(spec.AbilityLevel);
+
+            writer.WriteBit(false);   // PredictionKey: absent, i.e. left at its default
+        });
+
+    /// <summary>
+    ///     AFortPawn::NetMulticast_Athena_BatchedDamageCues - Athena's damage cue, and the only
+    ///     damage-notification RPC in the whole net cache. This is what puts a damage number over a
+    ///     hit, flashes the screen, and tells the client a hit was fatal or landed on shield.
+    ///
+    ///     GROUND TRUTH, not derivation: a real Project-Reboot-3.0 session sends this 78 times
+    ///     (`PriveDev/PacketProxy/FortniteGame_PR3.0Client.log`, "Received RPC:
+    ///     NetMulticast_Athena_BatchedDamageCues", 54.9 bytes each, always on a PlayerPawn_Athena_C).
+    ///     Note what that same capture does NOT show: no such RPC during the 30 storm-damage ticks
+    ///     on the local player, so this is the weapon-hit cue, not the health-bar's update channel.
+    ///
+    ///     Parameter encoding follows the rule proven by ClientReportDamagedResourceBuilding - one
+    ///     presence bit per non-bool PARAMETER, then that parameter's flattened leaves with no
+    ///     further bits (FRepLayout::SendPropertiesForRPC calls SerializeProperties_r over the
+    ///     parameter's whole Cmd range; RepLayout.cpp:5658). Both parameters here are structs, so
+    ///     each gets ONE presence bit followed by its members in offset order, with the RepSkip ones
+    ///     (NonPlayerLocation/NonPlayerNormal/NonPlayerMagnitude/bIsValid) absent entirely.
+    /// </summary>
+    public void SendNetMulticastAthenaBatchedDamageCues(FVector location, FVector normal, float magnitude,
+                                                        bool bIsFatal, bool bIsShield, bool bIsShieldDestroyed,
+                                                        bool bIsBallistic, UObject? hitActor) =>
+        SendRpc("NetMulticast_Athena_BatchedDamageCues", writer => {
+            // FAthenaBatchedDamageGameplayCues_Shared
+            writer.WriteBit(true);
+            location.NetSerializeWriteQuantized(writer, 10, 24);  // FVector_NetQuantize10
+            normal.NetSerializeWriteFixed(writer, 1, 16);         // FVector_NetQuantizeNormal
+            writer.WriteFloat(magnitude);
+            writer.WriteBit(false);                // bWeaponActivate - the weapon's own cue, not ours
+            writer.WriteBit(bIsFatal);
+            writer.WriteBit(false);                // bIsCritical - no headshot model here
+            writer.WriteBit(bIsShield);
+            writer.WriteBit(bIsShieldDestroyed);
+            writer.WriteBit(false);                // bIsShieldApplied - that is healing, not damage
+            writer.WriteBit(bIsBallistic);
+            writer.WriteBit(false);                // NonPlayerbIsFatal    | the "non-player" half is
+            writer.WriteBit(false);                // NonPlayerbIsCritical | for the same batch's
+                                                   //                        scenery hit, which this
+                                                   //                        server never batches in
+
+            // FAthenaBatchedDamageGameplayCues_NonShared
+            writer.WriteBit(true);
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+            packageMap.SerializeObject(writer, hitActor);
+            packageMap.SerializeObject(writer, null);  // NonPlayerHitActor
+        });
 
     /// <summary>
     ///     A server-&gt;client RPC taking one int32 - APlayerController::ClientCapBandwidth(int32 Cap),

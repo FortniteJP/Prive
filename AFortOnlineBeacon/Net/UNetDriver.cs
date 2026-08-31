@@ -146,6 +146,18 @@ public abstract class UNetDriver {
     }
 
     /// <summary>
+    ///     Pushes <paramref name="owner"/>'s AbilitySystemComponent on every connection that has a
+    ///     channel for it, without waiting for the next replication tick. Here for the same reason
+    ///     SendClientActivateAbilitySucceed is: a component's traffic rides its owner's channel, and
+    ///     only the driver knows which connections have one. See UActorChannel.FlushAbilitySystemComponent.
+    /// </summary>
+    public void FlushAbilitySystemComponent(AActor owner) {
+        foreach (var connection in ClientConnections) {
+            connection.FindActorChannel(owner)?.FlushAbilitySystemComponent();
+        }
+    }
+
+    /// <summary>
     ///     Set false by REP_TICK=0. The escape hatch for the whole ongoing-replication pass: before
     ///     this existed every channel was a one-shot burst at join, so turning it off restores
     ///     exactly the behaviour every earlier live test ran against.

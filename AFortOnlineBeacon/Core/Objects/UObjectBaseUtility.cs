@@ -64,6 +64,14 @@ public class UObjectBaseUtility : UObjectBase {
         var someBaseClass = someBase;
         var thisClass = GetClass();
 
+        // A null class is a real state here, not a "can't happen" - UAssetRegistry/UPackageRegistry
+        // build plain UObject stand-ins (a level's synthetic Package/World/PersistentLevel chain) for
+        // path-exporting a reference, and none of them are ever given a UClass. GetTypedOuter walks
+        // straight through that chain via IsA, so without this it NREs the first time anything calls
+        // GetLevel()/GetWorld() on an actor whose outer chain passes through one - which real UE
+        // never has to answer, since IsChildOf itself assumes objClass is never null.
+        if (thisClass == null) return false;
+
         return IsChildOfWorkaround(thisClass, someBaseClass);
     }
 

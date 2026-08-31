@@ -34,6 +34,24 @@ public enum ERpcParamKind {
     /// </summary>
     ObjectPath,
 
+    /// <summary>
+    ///     An object reference to a loaded ASSET, wanted as its path however it happens to arrive -
+    ///     the shape AFortPlayerController::ServerPlayEmoteItem's EmoteAsset needs.
+    ///
+    ///     <see cref="ObjectPath"/> is not enough on its own, and the difference is not theoretical.
+    ///     A client exports the full path only for an object it has no id for; the moment the SERVER
+    ///     has introduced that asset (which playing the emote does - the ability spec's SourceObject
+    ///     is exported by path), the client's own NetGUIDLookup has an id for it and every later
+    ///     reference is the bare packed guid. A real Project-Reboot-3.0 capture measures exactly
+    ///     that: ServerPlayEmoteItem at 94.4 bytes the first time and 5.4 bytes the second. Reading
+    ///     only the path would have made every emote work once and then silently stop working.
+    ///
+    ///     So: the exported path when there is one, otherwise the path this server itself registered
+    ///     for the guid (UAssetRegistry.PathOf). Null when it is neither, which is a reference to
+    ///     something that is not a path-addressed asset at all.
+    /// </summary>
+    AssetPath,
+
     Float,
     Vector,
     VectorQuantize10,

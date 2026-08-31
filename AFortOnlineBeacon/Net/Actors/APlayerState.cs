@@ -32,6 +32,44 @@ public class APlayerState : AInfo {
     public UFortPlayerAttrSet? PlayerAttrSet { get; set; }
 
     /// <summary>
+    ///     UFortHealthSet - the player's health and shield, and the thing every damage path in this
+    ///     project ultimately writes to. Held here for the same reason the two sets above are, and
+    ///     additionally because the PlayerState's own mirror floats (wire handles 216-219) read
+    ///     straight off it: one source of truth, two ways onto the wire. See FortDamageSystem.
+    /// </summary>
+    public UFortHealthSet? HealthSet { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerStateAthena::DeathInfo (handles 258-262) - who killed this player and how, as
+    ///     the elimination feed and the death screen read it. All five members are held as plain
+    ///     fields rather than a struct, because that is exactly how they travel: RepLayout recursed
+    ///     FDeathInfo into one handle per member, so there is no struct on the wire to mirror.
+    ///
+    ///     DeathInfoInitialized is the one that matters - an uninitialised DeathInfo is the default
+    ///     every living player has.
+    /// </summary>
+    public AActor? DeathInfoFinisherOrDowner { get; set; }
+
+    /// <summary>Downed-but-not-out. Always false here - solo has no DBNO state to be in.</summary>
+    public bool DeathInfoDBNO { get; set; }
+
+    /// <summary>EDeathCause. See FortDamageSystem.EDeathCause for the values this project uses.</summary>
+    public byte DeathInfoCause { get; set; } = (byte) EDeathCause.Unspecified;
+
+    /// <summary>How far away the killer was, in centimetres as everything else in UE is.</summary>
+    public float DeathInfoDistance { get; set; }
+
+    /// <summary>The flag that makes the other four count.</summary>
+    public bool DeathInfoInitialized { get; set; }
+
+    /// <summary>
+    ///     True once this player has been killed. Nothing on the wire - it is what keeps a dead
+    ///     player from being damaged, healed or killed a second time, and what the game mode reads
+    ///     when deciding whether anyone is still alive.
+    /// </summary>
+    public bool bIsDead { get; set; }
+
+    /// <summary>
     ///     APlayerState::GetOwningController - `Cast&lt;AController&gt;(GetOwner())`. Real UE sets
     ///     that owner in AController::InitPlayerState; this project does the same in
     ///     AGameModeBase.Login, which is also what makes the PlayerState replicate to the right
