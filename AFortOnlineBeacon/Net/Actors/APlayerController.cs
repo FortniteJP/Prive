@@ -4,6 +4,42 @@ public class APlayerController : AController {
     public byte NetPlayerIndex { get; set; }
     public UPlayer? Player { get; private set; }
 
+    /// <summary>
+    ///     The controller's `InteractionComp`. Created eagerly rather than on demand because the
+    ///     client can reference it before this server has any reason to think about interaction - the
+    ///     reference has to resolve the first time it arrives, or the whole content block is skipped.
+    ///     See UFortControllerComponent_Interaction.
+    /// </summary>
+    public UFortControllerComponent_Interaction? InteractionComponent { get; private set; }
+
+    /// <summary>
+    ///     Resolves a sub-object the CLIENT named by path. Real UE resolves such a reference against
+    ///     the outer's own sub-objects; this is the narrow version of that - only components this
+    ///     server actually has, looked up by the leaf name the client sent.
+    ///
+    ///     Deliberately NOT a general "create whatever the client asks for": real UE refuses that too
+    ///     (DataChannel.cpp's "Client attempted to create sub-object"), and a server that invents
+    ///     objects from client-supplied names is a server a client can make do anything.
+    /// </summary>
+    public virtual UObject? ResolveNamedSubObject(string leafName) =>
+        leafName == UFortControllerComponent_Interaction.SubObjectName ? InteractionComponent : null;
+
+    /// <summary>
+    ///     Builds the sub-objects this controller owns. Separate from the constructor because
+    ///     UObjectGlobals.NewObject needs the object to already exist as an outer.
+    /// </summary>
+    public void CreateInteractionComponent() {
+        if (InteractionComponent != null) return;
+
+        InteractionComponent = UObjectGlobals.NewObject<UFortControllerComponent_Interaction>(
+            this,
+            GUClassArray.StaticClass<UFortControllerComponent_Interaction>(),
+            new FName(UFortControllerComponent_Interaction.SubObjectName),
+            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject);
+
+        if (InteractionComponent != null) InteractionComponent.Owner = this;
+    }
+
     /// <summary>Last location/rotation reported by ServerSetSpectatorLocation, mirroring the real fields of the same name.</summary>
     public FVector? LastSpectatorSyncLocation { get; set; }
     public FRotator? LastSpectatorSyncRotation { get; set; }

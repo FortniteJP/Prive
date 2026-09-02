@@ -117,6 +117,13 @@ public class APlayerState : AInfo {
     /// <summary>AFortPlayerStateAthena::SquadId - wire handle 248, a plain uint8. 0 for solo.</summary>
     public byte SquadId { get; set; }
 
+    /// <summary>
+    ///     AFortPlayerStateAthena::bInAircraft - wire handle 252. Set while the player is aboard the
+    ///     battle bus, cleared by ServerAttemptAircraftJump (or when the drop window closes). The
+    ///     client gates the HUD, the pawn's visibility and the jump prompt on it.
+    /// </summary>
+    public bool bInAircraft { get; set; }
+
     public bool bHasStartedPlaying { get; set; }
 
     /// <summary>

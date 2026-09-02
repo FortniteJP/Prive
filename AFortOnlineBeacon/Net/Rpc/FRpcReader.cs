@@ -25,6 +25,7 @@ public static class FRpcReader {
                 ERpcParamKind.Guid => ReadGuid(bunch),
                 ERpcParamKind.Object => ReadObject(bunch),
                 ERpcParamKind.ObjectPath => ReadObjectPath(bunch),
+                ERpcParamKind.ObjectOrPath => ReadObjectOrPath(bunch),
                 ERpcParamKind.AssetPath => ReadAssetPath(bunch),
                 ERpcParamKind.Float => bunch.ReadFloat(),
                 ERpcParamKind.Vector => FVector.NetSerializeRead(bunch),
@@ -54,6 +55,25 @@ public static class FRpcReader {
     ///     that in the stream. UPackageMapClient.ReadObjectRef handles both shapes.
     /// </summary>
     private static UObject? ReadObject(FArchive bunch) => UPackageMapClient.ReadObjectRef(bunch, out _);
+
+    /// <summary>
+    ///     See <see cref="ERpcParamKind.ObjectOrPath"/> - the resolved object when the client named one
+    ///     by id, otherwise the exported path, otherwise null. One read either way; the two forms are
+    ///     alternatives on the wire, never both.
+    /// </summary>
+    private static object? ReadObjectOrPath(FArchive bunch) {
+        var resolved = UPackageMapClient.ReadObjectRef(bunch, out var netGuid, out var path);
+        if (resolved != null) return resolved;
+        if (!string.IsNullOrEmpty(path)) return path;
+
+        // Neither. Worth naming rather than returning a bare null: a reference with NO path is one
+        // the SERVER is supposed to have introduced, so its id is the only handle left on it - and
+        // "the client named something we have never heard of" and "the client named nothing at all"
+        // need completely different fixes.
+        Console.WriteLine($"FRpcReader: object reference resolved to neither an object nor a path - " +
+                          $"guid={netGuid.Value} valid={netGuid.IsValid()} default={netGuid.IsDefault()}");
+        return null;
+    }
 
     /// <summary>See <see cref="ERpcParamKind.ObjectPath"/> - the path, when the reference carried one; null otherwise.</summary>
     private static string? ReadObjectPath(FArchive bunch) {

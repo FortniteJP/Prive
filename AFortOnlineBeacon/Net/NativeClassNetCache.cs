@@ -449,6 +449,18 @@ internal static class NativeClassNetCache {
         "bIsActive", "bReplicates"
     );
 
+    // /Script/FortniteGame.FortControllerComponent - NO own net fields. Confirmed from the objects
+    // dump: nothing is listed under `FortControllerComponent:` at all, only under its subclasses.
+    private static readonly string[] FortControllerComponentOwnFields = OwnFieldsSorted();
+
+    // /Script/FortniteGame.FortControllerComponent_Interaction - 1 own net field.
+    // ServerAttemptInteract is the only Net function on it (K2_GetInteractResponse and
+    // FixupInteractionWidgetsOnUnzoom are BlueprintCallable, not replicated), and it has no
+    // replicated properties - so with ActorComponent's two below it, its field index is 2.
+    private static readonly string[] FortControllerComponentInteractionOwnFields = OwnFieldsSorted(
+        "ServerAttemptInteract"
+    );
+
     // /Script/GameplayTasks.GameplayTasksComponent - 1 own net fields (1 properties + 0 functions).
     private static readonly string[] GameplayTasksComponentOwnFields = OwnFieldsSorted(
         "SimulatedTasks"
@@ -492,6 +504,13 @@ internal static class NativeClassNetCache {
     private static readonly FClassNetCache GameplayTasksComponentCache = new(ActorComponentCache, GameplayTasksComponentOwnFields);
     private static readonly FClassNetCache AbilitySystemComponentCache = new(GameplayTasksComponentCache, AbilitySystemComponentOwnFields);
     public static readonly FClassNetCache FortAbilitySystemComponentCache = new(AbilitySystemComponentCache, FortAbilitySystemComponentOwnFields);
+
+    // The controller's InteractionComp - see UFortControllerComponent_Interaction for why this
+    // matters: every chest, ammo box and door arrives through it, and without a cache the field
+    // index cannot be decoded even once the sub-object itself resolves.
+    private static readonly FClassNetCache FortControllerComponentCache = new(ActorComponentCache, FortControllerComponentOwnFields);
+    public static readonly FClassNetCache FortControllerComponentInteractionCache =
+        new(FortControllerComponentCache, FortControllerComponentInteractionOwnFields);
     private static readonly FClassNetCache ControllerCache = new(ActorCache, ControllerOwnFields);
     private static readonly FClassNetCache PlayerControllerBaseCache = new(ControllerCache, PlayerControllerOwnFields);
     private static readonly FClassNetCache FortPlayerControllerCache = new(PlayerControllerBaseCache, FortPlayerControllerOwnFields);

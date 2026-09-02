@@ -89,6 +89,40 @@ public class AGameState : AInfo {
     /// <summary>AFortGameStateAthena::PlayersLeft - wire handle 116.</summary>
     public int PlayersLeft { get; set; } = 1;
 
+    /// <summary>
+    ///     AFortGameState::TeamCount - wire handle 29. Solo gives every player their own team, so
+    ///     this tracks the highest team index handed out (see AGameModeBase's team assignment) rather
+    ///     than being a fixed playlist constant.
+    /// </summary>
+    public int TeamCount { get; set; } = 1;
+
+    /// <summary>
+    ///     AFortGameStateAthena::Aircrafts - wire handle 159. How the client FINDS the battle bus:
+    ///     AFortAthenaAircraft.AircraftIndex indexes into this. Empty unless the aircraft phase is
+    ///     switched on (AIRCRAFT_ENABLED, see AGameModeBase).
+    /// </summary>
+    public List<UObject> Aircrafts { get; } = new();
+
+    /// <summary>
+    ///     AFortGameStateAthena::bAircraftIsLocked - wire handle 160. While set, the client will not
+    ///     even send ServerAttemptAircraftJump, so this - not any server-side check - is what
+    ///     actually keeps players aboard before the drop window opens.
+    /// </summary>
+    public bool bAircraftIsLocked { get; set; }
+
+    /// <summary>
+    ///     AFortGameStateAthena::SafeZoneIndicator - wire handle 149, and how the client FINDS the
+    ///     storm circle (it has an OnRep, and the map/minimap hang off it). Null until
+    ///     FortSafeZoneSystem spawns one.
+    /// </summary>
+    public AFortSafeZoneIndicator? SafeZoneIndicator { get; set; }
+
+    /// <summary>AFortGameStateAthena::SafeZonesStartTime - wire handle 112. When the FIRST circle starts closing.</summary>
+    public float SafeZonesStartTime { get; set; }
+
+    /// <summary>AFortGameStateAthena::SafeZonePhase - wire handle 157. Which circle the match is on; the HUD prints it.</summary>
+    public byte SafeZonePhase { get; set; }
+
     /// <summary>AFortGameStateAthena::CurrentPlaylistId - wire handle 148. 2 is Playlist_DefaultSolo.</summary>
     public int CurrentPlaylistId { get; set; } = 2;
 

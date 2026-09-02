@@ -105,6 +105,20 @@ public static class BuildingStructuralSupportSystem {
         Constructing.Add(building);
     }
 
+    /// <summary>
+    ///     Puts an already-standing piece back on the harden ramp - see ABuildingActor.BeginRepair.
+    ///     Separate from Register because a repaired piece is already in the grid and must not be
+    ///     re-bucketed; all it needs is to start ticking again.
+    ///
+    ///     Idempotent on the list, so holding the repair input does not queue a piece twice.
+    /// </summary>
+    public static bool BeginRepair(ABuildingActor building, int targetHitPoints) {
+        if (!building.BeginRepair(_lastTickTime, targetHitPoints)) return false;
+
+        if (!Constructing.Contains(building)) Constructing.Add(building);
+        return true;
+    }
+
     /// <summary>Pieces still building in - see ABuildingActor.TickConstruction.</summary>
     private static readonly List<ABuildingActor> Constructing = new();
 
@@ -283,6 +297,8 @@ public static class BuildingStructuralSupportSystem {
             if (IsSupportedByWorld(b) && supported.Add(b)) queue.Enqueue(b);
         }
 
+        var groundSeeded = new HashSet<ABuildingActor>(supported);
+
         while (queue.Count > 0) {
             foreach (var neighbor in NeighborsOf(queue.Dequeue())) {
                 if (supported.Add(neighbor)) queue.Enqueue(neighbor);
@@ -292,11 +308,72 @@ public static class BuildingStructuralSupportSystem {
         // Materialised before destroying anything: Destroy() re-enters this class through
         // ABuildingActor.Destroyed -> Unregister, which mutates both the registry and the buckets
         // NeighborsOf reads.
+        if (DebugEnabled) DumpSupport(supported, groundSeeded);
+
         var unsupported = Buildings.Where(b => !supported.Contains(b)).ToList();
         if (unsupported.Count == 0) return;
 
         Console.WriteLine($"BuildingStructuralSupportSystem: cascade - {unsupported.Count} piece(s) lost support");
         foreach (var b in unsupported) BeginDestroy(b);
+    }
+
+    /// <summary>Which side of its own cell the model believes this piece sits on - see FortBuildingConnectivity.Occupancy.</summary>
+    private static string OccupancyOf(ABuildingActor b) =>
+        b.ClassName.Length == 0
+            ? "?"
+            : FortBuildingConnectivity.VoxelsFor(b.ClassName, b.GetActorRotation().Yaw + PatternYawOffsetFor(b),
+                                                 b.bMirrored != MirrorFlip) is { } v
+                ? FortBuildingConnectivity.Occupancy(v)
+                : "?";
+
+    /// <summary>How many voxels the two pieces actually share - the number behind every link, so a false one can be named.</summary>
+    private static string SharedWith(ABuildingActor a, ABuildingActor b) {
+        if (a.ClassName.Length == 0 || b.ClassName.Length == 0) return "dist";
+
+        var va = FortBuildingConnectivity.VoxelsFor(a.ClassName, a.GetActorRotation().Yaw + PatternYawOffsetFor(a), a.bMirrored != MirrorFlip);
+        var vb = FortBuildingConnectivity.VoxelsFor(b.ClassName, b.GetActorRotation().Yaw + PatternYawOffsetFor(b), b.bMirrored != MirrorFlip);
+        if (va is null || vb is null) return "dist";
+
+        var (ax, ay, az) = StructuralCellOf(a);
+        var (bx, by, bz) = StructuralCellOf(b);
+        return FortBuildingConnectivity.SharedVoxels(va.Value, vb.Value, bx - ax, by - ay, bz - az).ToString();
+    }
+
+    private static bool DebugEnabled => Environment.GetEnvironmentVariable("STRUCTURAL_DEBUG") is "1";
+
+    /// <summary>
+    ///     STRUCTURAL_DEBUG=1. Why did each piece survive the flood?
+    ///
+    ///     A piece that should have fallen and did not survived for exactly one of two reasons, and
+    ///     guessing which has cost more than one round: either the GROUND test seeded it - it is being
+    ///     treated as resting on the world when it is three storeys up - or it is still LINKED to
+    ///     something that is. The two need completely different fixes, so this prints both, and prints
+    ///     the actual neighbours so a link that should not exist can be named.
+    /// </summary>
+    private static void DumpSupport(HashSet<ABuildingActor> supported, HashSet<ABuildingActor> groundSeeded) {
+        Console.WriteLine($"BuildingStructuralSupportSystem: flood over {Buildings.Count} piece(s) using " +
+                          $"{(ConnectivityEnabled ? "REAL CONNECTIVITY" : "the distance test")} - " +
+                          $"{groundSeeded.Count} ground-seeded, {supported.Count} supported");
+
+        foreach (var b in Buildings) {
+            var loc = b.GetActorLocation();
+            var ground = TerrainHeightMap.GetGroundHeightUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset);
+            var neighbours = NeighborsOf(b).ToList();
+            // The CONNECTIVITY cell, not b.CellIndex - the two disagree (b.CellIndex buckets by raw
+            // location, this one quantises BaseLocation), and printing the wrong one sent a diagnosis
+            // down the wrong path once already.
+            var cell = StructuralCellOf(b);
+
+            var why = groundSeeded.Contains(b) ? "GROUND"
+                    : supported.Contains(b) ? "linked"
+                    : "UNSUPPORTED -> falls";
+
+            Console.WriteLine($"    {b.ClassName,-24} ({loc.X,7:0},{loc.Y,8:0},{loc.Z,6:0}) yaw {b.GetActorRotation().Yaw,4:0} " +
+                              $"cell {cell.X},{cell.Y},{cell.Z} " +
+                              $"ground {(ground is null ? "none" : $"{loc.Z - ground.Value:0}up")} " +
+                              $"occupies {OccupancyOf(b),-6} " +
+                              $"{why} via [{string.Join(" ", neighbours.Select(n => $"{n.ClassName}:{SharedWith(b, n)}"))}]");
+        }
     }
 
     /// <summary>
@@ -312,9 +389,146 @@ public static class BuildingStructuralSupportSystem {
 
             foreach (var other in cell) {
                 if (ReferenceEquals(other, building)) continue;
-                if (IsWithinReach(loc, other.GetActorLocation())) yield return other;
+                if (AreTouching(building, other)) yield return other;
             }
         }
+    }
+
+    /// <summary>
+    ///     Whether two pieces count as structurally joined.
+    ///
+    ///     Prefers Fortnite's OWN answer when both pieces are classes the shipped connectivity data
+    ///     covers - see FortBuildingConnectivity, which is the authored ConnectivityCube the real
+    ///     UBuildingStructuralSupportSystem::AreNeighborsConnected decides with. That rule knows
+    ///     things a distance test cannot: that a half wall does not reach the floor above it, that a
+    ///     brace only joins on one side, that two pieces meeting at a single corner are NOT joined.
+    ///     Corner-only contact is the specific case that made edits leave structures standing with
+    ///     their root severed - a false support link, and false support is what stops a cascade
+    ///     firing at all.
+    ///
+    ///     Falls back to the old anisotropic distance test whenever the real rule has no opinion -
+    ///     an uninitialised stand-in (map scenery, which has no blueprint class), or a class outside
+    ///     the 321 the patterns cover. Null from AreConnected means "no data", NOT "not connected",
+    ///     and treating it as the latter would silently stop cascades on anything unrecognised.
+    ///
+    ///     STRUCTURAL_CONNECTIVITY=1 turns the new rule on. OFF BY DEFAULT: the connectivity DATA is
+    ///     verified, but the two frame conversions in ConnectivitySays are newly derived and have
+    ///     never met a client, and a yaw convention that is wrong by 90 degrees would join each wall
+    ///     to the wrong neighbours and collapse structures at random - i.e. it would destroy the
+    ///     tester's builds rather than merely look wrong. The old rule half-works; that is a better
+    ///     default than a new rule that might be inverted.
+    /// </summary>
+    private static bool AreTouching(ABuildingActor a, ABuildingActor b) {
+        if (ConnectivityEnabled && ConnectivitySays(a, b) is { } connected) return connected;
+
+        return IsWithinReach(a.GetActorLocation(), b.GetActorLocation());
+    }
+
+    private static bool ConnectivityEnabled =>
+        Environment.GetEnvironmentVariable("STRUCTURAL_CONNECTIVITY") is "1";
+
+    /// <summary>
+    ///     Fortnite's own connectivity answer, or null when it has none.
+    ///
+    ///     THE TWO FRAME CONVERSIONS HERE ARE THE WHOLE POINT OF THIS METHOD, and both are measured
+    ///     rather than assumed:
+    ///
+    ///     CELL. A piece's BaseLocation - its pivot with BaseLocToPivotOffset rotated back out - lands
+    ///     exactly on the (512, 512, 384) grid for every family and every yaw. That is not an
+    ///     assumption: across 1439 real logged placements, BuildLoc mod 512 is (0, 256) at yaw 0/180
+    ///     and (256, 0) at yaw 90/270 for walls, floors, roofs and stairs alike, and z mod 384 is
+    ///     always 0. So BaseLocation quantised by (512, 512, 384) is the cell, uniformly.
+    ///
+    ///     YAW. A constant +90 degrees, and it was MEASURED, not reasoned out. The edge-consistency
+    ///     search that fixed the pattern axes could only pin them down to within the block's eight
+    ///     symmetries, so which world direction "Front" names was never determined and no amount of
+    ///     staring at the data settles it. What settles it is that a structure a player actually
+    ///     built is CONNECTED: replaying real logged placements through all four candidate offsets,
+    ///     +90 leaves almost no piece joined to nothing while the others strand many.
+    ///
+    ///         session A (49 pieces)   offset 0: 13 stranded   -90: 14   180: 10   +90: 3
+    ///         session B (41 pieces)   offset 0:  6 stranded   -90:  4   180:  7   +90: 0
+    ///
+    ///     Reasoning from the pivot offsets had given -90, which the sweep shows is 180 degrees out.
+    ///     PriveDev/dumpwork/ConnCheck replays this; re-run it before trusting any change here.
+    /// </summary>
+    private static bool? ConnectivitySays(ABuildingActor a, ABuildingActor b) {
+        if (a.ClassName.Length == 0 || b.ClassName.Length == 0) return null;
+
+        var (ax, ay, az) = StructuralCellOf(a);
+        var (bx, by, bz) = StructuralCellOf(b);
+
+        return FortBuildingConnectivity.AreConnected(
+            a.ClassName, a.GetActorRotation().Yaw + PatternYawOffsetFor(a), a.bMirrored != MirrorFlip,
+            b.ClassName, b.GetActorRotation().Yaw + PatternYawOffsetFor(b), b.bMirrored != MirrorFlip,
+            bx - ax, by - ay, bz - az);
+    }
+
+    /// <summary>
+    ///     THE OFFSET IS PER FAMILY, NOT GLOBAL - stairs need 90 and everything else needs 0. A single
+    ///     global value cannot work, and chasing one cost two rounds.
+    ///
+    ///     How that was settled. Two half-floors (BalconyS) sat in the SAME cell at opposite yaws -
+    ///     they are the two halves of one cell - one cell over from a stair. One linked to the stair
+    ///     with 5 voxels, the other with 1, and the one that failed was the half whose PIVOT EDGE
+    ///     faces the stair, i.e. the half that physically touches it. So the floor family's shape was
+    ///     landing on the wrong side of its own cell. Sweeping each family's offset independently
+    ///     against 243 real placements, subject to the four live "these must link" cases, leaves 64
+    ///     combinations - and every single one has Wall 0, Floor 0, Stair 90.
+    ///
+    ///     That a stair is the odd one out is not surprising: it is the only family with an intrinsic
+    ///     direction, so it is the only one whose authored frame has anything to be rotated relative
+    ///     to. Roof and Pillar are NOT pinned down by the data available (no pillar was ever placed,
+    ///     and only one roof pattern appears); they take the common 0 until something discriminates.
+    ///
+    ///     CONNECTIVITY_YAW_OFFSET / CONNECTIVITY_STAIR_YAW_OFFSET override the two.
+    /// </summary>
+    private static float PatternYawOffsetFor(ABuildingActor building) => building.BuildingType switch {
+        EFortBuildingType.Stairs => StairYawOffset,
+        EFortBuildingType.Floor or EFortBuildingType.Roof => FloorYawOffset,
+        _ => BaseYawOffset
+    };
+
+    private static float BaseYawOffset =>
+        float.TryParse(Environment.GetEnvironmentVariable("CONNECTIVITY_YAW_OFFSET"), out var v) ? v : 0f;
+
+    /// <summary>
+    ///     Floors (and roofs) need 90 where walls need 0 - confirmed live, and then re-derived: a
+    ///     search over every family offset, both mirror handednesses and 243 real placements, subject
+    ///     to five live constraints (the four half-floor edits around a stair, exactly one of which
+    ///     must fall, plus a corner quadrant that must NOT hold itself up) leaves 64 combinations, and
+    ///     every one of them is Wall 0 / Floor 90 / Stair 90 with the mirror flipped.
+    ///
+    ///     Roof rides the floor value. It is NOT pinned by the data - both 0 and 90 satisfy every
+    ///     constraint - so a roof-only failure is the next thing to suspect, not a settled fact.
+    /// </summary>
+    private static float FloorYawOffset =>
+        float.TryParse(Environment.GetEnvironmentVariable("CONNECTIVITY_FLOOR_YAW_OFFSET"), out var v) ? v : 90f;
+
+    private static float StairYawOffset =>
+        float.TryParse(Environment.GetEnvironmentVariable("CONNECTIVITY_STAIR_YAW_OFFSET"), out var v) ? v : 90f;
+
+    /// <summary>
+    ///     THE SHIPPED PATTERNS ARE THE OPPOSITE HANDEDNESS TO THIS SERVER, so the reflection is applied
+    ///     by default and bMirrored INVERTS it. Set CONNECTIVITY_MIRROR_FLIP=0 to go back.
+    ///
+    ///     This was invisible for a long time because of what a reflection does and does not change:
+    ///     mirroring `y -> 4 - y` leaves a HALF floor completely untouched (a half along X is
+    ///     symmetric in Y) while swapping which corner a QUADRANT piece occupies. So every experiment
+    ///     with full floors, walls and half floors agreed with both handednesses, and only a
+    ///     single-quadrant edit could tell them apart - which is exactly the case that stayed broken
+    ///     after the yaw offsets were right, and which flipping this fixes without moving any of the
+    ///     half-floor results by a single voxel.
+    /// </summary>
+    private static bool MirrorFlip => Environment.GetEnvironmentVariable("CONNECTIVITY_MIRROR_FLIP") is not "0";
+
+    /// <summary>The piece's cell for the connectivity model - see ConnectivitySays for why this is BaseLocation and not the pivot.</summary>
+    private static (int X, int Y, int Z) StructuralCellOf(ABuildingActor building) {
+        var b = FBuildingSupportCellIndex.BaseLocationOf(building.GetActorLocation(), building.GetActorRotation().Yaw);
+
+        return ((int) MathF.Round(b.X / FBuildingSupportCellIndex.TileSize),
+                (int) MathF.Round(b.Y / FBuildingSupportCellIndex.TileSize),
+                (int) MathF.Round(b.Z / FBuildingSupportCellIndex.StoreyHeight));
     }
 
     private static bool IsWithinReach(FVector a, FVector b) =>

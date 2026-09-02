@@ -142,6 +142,15 @@ public class ABuildingActor : AActor {
 
     public float AnchorYaw { get; private set; }
 
+    /// <summary>
+    ///     The piece's blueprint class name - the last segment of its class path, e.g.
+    ///     "PBWA_W1_Solid_C". Kept because it is the key into both generated tables
+    ///     (FortBuildingAttributes and FortBuildingConnectivity) and re-deriving it from the path on
+    ///     every structural query would be wasteful. Empty for a stand-in that was never initialised
+    ///     from a class, such as the ones DamageLevelActor builds for map scenery.
+    /// </summary>
+    public string ClassName { get; private set; } = string.Empty;
+
     public void SetAnchor(FVector location, float yaw) {
         AnchorLocation = location;
         AnchorYaw = yaw;
@@ -227,19 +236,50 @@ public class ABuildingActor : AActor {
     ///     ABuildingSMActor::MinimalReplicationProxy.BuildTime (wire handle 59) - how long the client
     ///     should run the build-in animation for. The server owns this number, so the client's
     ///     animation and the server's health ramp below finish together.
+    ///
+    ///     THIS IS THE ANIMATION LENGTH, NOT THE HARDEN TIME - and conflating the two broke building
+    ///     badly enough to be worth spelling out. FortBuildingActorSet.BuildTime in the shipped data
+    ///     is wood 4 s / stone 12 s / metal 25 s; feeding those numbers to handle 59 did not give a
+    ///     long build-in animation, it made the animation stop happening at all and the piece appear
+    ///     finished immediately. Whatever the client does with this value, a 25 is outside the range
+    ///     it will act on. The shipped per-class figure now drives <see cref="HardenTime"/> instead,
+    ///     which never touches the wire.
     /// </summary>
-    public float BuildTime { get; private set; } = BuildInDuration;
+    public float BuildTime { get; private set; } = BuildInDurationDefault;
 
     /// <summary>
-    ///     How long a freshly placed piece spends building in, and the fraction of its health it
-    ///     starts at. NOT measured from a real client - a placeholder, like the HP numbers
-    ///     themselves; env-overridable (BUILD_IN_TIME / BUILD_IN_START_HEALTH_PCT) so a value can be
-    ///     tried against a live client without a rebuild, the same arrangement UFortPlayerAttrSet
-    ///     uses for stamina.
+    ///     The animation length sent on handle 59. Half a second, which is the value the client was
+    ///     observed to accept and animate; BUILD_IN_TIME overrides it.
     /// </summary>
-    private static readonly float BuildInDuration = Env("BUILD_IN_TIME", 0.5f);
+    private static readonly float BuildInDurationDefault = Env("BUILD_IN_TIME", 0.5f);
 
-    private static readonly float BuildInStartHealthPct = Env("BUILD_IN_START_HEALTH_PCT", 0.15f);
+    /// <summary>
+    ///     How long the piece takes to reach full strength - a SERVER-SIDE number, never replicated.
+    ///     Real, per class, out of FortBuildingActorSet.BuildTime: wood 4 s, stone 12 s, metal 25 s.
+    ///     A placed wall starts at BuildInStartHealthPct of its health (wood 0.6, stone 0.333, metal
+    ///     0.22) and climbs to full over this window, which is why a metal wall thrown up in a fight
+    ///     is worth far less than its 500 HP for the first several seconds. The two shipped tables
+    ///     agree with each other - the material that starts weakest is the one that takes longest -
+    ///     which is what says they are one mechanic and not two unrelated numbers.
+    ///
+    ///     The client is told about it only through the health it sees climbing, which is exactly how
+    ///     it learns about damage too, so nothing here depends on a wire format being right.
+    /// </summary>
+    public float HardenTime { get; private set; } = BuildInDurationDefault;
+
+    /// <summary>Overrides the per-class harden time when >= 0, the same arrangement BUILD_IN_START_HEALTH_PCT uses.</summary>
+    private static readonly float HardenTimeOverride = Env("BUILD_HARDEN_TIME", -1f);
+
+    /// <summary>
+    ///     Overrides the real per-material figure when set; unset, each material uses its own
+    ///     Default.BuildingInitialHealthPercent_* from the shipped game data (wood 0.6, stone 0.333,
+    ///     metal 0.22) rather than the single 0.15 this used for everything.
+    /// </summary>
+    private static readonly float BuildInStartHealthPctOverride = Env("BUILD_IN_START_HEALTH_PCT", -1f);
+
+    private float BuildInStartHealthPct => BuildInStartHealthPctOverride >= 0f
+        ? BuildInStartHealthPctOverride
+        : FortBuildingAttributes.InitialHealthPercent(Material);
 
     private static float Env(string name, float fallback) =>
         float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
@@ -256,6 +296,9 @@ public class ABuildingActor : AActor {
     public float DamageMagnitude { get; private set; }
 
     private float _constructionEndsAt;
+    private float _constructionStartedAt;
+    private int _constructionStartHealth;
+    private int _constructionTargetHealth;
     private float _breakingUntil;
 
     /// <summary>
@@ -305,21 +348,72 @@ public class ABuildingActor : AActor {
     ///     building, which is why rushing a wall up in someone's face can still be shot through.
     /// </summary>
     public void BeginConstruction(float timeSeconds) {
-        bUnderConstruction = true;
         bIsInitiallyBuilding = true;
-        BuildingAnimation = EBuildingAnim.EBA_Building;
-        BuildTime = BuildInDuration;
-
-        _constructionEndsAt = timeSeconds + BuildInDuration;
         CurrentHitPoints = Math.Max(1, (int) (MaxHitPoints * BuildInStartHealthPct));
+        StartHardening(timeSeconds, HardenTime, MaxHitPoints);
+
+        Console.WriteLine($"ABuildingActor.BeginConstruction: {GetFName()} anim={BuildTime:0.00}s " +
+                          $"harden={HardenTime:0.0}s {CurrentHitPoints}->{MaxHitPoints} HP " +
+                          $"(t={timeSeconds:0.0} -> {_constructionEndsAt:0.0})");
+    }
+
+    /// <summary>
+    ///     Repairing runs THE SAME ramp as building in, which is what bIsInitiallyBuilding exists to
+    ///     distinguish - false here, true above. That is not a convenience: the harden curve is the
+    ///     only model this project has for a piece gaining health over time, and reusing it is what
+    ///     makes a repaired wall behave like a freshly placed one rather than snapping to full.
+    ///
+    ///     The duration is the REMAINDER of that same curve, not a fresh BuildTime. The curve runs
+    ///     linearly from BuildInStartHealthPct to 1.0 over BuildTime, so a piece sitting at fraction
+    ///     f has (1 - f) / (1 - BuildInStartHealthPct) of it left to travel - a metal wall on its
+    ///     last sliver takes nearly the full 25 s back, one that is barely scratched takes an
+    ///     instant. Falling off the bottom of the curve (a piece damaged BELOW its starting
+    ///     fraction) just clamps to the whole duration.
+    /// </summary>
+    /// <param name="targetHitPoints">
+    ///     Where the ramp stops - NOT necessarily full health. A player who could only afford part of
+    ///     the repair gets a ramp that ends part-way up, which is the whole reason this is a
+    ///     parameter: charging for a partial repair and then delivering a full one would let anyone
+    ///     rebuild a metal wall for one unit of metal.
+    /// </param>
+    /// <returns>False if there is nothing to do - already at or above the target, or mid-cascade at zero.</returns>
+    public bool BeginRepair(float timeSeconds, int targetHitPoints) {
+        var target = Math.Clamp(targetHitPoints, 0, MaxHitPoints);
+        if (CurrentHitPoints <= 0 || target <= CurrentHitPoints) return false;
+
+        var fraction = MaxHitPoints <= 0 ? 1f : CurrentHitPoints / (float) MaxHitPoints;
+        var span = 1f - BuildInStartHealthPct;
+        var travel = span <= 0f ? 1f : Math.Clamp((1f - fraction) / span, 0f, 1f);
+
+        bIsInitiallyBuilding = false;
+        StartHardening(timeSeconds, HardenTime * travel, target);
+        return true;
+    }
+
+    /// <summary>
+    ///     Shared by both entry points above. Ramps from WHATEVER health the piece has right now, so
+    ///     the caller sets the starting health (or leaves it alone, for a repair) before calling.
+    /// </summary>
+    private void StartHardening(float timeSeconds, float duration, int targetHitPoints) {
+        bUnderConstruction = true;
+        BuildingAnimation = EBuildingAnim.EBA_Building;
+
+        _constructionStartedAt = timeSeconds;
+        _constructionEndsAt = timeSeconds + MathF.Max(0f, duration);
+        _constructionStartHealth = CurrentHitPoints;
+        _constructionTargetHealth = targetHitPoints;
         SyncAttributeSet();
     }
 
     /// <summary>
-    ///     Advances the build-in health ramp. Returns true while still constructing, so the caller
-    ///     knows to keep ticking this piece. Health climbs linearly to full over BuildTime and the
+    ///     Advances the harden ramp. Returns true while still constructing, so the caller knows to
+    ///     keep ticking this piece. Health climbs linearly from wherever it started to full, and the
     ///     animation flags clear together with it, which is what makes the client's own animation and
     ///     the replicated health agree at the moment construction completes.
+    ///
+    ///     Interpolating between two REMEMBERED endpoints rather than recomputing from
+    ///     BuildInStartHealthPct is what lets a repair - which starts part-way up the curve and runs
+    ///     for a partial duration - use this unchanged.
     /// </summary>
     public bool TickConstruction(float timeSeconds) {
         if (!bUnderConstruction) return false;
@@ -328,14 +422,14 @@ public class ABuildingActor : AActor {
             bUnderConstruction = false;
             bIsInitiallyBuilding = false;
             BuildingAnimation = EBuildingAnim.EBA_None;
-            CurrentHitPoints = MaxHitPoints;
+            CurrentHitPoints = _constructionTargetHealth;
             SyncAttributeSet();
             return false;
         }
 
-        var remaining = MathF.Max(0f, _constructionEndsAt - timeSeconds);
-        var progress = BuildInDuration <= 0f ? 1f : 1f - remaining / BuildInDuration;
-        var health = MaxHitPoints * (BuildInStartHealthPct + (1f - BuildInStartHealthPct) * progress);
+        var duration = _constructionEndsAt - _constructionStartedAt;
+        var progress = duration <= 0f ? 1f : (timeSeconds - _constructionStartedAt) / duration;
+        var health = _constructionStartHealth + (_constructionTargetHealth - _constructionStartHealth) * progress;
 
         CurrentHitPoints = Math.Clamp((int) health, 1, MaxHitPoints);
         SyncAttributeSet();
@@ -361,8 +455,23 @@ public class ABuildingActor : AActor {
         var path = buildingClass.NativePackagePath;
         Material = MaterialFromClassPath(path);
         BuildingType = BuildingTypeFromClassPath(path);
-        MaxHitPoints = BaseHitPointsFor(Material);
+        // REAL per-class health, no longer a per-material guess. FortBuildingAttributes.Generated.cs
+        // carries what Fortnite itself resolves at runtime through the piece's AttributeInitKeys and
+        // the GAS attribute-defaults table - so a wood wall is 150 and a wood floor is 140, which a
+        // single per-material number could never express. BaseHitPointsFor remains as the fallback for
+        // a class the table does not cover.
+        ClassName = path[(path.LastIndexOf('.') + 1)..];
+        var className = ClassName;
+        MaxHitPoints = FortBuildingAttributes.ByClass.TryGetValue(className, out var attributes)
+            ? attributes.MaxHealth
+            : BaseHitPointsFor(Material);
         CurrentHitPoints = MaxHitPoints;
+
+        // Likewise the build-in time, which is per MATERIAL in the real data (wood 4s, stone 12s,
+        // metal 25s) rather than the one duration this used for everything.
+        HardenTime = HardenTimeOverride >= 0f ? HardenTimeOverride
+            : attributes.BuildTime > 0f ? attributes.BuildTime
+            : BuildInDurationDefault;
 
         BuildingAttributeSet = UObjectGlobals.NewObject<UFortBuildingActorSet>(
             this, GUClassArray.StaticClass<UFortBuildingActorSet>(), new FName("BuildingAttributeSet"),
@@ -403,6 +512,28 @@ public class ABuildingActor : AActor {
         CurrentHitPoints = Math.Max(0, CurrentHitPoints - amount);
         SyncAttributeSet();
         return CurrentHitPoints <= 0;
+    }
+
+    /// <summary>
+    ///     Puts health back, capped at MaxHitPoints, and returns how much was actually restored -
+    ///     which is what the caller charges for, so a piece that was nearly full is never billed for
+    ///     the overflow. The mirror of <see cref="ApplyDamage"/> in every other respect, including
+    ///     going through <see cref="SyncAttributeSet"/> so both replicated health paths move together.
+    ///
+    ///     A piece already at zero is NOT repairable: it is on its way out via MarkDestroyed and the
+    ///     structural cascade, and reviving it here would leave the client's own destroyed piece
+    ///     behind. Real Fortnite's ServerRepairBuildingActor is likewise only reachable while the
+    ///     piece is still standing.
+    /// </summary>
+    public int Repair(int amount) {
+        if (amount <= 0 || bDestroyed || CurrentHitPoints <= 0) return 0;
+
+        var healed = Math.Min(amount, MaxHitPoints - CurrentHitPoints);
+        if (healed <= 0) return 0;
+
+        CurrentHitPoints += healed;
+        SyncAttributeSet();
+        return healed;
     }
 
     /// <summary>

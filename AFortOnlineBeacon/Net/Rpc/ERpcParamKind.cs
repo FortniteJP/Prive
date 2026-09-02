@@ -24,6 +24,19 @@ public enum ERpcParamKind {
     Object,
 
     /// <summary>
+    ///     An object reference read as EITHER the object or its exported path - whichever the client
+    ///     actually sent.
+    ///
+    ///     This exists because a client names the SAME actor two different ways over its lifetime. The
+    ///     first time, before this server has assigned the actor a NetGUID, it exports the full path.
+    ///     Once the server has opened a channel for it - which interacting with it causes - the client
+    ///     has an id for it and sends only that, with no path at all. A handler that reads only the
+    ///     path therefore works exactly ONCE per actor and then goes silent, which is precisely how a
+    ///     door could be opened but never closed.
+    /// </summary>
+    ObjectOrPath,
+
+    /// <summary>
     ///     Same wire shape as <see cref="Object"/> (a TSubclassOf&lt;T&gt; is a UObjectPropertyBase
     ///     underneath too), but for when the reference names a CLASS this server never assigned a
     ///     NetGUID to - which is always, for any class the client itself picks (e.g.

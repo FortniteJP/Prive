@@ -37,6 +37,76 @@ internal static class NativeRpcHandlers {
         return null;
     }
 
+    /// <summary>
+    ///     The same three resources <see cref="BuildingResourcePathFor(string?)"/> resolves, keyed off
+    ///     a piece this server already has in hand rather than off a class path. Repairing works from
+    ///     the actor, not from the RPC that created it, so it has nothing to pattern-match on.
+    /// </summary>
+    private static string? BuildingResourcePathFor(EBuildingMaterial material) => material switch {
+        EBuildingMaterial.Wood => "/Game/Items/ResourcePickups/WoodItemData.WoodItemData",
+        EBuildingMaterial.Stone => "/Game/Items/ResourcePickups/StoneItemData.StoneItemData",
+        EBuildingMaterial.Metal => "/Game/Items/ResourcePickups/MetalItemData.MetalItemData",
+        _ => null
+    };
+
+    /// <summary>
+    ///     Seeded so a session's loot is reproducible - the same reason FortSafeZoneSystem seeds its
+    ///     own: a bug that only shows up with one particular drop is unchaseable if the drop changes
+    ///     every run. LOOT_SEED overrides it.
+    /// </summary>
+    private static readonly Random LootRng = new(
+        int.TryParse(Environment.GetEnvironmentVariable("LOOT_SEED"), out var lootSeed) ? lootSeed : 20191001);
+
+    /// <summary>
+    ///     Which loot tier group a container's PATH names, or null if this is not a container.
+    ///
+    ///     Name-matching, because the actor's name is all the client sends - the same approach, and the
+    ///     same limitation, as FortHarvestResources' stem lookup. Athena's containers are consistently
+    ///     named: `Tiered_Chest_*` for chests, `Tiered_Ammo_*` for ammo boxes. Anything else is left
+    ///     alone rather than guessed at, which is the deliberate choice destructible scenery already
+    ///     makes - under-covering is acceptable, acting on a wrong guess is not.
+    /// </summary>
+    /// <summary>
+    ///     Whether an interact target's path names a door. Same name-matching limitation as
+    ///     <see cref="ContainerTierGroupFor"/> - Athena's building-set doors are consistently named
+    ///     with "Door" in them (`SM_..._Door_...`, `..._DoorS_...`), and anything that is not is left
+    ///     alone rather than toggled on a guess.
+    /// </summary>
+    /// <summary>
+    ///     Whether a client-supplied actor path names a real door - looked up in a CLASS-VERIFIED
+    ///     table, never guessed from the name.
+    ///
+    ///     This used to be `name.Contains("Door")`, and that matched
+    ///     `Prop_Athena_Doorbell_Interactable_2`, whose class is `BuildingPropSimpleInteract` and not a
+    ///     wall at all. The server duly built an ABuildingWall stand-in for it, opened a channel and
+    ///     pushed wall handles at it - and the client DROPPED THE CONNECTION, which is what a handle a
+    ///     class does not have always does. The test also failed the other way: most real doors have
+    ///     no "Door" in their actor name (only 17 of 400 do).
+    ///
+    ///     See FortMapWalls.Generated.cs. Anything not in that table is left completely alone, because
+    ///     a door that will not open is a far better failure than a disconnect.
+    /// </summary>
+    private static bool LooksLikeDoor(string actorPath) => FortMapWalls.IsBuildingWall(actorPath);
+
+    private static string? ContainerTierGroupFor(string actorPath) {
+        var name = actorPath[(actorPath.LastIndexOf('.') + 1)..];
+
+        if (name.Contains("Tiered_Chest", StringComparison.OrdinalIgnoreCase)) return FortLootTables.TreasureGroup;
+        if (name.Contains("Tiered_Ammo", StringComparison.OrdinalIgnoreCase)) return FortLootTables.AmmoLargeGroup;
+        if (name.Contains("AmmoBox", StringComparison.OrdinalIgnoreCase)) return FortLootTables.AmmoLargeGroup;
+
+        return null;
+    }
+
+    /// <summary>EFortResourceType read back the other way - see ResourceTypeFor for the ordering.</summary>
+    private static string ResourceNameFor(byte resourceType) => resourceType switch {
+        0 => "Wood",
+        1 => "Stone",
+        2 => "Metal",
+        3 => "Permanite",
+        _ => "None"
+    };
+
     private static FRpcDef NoParams(string name, Action<APlayerController>? action = null) => new(
         name,
         Array.Empty<FRpcParamDef>(),
@@ -602,6 +672,102 @@ internal static class NativeRpcHandlers {
             }
         ),
 
+        // AFortPlayerController::ServerRepairBuildingActor(ABuildingSMActor* BuildingActorToRepair) -
+        // the player holding the repair input on a damaged piece they own. Confirmed live: the client
+        // has been sending this all along (it shows up in the capture logs as an unhandled field),
+        // this server just never had a handler.
+        //
+        // COST IS A PLACEHOLDER, in the same sense as every other magnitude in this project that is
+        // not read from real game data: the piece is charged its own material in proportion to how
+        // much of its health bar is missing, scaled by the flat 10 a placement costs. What IS honest
+        // about it is the partial case - a player who cannot afford a full repair gets exactly the
+        // fraction they paid for rather than nothing, and is billed only for health actually
+        // restored (see ABuildingActor.Repair, which caps and reports).
+        //
+        // Only PLAYER-placed pieces, and only ones still standing. Repairing map scenery is not a
+        // thing, and a piece already at zero is mid-cascade - see ABuildingActor.Repair.
+        ["ServerRepairBuildingActor"] = new FRpcDef(
+            "ServerRepairBuildingActor",
+            new[] { new FRpcParamDef("BuildingActorToRepair", ERpcParamKind.Object) },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+                if (values[0] is not ABuildingActor { bPlayerPlaced: true, bDestroyed: false } building) return;
+
+                var missing = building.MaxHitPoints - building.CurrentHitPoints;
+                if (missing <= 0) return;
+
+                if (pc.WorldInventory is not { } inventory) return;
+                if (BuildingResourcePathFor(building.Material) is not { } resourcePath) return;
+
+                var resourceDef = UAssetRegistry.GetOrCreate(resourcePath);
+                var stack = inventory.Inventory.Items.FirstOrDefault(item => item.ItemDefinition == resourceDef);
+                if (stack is not { Count: > 0 }) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerRepairBuildingActor - no {resourceDef.GetFName()} to repair " +
+                                      $"{building.GetFName()} with, ignoring");
+                    return;
+                }
+
+                // Round up so a scratch still costs something, then let the player pay what they can.
+                var fullCost = Math.Max(1, (int) MathF.Ceiling(
+                    missing / (float) building.MaxHitPoints * BuildingPlaceResourceCost));
+                var paid = Math.Min(fullCost, stack.Count);
+                var buying = Math.Max(1, missing * paid / fullCost);
+
+                // Repair is BOUGHT here and DELIVERED over time. The health does NOT move on this
+                // line - BeginRepair puts the piece back on the same harden ramp a freshly placed one
+                // rides, climbing to the target second by second with the client playing the build-in
+                // animation the whole way. That is what a repair looks like in the real game;
+                // awarding the health outright is what made it read as instant.
+                var target = building.CurrentHitPoints + buying;
+                if (!BuildingStructuralSupportSystem.BeginRepair(building, target)) return;
+
+                // Bill only once the ramp is actually running, and only for what it will deliver -
+                // BeginRepair clamps the target to MaxHitPoints, so a player who asked for more than
+                // the piece can hold is not charged for the overshoot.
+                var healed = Math.Min(target, building.MaxHitPoints) - building.CurrentHitPoints;
+                var charged = Math.Max(1, (int) MathF.Ceiling(
+                    healed / (float) building.MaxHitPoints * BuildingPlaceResourceCost));
+                stack.Count = Math.Max(0, stack.Count - charged);
+                inventory.Inventory.MarkItemDirty(stack);
+
+                Console.WriteLine($"NativeRpcHandlers: ServerRepairBuildingActor - {building.GetFName()} " +
+                                  $"+{healed} HP hardening from {building.CurrentHitPoints}/{building.MaxHitPoints} " +
+                                  $"for {charged} x {resourceDef.GetFName()} -> {stack.Count}");
+            }
+        ),
+
+        // AFortPlayerController::ServerOnMaterialSelection(uint8 NewResourceType, uint8 NewResourceLevel)
+        // - the build-material wheel. Nothing here needs it to decide anything (which material a piece
+        // costs is read from the building CLASS the client names in ServerCreateBuildingActor, see
+        // BuildingResourcePathFor), so this is recorded rather than acted on - but it is the only
+        // signal of what the player has selected, so it is worth having in the log next to the
+        // placements it explains.
+        ["ServerOnMaterialSelection"] = new FRpcDef(
+            "ServerOnMaterialSelection",
+            new[] {
+                new FRpcParamDef("NewResourceType", ERpcParamKind.Byte),
+                new FRpcParamDef("NewResourceLevel", ERpcParamKind.Byte)
+            },
+            (actor, values) => {
+                var resourceType = values[0] as byte? ?? 0;
+                var resourceLevel = values[1] as byte? ?? 0;
+                Console.WriteLine($"NativeRpcHandlers: ServerOnMaterialSelection - {actor.GetFName()} selected " +
+                                  $"ResourceType={resourceType} ({ResourceNameFor(resourceType)}) Level={resourceLevel}");
+            }
+        ),
+
+        // APlayerController::ServerSuicide - the player eliminating themselves. Goes through the same
+        // FortDamageSystem.Kill every other death does, so the death report, the DeathInfo block and
+        // the respawn/spectate transition are whatever they already are for a normal kill.
+        //
+        // EDeathCause has no plain "suicide": the closest real values are TeamSwitchSuicide (46),
+        // which names a reason that is not this one, and Unspecified (48). Unspecified is the honest
+        // pick - see EDeathCause, where it is already what an unattributable death goes out as.
+        ["ServerSuicide"] = NoParams("ServerSuicide", pc => {
+            if (pc.PlayerState is not { } playerState) return;
+            FortDamageSystem.Kill(playerState, EDeathCause.Unspecified);
+        }),
+
         // No-op / log-only: real gameplay behavior (spectator pawn swap, AI logging toggle, level
         // travel restart, etc.) isn't implemented yet, but decoding these (trivial - they take no
         // parameters) means they show up in the log as what they are instead of a raw field skip.
@@ -614,6 +780,102 @@ internal static class NativeRpcHandlers {
         ["ServerViewNextPlayer"] = NoParams("ServerViewNextPlayer"),
         ["ServerViewPrevPlayer"] = NoParams("ServerViewPrevPlayer"),
         ["ServerToggleAILogging"] = NoParams("ServerToggleAILogging"),
+
+        // The rest of what a live client actually sends and this server used to skip as raw fields,
+        // counted across the capture logs: ServerTouchActiveTime (647 - the AFK keepalive),
+        // ServerLoadingScreenDropped / ServerReturnToMainMenu (63 / 43 - session lifecycle) and
+        // ServerPlayUnableToPerformActionMontage (14 - a "can't do that" animation that only matters
+        // with an audience). None of them has anything to act on here, but naming them keeps the
+        // console log about the things that ARE unhandled, which is this project's main debugging
+        // surface - see [[re_and_capture_techniques]].
+        // AFortPlayerControllerAthena::ServerAttemptAircraftJump(FRotator ClientRotation) - the player
+        // jumping out of the battle bus. Seen in the PR3.0 capture as field[166] on the player
+        // controller (PriveDev/PacketProxy/decoded_new.txt), so this is what a real client sends.
+        //
+        // All this can honestly do is clear bInAircraft: the client owns the skydive and the glider
+        // from there, exactly as it owns movement everywhere else on this server (see
+        // ServerMoveNoBase - the pawn's position is whatever the client reports). What the server
+        // must NOT do is keep the flag set, because the client will not leave the bus until it comes
+        // back cleared.
+        //
+        // The jump WINDOW is not enforced here. The client refuses to send this at all while
+        // AFortGameStateAthena::bAircraftIsLocked (handle 160) is set, and it checks the aircraft's
+        // own DropStartTime itself - so the gate already exists on the side that has the flight
+        // clock, and duplicating it here could only ever disagree with it.
+        ["ServerAttemptAircraftJump"] = new FRpcDef(
+            "ServerAttemptAircraftJump",
+            new[] { new FRpcParamDef("ClientRotation", ERpcParamKind.Rotator) },
+            (actor, values) => {
+                if (actor is not APlayerController { PlayerState: { } playerState } pc) return;
+                if (!playerState.bInAircraft) return;
+
+                playerState.bInAircraft = false;
+
+                // Off the bus, so stop riding it (only relevant under BUS_ATTACH_PAWN=1 - the
+                // default model destroys the pawn instead and there is nothing attached).
+                if (pc.Pawn is { } jumpingPawn) jumpingPawn.AttachParent = null;
+
+                AFortAthenaAircraft? jumpedFrom = null;
+                if (pc.GetWorld()?.GameState is { } gameState) {
+                    foreach (var entry in gameState.Aircrafts) {
+                        if (entry is not AFortAthenaAircraft aircraft) continue;
+
+                        aircraft.JumpFlashCount++;
+                        jumpedFrom ??= aircraft;
+                    }
+                }
+
+                // A NEW PAWN, WHERE THE BUS IS. The warmup pawn was destroyed when the bus phase
+                // started (AGameModeBase.TickBoarding), matching what a real server does - the
+                // capture shows the local pawn's identity change across the bus - so the player has
+                // no pawn at all right now and the skydive has to start from one that does not exist
+                // yet. AFortAthenaAircraft.LocationAt puts it on the same straight line the client
+                // is already interpolating the bus along.
+                if (pc.Pawn == null && pc.GetWorld() is { } world && jumpedFrom != null) {
+                    var at = jumpedFrom.LocationAt(world.TimeSeconds);
+                    var spawned = AGameModeBase.SpawnAndPossessPawn(world, pc, at);
+
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptAircraftJump - " +
+                                      $"{(spawned == null ? "FAILED to spawn" : $"spawned {spawned.GetFName()}")} " +
+                                      $"at the bus {at}");
+                }
+
+                Console.WriteLine($"NativeRpcHandlers: ServerAttemptAircraftJump - {playerState.GetFName()} " +
+                                  $"left the aircraft (ClientRotation={values[0]})");
+            }
+        ),
+
+        // AFortPlayerControllerAthena::ServerThankBusDriver - the emote-on-the-bus thank you. Sets a
+        // replicated flag (bThankedBusDriver, handle 253) which this project does not send yet, so
+        // this is named rather than acted on.
+        ["ServerThankBusDriver"] = NoParams("ServerThankBusDriver"),
+
+        ["ServerTouchActiveTime"] = NoParams("ServerTouchActiveTime"),
+        ["ServerLoadingScreenDropped"] = NoParams("ServerLoadingScreenDropped"),
+        ["ServerReturnToMainMenu"] = NoParams("ServerReturnToMainMenu"),
+
+        // Same idea, but these carry a parameter, so they need a real decode to stay in sync with the
+        // bunch rather than relying on the field's bit-count resync.
+        ["ServerClientPawnLoaded"] = new FRpcDef(
+            "ServerClientPawnLoaded",
+            new[] { new FRpcParamDef("bIsPawnLoaded", ERpcParamKind.Bool) },
+            (actor, values) => {
+                if (NetDebugLog.VerboseEnabled) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerClientPawnLoaded on {actor.GetFName()} " +
+                                      $"bIsPawnLoaded={values[0] as bool? ?? false}");
+                }
+            }
+        ),
+        ["ServerSetClientHasFinishedLoading"] = new FRpcDef(
+            "ServerSetClientHasFinishedLoading",
+            new[] { new FRpcParamDef("bInHasFinishedLoading", ERpcParamKind.Bool) },
+            (actor, values) => {
+                if (NetDebugLog.VerboseEnabled) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerSetClientHasFinishedLoading on {actor.GetFName()} " +
+                                      $"bInHasFinishedLoading={values[0] as bool? ?? false}");
+                }
+            }
+        ),
 
         // AFortPlayerController::ServerReadyToStartMatch - the client's own "I am done joining"
         // signal, and the hook Project-Reboot-3.0 uses as its join checkpoint
@@ -641,6 +903,13 @@ internal static class NativeRpcHandlers {
     /// <summary>How far in front of the pawn a dropped item lands, in Unreal units (~1.5m).</summary>
     private const float TossDistance = 150.0f;
 
+    /// <summary>How wide a container fans its loot, either side of the player's heading.</summary>
+    private const float LootFanHalfAngleDegrees = 42.0f;
+
+    /// <summary>Nearest and furthest a container's loot lands, in Unreal units (~1.1m to ~1.9m).</summary>
+    private const float LootFanMinDistance = 110.0f;
+    private const float LootFanMaxDistance = 190.0f;
+
     /// <summary>Slightly above the pawn's origin so the item is not half-buried in the ground.</summary>
     private const float TossHeight = 40.0f;
 
@@ -650,7 +919,17 @@ internal static class NativeRpcHandlers {
     ///     discarding it) - the exact same "put it on the ground as a real pickup" mechanism an
     ///     inventory drop already uses, not a second implementation of it.
     /// </summary>
-    internal static void SpawnDroppedPickup(APlayerController pc, FFortItemEntry item, int count) {
+    /// <param name="at">
+    ///     Where the pickup comes to rest. Null keeps the plain in-front-of-the-pawn drop an
+    ///     inventory drop wants; container loot passes a fanned-out spot from
+    ///     <see cref="ContainerLootScatter"/> so a five-item chest does not stack five pickups on
+    ///     one point.
+    /// </param>
+    /// <param name="tossedFromContainer">
+    ///     AFortPickup::bTossedFromContainer (handle 50). False means a player dropped it.
+    /// </param>
+    internal static void SpawnDroppedPickup(APlayerController pc, FFortItemEntry item, int count,
+                                            FVector? at = null, bool tossedFromContainer = false) {
         var world = pc.GetWorld();
         if (world == null) return;
 
@@ -673,7 +952,7 @@ internal static class NativeRpcHandlers {
         // the pawn's own Rotation is never updated, so that is the only heading available.
         var yawRadians = (pawn.LastClientViewRotation?.Yaw ?? 0.0f) * MathF.PI / 180.0f;
         var origin = pawn.GetActorLocation();
-        var restLocation = new FVector {
+        var restLocation = at ?? new FVector {
             X = origin.X + MathF.Cos(yawRadians) * TossDistance,
             Y = origin.Y + MathF.Sin(yawRadians) * TossDistance,
             Z = origin.Z + TossHeight
@@ -705,10 +984,84 @@ internal static class NativeRpcHandlers {
             LoadedAmmo = item.LoadedAmmo
         };
 
+        pickup.bTossedFromContainer = tossedFromContainer;
+
         pickup.SetReplicates(true);
 
         Console.WriteLine($"NativeRpcHandlers: SpawnDroppedPickup at {pickup.GetActorLocation()} " +
                           $"count={count} guid={item.ItemGuid} - waiting for ServerReplicateActors to open its channel");
+    }
+
+    /// <summary>
+    ///     Where each of a container's items comes to rest.
+    ///
+    ///     Real Fortnite TOSSES them: the chest CDO carries `LootSpawnLocation_Athena = (0, 50, 30)`
+    ///     in the container's own local space and `LootTossSpeed_Athena = 600`, and PR3.0's SpawnLoot
+    ///     sets `bToss` and `bRandomRotation`, so a UProjectileMovementComponent scatters them over a
+    ///     metre or two. Neither half of that is available here: there is no physics, and - more
+    ///     awkwardly - THIS SERVER DOES NOT KNOW WHERE THE CONTAINER IS. ServerAttemptInteract
+    ///     carries only ReceivingActor, InteractComponent, InteractType and OptionalObjectData; no
+    ///     location, and a chest lives in a streaming sublevel that is never loaded. The pawn is the
+    ///     one position known for certain, and it is by definition within interaction range of the
+    ///     chest, so the fan is built around the player's heading instead.
+    ///
+    ///     The real point is only that N items must not share ONE point, which is what a single
+    ///     shared rest location did: a five-item chest looked like it had dropped one thing, because
+    ///     five pickups were sitting inside each other.
+    ///
+    ///     Spawning at the container proper needs its world location, which would mean generating a
+    ///     placed-container table the way FortFloorLoot's 932 spawn points were generated
+    ///     (`pakreader spawnpoints`) - see [[pak-access]]. Worth doing; not needed for this.
+    /// </summary>
+    private static FVector[] ContainerLootScatter(APawn pawn, int count) {
+        var origin = pawn.GetActorLocation();
+        var baseYaw = pawn.LastClientViewRotation?.Yaw ?? 0.0f;
+        var spots = new FVector[count];
+
+        for (var i = 0; i < count; i++) {
+            // Evenly spaced across the fan so two items can never coincide, plus a little jitter in
+            // both angle and distance so a chest does not deal its loot out in a visibly perfect arc.
+            var t = count == 1 ? 0.5f : i / (float) (count - 1);
+            var yaw = baseYaw
+                    + (t * 2.0f - 1.0f) * LootFanHalfAngleDegrees
+                    + ((float) LootRng.NextDouble() - 0.5f) * 12.0f;
+            var distance = LootFanMinDistance
+                         + (float) LootRng.NextDouble() * (LootFanMaxDistance - LootFanMinDistance);
+            var radians = yaw * MathF.PI / 180.0f;
+
+            spots[i] = new FVector {
+                X = origin.X + MathF.Cos(radians) * distance,
+                Y = origin.Y + MathF.Sin(radians) * distance,
+                Z = origin.Z + TossHeight
+            };
+        }
+
+        return spots;
+    }
+
+    /// <summary>
+    ///     Rolls a container's loot table and puts it on the ground, fanned out.
+    ///
+    ///     Shared by BOTH ways a container can arrive at ServerAttemptInteract - resolved to an
+    ///     object (a chest this server has already registered) and named only by path. The by-id
+    ///     branch used to open the chest and drop NOTHING, which is a difference no player could
+    ///     have explained: the same chest gave loot or did not depending on whether it had been hit
+    ///     with a pickaxe at some point earlier.
+    /// </summary>
+    private static void DropContainerLoot(APlayerController pc, string tierGroup, string label) {
+        if (pc.Pawn is not { } pawn) return;
+
+        var drops = FortLootTables.Roll(tierGroup, LootRng);
+        var spots = ContainerLootScatter(pawn, drops.Count);
+
+        for (var i = 0; i < drops.Count; i++) {
+            SpawnDroppedPickup(pc, FortWeaponActorClasses.WorldLootEntry(drops[i].ItemPath, drops[i].Count),
+                               drops[i].Count, spots[i], tossedFromContainer: true);
+        }
+
+        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - opened {label} ({tierGroup}), " +
+                          $"dropped {drops.Count} item(s): " +
+                          $"{string.Join(", ", drops.Select(d => $"{d.Count}x{d.ItemPath[(d.ItemPath.LastIndexOf('.') + 1)..]}"))}");
     }
 
     private static readonly FRpcParamDef[] ServerMoveTimeStampPrefix = {
@@ -739,6 +1092,148 @@ internal static class NativeRpcHandlers {
     ///     still just RemoteViewPitch/PlayerState/Controller) - registering the name here alone does
     ///     nothing until that class hierarchy's real field list replaces the current placeholder.
     /// </summary>
+    /// <summary>
+    ///     The controller's InteractionComp - see UFortControllerComponent_Interaction. Chests, ammo
+    ///     boxes and doors ALL arrive here, as a sub-object content block on the controller's channel,
+    ///     never on the controller itself.
+    /// </summary>
+    private static readonly Dictionary<string, FRpcDef> InteractionComponentRpcs = new() {
+        // UFortControllerComponent_Interaction::ServerAttemptInteract(AActor* ReceivingActor,
+        // UPrimitiveComponent* InteractComponent, uint8 InteractType, UObject* OptionalObjectData) -
+        // the interact key. Chests, ammo boxes, doors: all of them arrive here.
+        //
+        // ReceivingActor is read as ObjectPath, not Object, because the interesting targets are MAP
+        // actors: a chest lives in a streaming sublevel this server never loads, so it can never
+        // resolve to something this server already has. Same situation destructible scenery is in,
+        // and the same answer - UAssetRegistry.GetOrCreateSubObject builds a stably-named stand-in for
+        // the path, which is enough to push properties at an actor this server never created. See
+        // ABuildingContainer.
+        //
+        // Only the first two parameters are declared. What follows is an InteractType byte and an
+        // object reference this server has nothing to do with; stopping early is free, because
+        // UActorChannel.ReadContentBlockFields resynchronises to the field's own declared bit count
+        // (the same reason ServerSetReplicatedTargetData stops where it does).
+        ["ServerAttemptInteract"] = new FRpcDef(
+            "ServerAttemptInteract",
+            // All FOUR parameters, per the SDK:
+            //   ServerAttemptInteract(AActor* ReceivingActor, UPrimitiveComponent* InteractComponent,
+            //                         char InteractType, UObject* OptionalObjectData)
+            // The last two are not used yet, but they are decoded so the field's declared bit count
+            // actually balances - which is the only check available on a layout that was derived
+            // rather than probed, and it is worthless while trailing parameters are missing.
+            // InteractType is a plain byte: the objects dump lists no `.UnderlyingType` child for it,
+            // unlike a real enum property such as OnGamePhaseChanged.NewPhase.
+            new[] {
+                new FRpcParamDef("ReceivingActor", ERpcParamKind.ObjectOrPath),
+                new FRpcParamDef("InteractComponent", ERpcParamKind.Object),
+                new FRpcParamDef("InteractType", ERpcParamKind.Byte),
+                new FRpcParamDef("OptionalObjectData", ERpcParamKind.Object)
+            },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+                if (pc.GetWorld() is not { NetDriver: { } netDriver } world) return;
+
+                // The SECOND and every later interaction with the same actor arrives as a bare id,
+                // because the first one made this server open a channel for it and the client now has
+                // a NetGUID to name it with. Those resolve straight back to the stand-in built the
+                // first time, so they are handled here, before any path lookup - a door that could be
+                // opened but never closed was exactly this: the open exported a path, the close did
+                // not, and the handler only understood paths.
+                switch (values[0]) {
+                    case ABuildingWall knownDoor:
+                        if (knownDoor.ToggleDoor(world.TimeSeconds) is not { } byIdState) return;
+
+                        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - door {knownDoor.GetFName()} " +
+                                          $"(by id, InteractType={values[2]}) is now {(byIdState ? "OPEN" : "CLOSED")}");
+                        return;
+
+                    case ABuildingContainer knownContainer:
+                        if (!knownContainer.Search()) return;
+
+                        // Loot too, not just the open. This branch is reachable whenever the chest
+                        // was registered earlier (a pickaxe hit still does that) and it dropped
+                        // nothing at all until now - see DropContainerLoot.
+                        var knownPath = UAssetRegistry.PathOf(knownContainer);
+                        if (knownPath == null || ContainerTierGroupFor(knownPath) is not { } knownTier) {
+                            Console.WriteLine("NativeRpcHandlers: ServerAttemptInteract - opened " +
+                                              $"{knownContainer.GetFName()} (by id) but its loot tier group " +
+                                              "is unknown, so it drops nothing");
+                            return;
+                        }
+
+                        DropContainerLoot(pc, knownTier, $"{knownContainer.GetFName()} (by id)");
+                        return;
+                }
+
+                var path = values[0] as string ?? string.Empty;
+                if (path.Length == 0) {
+                    Console.WriteLine("NativeRpcHandlers: ServerAttemptInteract named no resolvable actor, ignoring");
+                    return;
+                }
+
+                // A DOOR. Toggled, not opened once, and it needs nothing but the flag coming back -
+                // the client has already predicted the swing and is waiting to be told it was right
+                // (see ABuildingWall). Checked before containers because a door is far more common.
+                if (LooksLikeDoor(path)) {
+                    ABuildingWall door;
+                    try {
+                        door = UAssetRegistry.GetOrCreateSubObject<ABuildingWall>(path);
+                    } catch (Exception ex) {
+                        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract could not turn door '{path}' into a level actor - {ex.Message}");
+                        return;
+                    }
+
+                    door.MarkAsLevelActor();
+                    if (!netDriver.NetworkObjectList.Contains(door)) {
+                        door.SetReplicates(true);
+                        netDriver.AddNetworkActor(door);
+                    }
+
+                    if (door.ToggleDoor(world.TimeSeconds) is not { } state) return;
+
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - door '{path}' " +
+                                      $"(InteractType={values[2]}) is now {(state ? "OPEN" : "CLOSED")}");
+                    return;
+                }
+
+                // Which kind of container this is comes from the actor's NAME, which is all the client
+                // gives us - the same shape of lookup FortHarvestResources does for scenery, and with
+                // the same caveat: an unrecognised name is left alone rather than guessed at.
+                // NOT gated on verbose any more. This return being silent is what made a decoded,
+                // dispatched, perfectly working RPC look like a dead one for two rounds of debugging:
+                // every other path out of this handler logs, so silence read as "never got here".
+                var tierGroup = ContainerTierGroupFor(path);
+                if (tierGroup == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract on '{path}' - " +
+                                      "neither a known door nor a container this server knows, ignoring");
+                    return;
+                }
+
+                ABuildingContainer container;
+                try {
+                    container = UAssetRegistry.GetOrCreateSubObject<ABuildingContainer>(path);
+                } catch (Exception ex) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract could not turn '{path}' into a level actor - {ex.Message}");
+                    return;
+                }
+
+                container.MarkAsLevelActor();
+
+                if (!netDriver.NetworkObjectList.Contains(container)) {
+                    container.SetReplicates(true);
+                    netDriver.AddNetworkActor(container);
+                }
+
+                // Already open: say nothing and drop nothing. The guard lives on the container so a
+                // client holding the interact key cannot empty one chest repeatedly.
+                if (!container.Search()) return;
+
+                DropContainerLoot(pc, tierGroup, $"'{path}'");
+            }
+        ),
+
+    };
+
     private static readonly Dictionary<string, FRpcDef> PawnRpcs = new() {
         // AFortPlayerPawn::ServerHandlePickup(AFortPickup*, float InFlyTime, FVector InStartDirection,
         // bool bPlayPickupSound) - declared on the PAWN, not the PlayerController, so it arrives as
@@ -850,7 +1345,57 @@ internal static class NativeRpcHandlers {
         // MarkGoodMove takes the max, so reading both is harmless either way.
         ["ServerMoveDual"] = MovePrefix("ServerMoveDual", ServerMoveDualTimeStampPrefix),
         ["ServerMoveDualNoBase"] = MovePrefix("ServerMoveDualNoBase", ServerMoveDualTimeStampPrefix),
-        ["ServerMoveDualHybridRootMotion"] = MovePrefix("ServerMoveDualHybridRootMotion", ServerMoveDualTimeStampPrefix)
+        ["ServerMoveDualHybridRootMotion"] = MovePrefix("ServerMoveDualHybridRootMotion", ServerMoveDualTimeStampPrefix),
+
+        // AFortPlayerPawn::ServerPlayUnableToPerformActionMontage() - the "you can't do that" animation
+        // (no room to build, nothing to interact with). It exists so OTHER clients see the gesture;
+        // the player who sent it already played it locally. Nothing to broadcast to yet, so this is
+        // named rather than acted on.
+        ["ServerPlayUnableToPerformActionMontage"] = NoParams("ServerPlayUnableToPerformActionMontage")
+    };
+
+    /// <summary>
+    ///     RPCs the client sends on a WEAPON's own channel. Worth stating explicitly because it is not
+    ///     obvious and it is easy to put them in the wrong table: the capture logs show both of these
+    ///     arriving with `Actor=B_Athena_Pickaxe_Generic_C` / `Actor=B_Assault_Auto_Athena_C`, not on
+    ///     the pawn or the controller, so a handler registered anywhere else is simply never reached.
+    /// </summary>
+    private static readonly Dictionary<string, FRpcDef> WeaponRpcs = new() {
+        // AFortWeapon::ServerReleaseWeaponAbility(FGameplayAbilitySpecHandle SpecHandle) - the trigger
+        // coming back UP, and by a wide margin the most frequent thing the client sends that this
+        // server used to skip entirely (2753 times across the capture logs, pickaxe and rifle alike).
+        //
+        // Decoded and deliberately not acted on. Real Fortnite uses it to end the weapon's fire
+        // ability instance; there are no ability instances here, and the two things a release could
+        // plausibly drive on this server - ammo and damage - are both already driven by the shot
+        // reports (ServerSetReplicatedTargetData / ServerAbilityRPCBatch, see OnShotReported), which
+        // arrive per bullet whether or not the trigger is ever released. Acting on it as well would
+        // double-count.
+        ["ServerReleaseWeaponAbility"] = new FRpcDef(
+            "ServerReleaseWeaponAbility",
+            new[] { new FRpcParamDef("SpecHandle", ERpcParamKind.Int32) },
+            (actor, values) => {
+                if (NetDebugLog.VerboseEnabled) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerReleaseWeaponAbility on {actor.GetFName()} " +
+                                      $"SpecHandle={values[0]}");
+                }
+            }
+        ),
+
+        // AFortWeapon::ServerSetMuzzleTraceNearWall(bool bIsNearWall) - the muzzle is against
+        // geometry, which is what lowers the weapon in the third-person pose OTHER players see. The
+        // sender already lowers it locally and there is nobody else here, so this is decoded and
+        // dropped; it would need a replicated counterpart on the weapon to be worth acting on.
+        ["ServerSetMuzzleTraceNearWall"] = new FRpcDef(
+            "ServerSetMuzzleTraceNearWall",
+            new[] { new FRpcParamDef("bIsNearWall", ERpcParamKind.Bool) },
+            (actor, values) => {
+                if (NetDebugLog.VerboseEnabled) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerSetMuzzleTraceNearWall on {actor.GetFName()} " +
+                                      $"bIsNearWall={values[0] as bool? ?? false}");
+                }
+            }
+        )
     };
 
     /// <summary>A move RPC we decode only far enough to learn which timestamps it acknowledges.</summary>
@@ -1307,6 +1852,30 @@ internal static class NativeRpcHandlers {
             // destructibility is the acceptable failure here; disconnecting the client is not.
             if (FortHarvestResources.ResolveHit(hit.ActorPath) == null) return false;
 
+            // A CHEST OR AMMO BOX IS NOT SCENERY - but it must still be REGISTERED here, and this is
+            // the only place that can do it.
+            //
+            // A client is not the NetGUID authority. Its own log spells out what happens when it tries
+            // to name a chest this server has never introduced:
+            //
+            //     GetOrAssignNetGUID: NetGUIDLookup did not contain object on client, returning
+            //     default. Object ...PersistentLevel.Tiered_Chest_6_Parent2_1705
+            //
+            // so ServerAttemptInteract's ReceivingActor arrives as the default guid with NO path, and
+            // no amount of decoding can recover which chest was meant. The real server never hits this
+            // because it has already replicated the chest and the client has an id for it.
+            //
+            // A pickaxe HIT is different: FHitResult carries the actor's exported PATH, so this is the
+            // one moment the server learns a chest exists and can hand the client an id for it. Doing
+            // that here - with the CORRECT class - is what makes the later interaction resolvable.
+            // Registering it as a plain ABuildingActor (what this used to do) gave the client an id
+            // for the wrong kind of actor and left it with a chest bound to None.None; skipping it
+            // entirely (Round 96) left the interaction unnameable instead.
+            if (ContainerTierGroupFor(hit.ActorPath) != null) {
+                RegisterContainerFromHit(netDriver, hit.ActorPath);
+                return false;
+            }
+
             try {
                 levelActor = UAssetRegistry.GetOrCreateSubObject<ABuildingActor>(hit.ActorPath);
             } catch (Exception ex) {
@@ -1315,6 +1884,22 @@ internal static class NativeRpcHandlers {
                 return false;
             }
         }
+
+        // A CHEST OR AMMO BOX IS NOT SCENERY - and the guard for that has to sit on BOTH paths, not
+        // just the by-path one above. Once a chest has been registered it HAS a NetGUID, so every
+        // later hit resolves to an object and takes the `hit.Actor is ABuildingActor` branch, which
+        // walked straight into ApplyDamage/MarkDestroyed. The effect was that the single hit which
+        // makes a chest interactable at all is immediately followed by hits that destroy it:
+        //
+        //     registered container '...Tiered_Chest_6_Parent2_1705' so the client can name it
+        //     ...three more swings...
+        //     DESTRUCTIBLE_SCENERY marked 'Tiered_Chest_6_Parent2_1705' destroyed (0/200 HP)
+        //     ReplicateActorUpdate: ABuildingContainer ChIndex=13 changed=[bDestroyed]
+        //
+        // 30 + 90 + 90 (two weak-spot hits) = 210 against 200 HP, so four swings did it every time -
+        // which is why "hit it, then hold to search" never worked. Registration is the ONLY thing a
+        // hit on a container may do.
+        if (levelActor is ABuildingContainer) return false;
 
         levelActor.MarkAsLevelActor();
         levelActorOut = levelActor;
@@ -1341,6 +1926,29 @@ internal static class NativeRpcHandlers {
         Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY marked '{hit.ActorPath}' destroyed " +
                           $"({levelActor.CurrentHitPoints}/{levelActor.MaxHitPoints} HP)");
         return true;
+    }
+
+    /// <summary>
+    ///     Gives the client a NetGUID for a chest or ammo box, as the RIGHT class, the first time a hit
+    ///     tells this server that one exists. Never damages or opens it - opening is
+    ///     ServerAttemptInteract's job, and this only exists so that RPC has something nameable to
+    ///     refer to. See the call site for why a hit is the only opportunity.
+    /// </summary>
+    private static void RegisterContainerFromHit(UNetDriver netDriver, string actorPath) {
+        ABuildingContainer container;
+        try {
+            container = UAssetRegistry.GetOrCreateSubObject<ABuildingContainer>(actorPath);
+        } catch (Exception ex) {
+            Console.WriteLine($"NativeRpcHandlers: could not turn container '{actorPath}' into a level actor - {ex.Message}");
+            return;
+        }
+
+        container.MarkAsLevelActor();
+        if (netDriver.NetworkObjectList.Contains(container)) return;
+
+        container.SetReplicates(true);
+        netDriver.AddNetworkActor(container);
+        Console.WriteLine($"NativeRpcHandlers: registered container '{actorPath}' so the client can name it");
     }
 
     /// <summary>
@@ -1641,12 +2249,14 @@ internal static class NativeRpcHandlers {
     /// <summary>The RPC table for a replicated sub-object, keyed by what the sub-object actually is.</summary>
     public static Dictionary<string, FRpcDef>? GetForSubObject(UObject subObject) => subObject switch {
         UFortAbilitySystemComponent => AbilitySystemComponentRpcs,
+        UFortControllerComponent_Interaction => InteractionComponentRpcs,
         _ => null
     };
 
     public static Dictionary<string, FRpcDef>? Get(AActor actor) => actor switch {
         APlayerController => PlayerControllerRpcs,
         APawn => PawnRpcs,
+        AFortWeapon => WeaponRpcs,
         AFortBroadcastRemoteClientInfo => BroadcastRemoteClientInfoRpcs,
         _ => null
     };

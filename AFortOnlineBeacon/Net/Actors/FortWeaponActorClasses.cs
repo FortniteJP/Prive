@@ -105,6 +105,27 @@ internal static partial class FortWeaponActorClasses {
     }
 
     /// <summary>
+    ///     The item entry for something spawned into the WORLD as loot - a chest's contents, floor
+    ///     loot, anything the player has not handled yet.
+    ///
+    ///     Exists so that "world loot arrives LOADED" is stated once instead of at every spawn site.
+    ///     A weapon a real server puts on the ground comes with a full magazine, and LoadedAmmo is
+    ///     what APawn.EquipWeapon copies straight into AFortWeapon::AmmoCount (handle 28) - so an
+    ///     entry left at the default 0 hands the player a gun that has to be reloaded before it can
+    ///     fire a single shot. Anything without a magazine (a consumable, ammo itself, a resource)
+    ///     has no row in the clip-size table and correctly gets 0.
+    /// </summary>
+    public static FFortItemEntry WorldLootEntry(string itemPath, int count) {
+        var definition = UAssetRegistry.GetOrCreate(itemPath);
+
+        return new FFortItemEntry {
+            ItemDefinition = definition,
+            Count = count,
+            LoadedAmmo = ClipSizeFor(definition)
+        };
+    }
+
+    /// <summary>
     ///     The UClass to hand UWorld.SpawnActor for this item definition. One UClass per distinct
     ///     weapon class path, all backed by the same C# AFortWeapon type: the class is what the
     ///     client is told to spawn (its CDO is the archetype in the spawn header), while the C# type

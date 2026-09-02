@@ -91,6 +91,15 @@ public enum ERepPropertyKind {
     VectorQuantize100,
 
     /// <summary>
+    ///     An FRotator leaf with its own NetSerialize - three optionally-present compressed shorts,
+    ///     exactly what SerializeNewActor already writes for a spawned actor's rotation. Atomic for
+    ///     the same reason the quantized vectors are: RepLayout never recurses into a struct that has
+    ///     a native NetSerialize. `AFortAthenaAircraft::FlightInfo.FlightStartRotation` is the one
+    ///     this project sends - the bus's heading, i.e. the entire flight path.
+    /// </summary>
+    Rotator,
+
+    /// <summary>
     ///     A UInt16Property / UInt16 leaf (e.g. FFortItemEntry::OrderIndex) - no NetSerializeItem
     ///     override, so UProperty's default SerializeItem runs: 16 raw little-endian bits.
     /// </summary>
@@ -175,6 +184,9 @@ public sealed class FRepPropertyDef {
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.VectorQuantize10"/>.</summary>
     public Func<object, FVector>? GetVectorValue { get; init; }
+
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.Rotator"/>.</summary>
+    public Func<object, FRotator>? GetRotatorValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ByteEnum"/> - the enum's highest raw value (e.g. ENetRole.ROLE_MAX=4), matching UByteProperty::NetSerializeItem's CeilLogTwo(Enum-&gt;GetMaxEnumValue()).</summary>
     public int EnumMaxValue { get; init; }

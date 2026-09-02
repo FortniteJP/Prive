@@ -78,6 +78,46 @@ public class UActorChannel : UChannel {
         return changed;
     }
 
+    /// <summary>
+    ///     DoorDesiredRotOffset (handle 70) - how far the door turns. ON by default; DOOR_ROT_OFFSET=0
+    ///     drops it, and dropping it makes the swing wrong again.
+    ///
+    ///     LIVE-CONFIRMED, after being wrongly ruled out. `ABuildingWall::OnRep_bDoorOpen`
+    ///     (0x1413F9ED0 in the 10.40 client) only compares bDoorOpen against its predicted
+    ///     bLocalDoorOpen, plays the open/close sound, and tail-calls a generic building notify - it
+    ///     never touches 0xBD0, and no NATIVE code anywhere does. That looked conclusive and was not:
+    ///     the doors are BLUEPRINTS (`Rural_House_Wall_9_C` -> `Parent_BuildingWall_C`), so the swing
+    ///     is BYTECODE, which a native displacement search cannot see by construction. Sending this
+    ///     makes the door open and close correctly and consistently; not sending it does not.
+    ///
+    ///     "No native code reads it" is not "nothing reads it" - remember that before ruling a
+    ///     replicated property out on a Blueprint actor.
+    /// </summary>
+    /// <summary>
+    ///     BUS_ATTACH_PAWN=1 - see the AttachmentReplication note in the pawn's set. Off by default
+    ///     because the bus destroys the pawn rather than attaching it.
+    /// </summary>
+    private static bool EnvAttachPawn => Environment.GetEnvironmentVariable("BUS_ATTACH_PAWN") is "1";
+
+    /// <summary>Adds the six AttachmentReplication handles only when BUS_ATTACH_PAWN=1.</summary>
+    private static HashSet<string> WithPawnAttachment(HashSet<string> names) {
+        if (!EnvAttachPawn) return names;
+
+        names.UnionWith(new[] {
+            "AttachmentReplication.AttachParent", "AttachmentReplication.LocationOffset",
+            "AttachmentReplication.RelativeScale3D", "AttachmentReplication.RotationOffset",
+            "AttachmentReplication.AttachSocket", "AttachmentReplication.AttachComponent"
+        });
+
+        return names;
+    }
+
+    private static HashSet<string> WithDoorRotation(HashSet<string> properties) {
+        if (Environment.GetEnvironmentVariable("DOOR_ROT_OFFSET") is not "0") properties.Add("DoorDesiredRotOffset");
+
+        return properties;
+    }
+
     private static HashSet<string> GetInitialReplicatedPropertiesCore(AActor actor) => actor switch {
         // The Athena block (WarmupCountdown*/AircraftStartTime/TotalPlayers/PlayersLeft/
         // CurrentPlaylistId/GamePhase/bGameModeWillSkipAircraft) mirrors what raider3.5 sets in
@@ -89,7 +129,34 @@ public class UActorChannel : UChannel {
             "WorldManager", "ReplicatedWorldTimeSeconds",
             "WarmupCountdownStartTime", "WarmupCountdownEndTime", "AircraftStartTime",
             "TotalPlayers", "PlayersLeft", "CurrentPlaylistId", "GamePhase",
-            "CurrentPlaylistInfo.BasePlaylist", "bGameModeWillSkipAircraft"
+            "CurrentPlaylistInfo.BasePlaylist", "bGameModeWillSkipAircraft",
+            // Teams (29) and the battle bus (159/160). All three CHANGE during a match - the bus is
+            // spawned after the GameState exists, and bAircraftIsLocked is the whole drop-window
+            // control - so they have to be named here or the per-tick diff would never compare them.
+            // See Round 60 in [[afortonlinebeacon-status]] for what forgetting this costs.
+            "TeamCount", "Aircrafts", "bAircraftIsLocked",
+            // The storm (112/149/157). SafeZoneIndicator is the reference the client's map hangs off,
+            // and all three change during a match, so all three have to be named here.
+            "SafeZonesStartTime", "SafeZoneIndicator", "SafeZonePhase"
+        },
+        // The storm circle. Every one of these changes at each phase - the client interpolates from
+        // Last to Next between the two shrink times - so the per-tick diff has to be walking them.
+        AFortSafeZoneIndicator => new HashSet<string> {
+            "RemoteRole", "Role",
+            "LastRadius", "NextRadius", "NextNextRadius",
+            "LastCenter", "NextCenter", "NextNextCenter",
+            "SafeZoneStartShrinkTime", "SafeZoneFinishShrinkTime",
+            "MegaStormDelayTimeBeforeDestruction", "Radius"
+        },
+        // The battle bus. Its whole flight plan is initial state - the client simulates the flight
+        // itself from these, so nothing here needs to change again once sent - but JumpFlashCount
+        // and the times are listed anyway so a re-plan would actually go out.
+        AFortAthenaAircraft => new HashSet<string> {
+            "RemoteRole", "Role",
+            "FlightInfo.FlightStartLocation", "FlightInfo.FlightStartRotation", "FlightInfo.FlightSpeed",
+            "FlightInfo.TimeTillFlightEnd", "FlightInfo.TimeTillDropStart", "FlightInfo.TimeTillDropEnd",
+            "FlightStartTime", "FlightEndTime", "DropStartTime", "DropEndTime",
+            "ReplicatedFlightTimestamp", "AircraftIndex"
         },
         APlayerState => new HashSet<string> { "RemoteRole", "Role", "UniqueId", "PlayerNamePrivate", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
             "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]",
@@ -103,7 +170,10 @@ public class UActorChannel : UChannel {
             // serializer here and an empty container is what an ordinary death carries anyway.
             "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
             "DeathInfo.Distance", "DeathInfo.bInitialized",
-            "TeamIndex", "SquadId" },
+            "TeamIndex", "SquadId",
+            // Aboard the battle bus (252). Starts true only when the aircraft phase is on, and is
+            // cleared by ServerAttemptAircraftJump, so it changes mid-match and has to be here.
+            "bInAircraft" },
         // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
         // FRepLayout at all - see NativeRepLayouts.InventoryProps.
@@ -170,8 +240,21 @@ public class UActorChannel : UChannel {
         // attempt had wrongly placed this). See NativeRepLayouts.PlayerControllerProps.
         // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
         // with no controller and no player state.
-        APawn => new HashSet<string> {
+        APawn => WithPawnAttachment(new HashSet<string> {
             "RemoteRole", "Role", "Owner", "PlayerState", "Controller",
+            // Handles 7-12, and DELIBERATELY NOT SENT unless BUS_ATTACH_PAWN=1 asks for them.
+            //
+            // Sending them unconditionally was actively harmful. With nothing attached, AttachParent
+            // goes out as NULL, and AActor::OnRep_AttachmentReplication's else branch (Actor.cpp:1677)
+            // runs `DetachFromActor(KeepWorldTransform)` and then, if bReplicateMovement,
+            // `OnRep_ReplicatedMovement()` - and this server never sends ReplicatedMovement, so the
+            // client applies its DEFAULT, an all-zero location and rotation. The live symptom was a
+            // spawn-time camera roll of 90 degrees that went from occasional to every single time
+            // the moment these were added.
+            //
+            // The layout entries stay real and correctly typed (see NativeRepLayouts) - attachment
+            // is how vehicles and ziplines will work - but the battle bus does not use it: a real
+            // server destroys the pawn instead.
             // Null at spawn and set by ServerExecuteInventoryItem. Listed here because
             // ReplicatedProperties doubles as the set the per-tick diff walks - a property absent
             // from it is never compared, so it could never start being sent later either.
@@ -183,7 +266,7 @@ public class UActorChannel : UChannel {
             // emote that reaches anybody but the emoter. See APawn.LastReplicatedEmoteExecuted;
             // listed here for the same reason as the two above.
             "LastReplicatedEmoteExecuted"
-        },
+        }),
         APlayerController => new HashSet<string> {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
             "PlayerState", "Pawn", "WorldInventory",
@@ -207,6 +290,18 @@ public class UActorChannel : UChannel {
         // exactly why they have to be listed HERE too - this set doubles as the per-tick diff's
         // walk list, so a property missing from it is never compared and could never start being
         // sent later (same reason AFortPickup.bPickedUp and APawn.CurrentWeapon are listed).
+        // A chest or ammo box. Everything a building piece sends, plus the two that ARE the open:
+        // bAlreadySearched (71, whose OnRep swaps in the opened mesh) and the animation counter (76).
+        // A door. bDoorOpen (73) is the whole thing; the collision flag rides along so an open door
+        // is actually walkable.
+        ABuildingWall => WithDoorRotation(new HashSet<string> {
+            "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced",
+            "bDoorOpen", "bDoorCollisionDisabled"
+        }),
+        ABuildingContainer => new HashSet<string> {
+            "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced",
+            "ReplicatedLootTier", "bAlreadySearched", "SearchBounceData.SearchAnimationCount"
+        },
         ABuildingActor => new HashSet<string> {
             "RemoteRole", "Role", "ReplicatedBuildingAttributeSet", "HealthBarIndicatorDifficultyRating",
             // The component the attribute set has to be reachable through before its OnRep can
@@ -1333,6 +1428,130 @@ public class UActorChannel : UChannel {
         });
 
     /// <summary>
+    ///     A hardcoded-EName FName parameter, as UPackageMap::StaticSerializeName writes it:
+    ///     one bit bHardcoded, then SerializeIntPacked of the EName index (CoreNet.cpp:274, and
+    ///     MAX_NETWORKED_HARDCODED_NAME = 410 in UnrealNames.h). A name above that limit goes as a
+    ///     STRING instead, which is what makes the observed sizes below so informative.
+    /// </summary>
+    private static unsafe void WriteHardcodedName(FNetBitWriter writer, uint nameIndex) {
+        writer.WriteBit(true);                  // bHardcoded
+        writer.SerializeIntPacked(&nameIndex);
+    }
+
+    /// <summary>EName indices from UnrealNames.inl - the only three this server needs.</summary>
+    private const uint NameDefault = 204;
+    private const uint NameSpectating = 322;
+
+    /// <summary>
+    ///     APlayerController::ClientGotoState(FName NewState) and ClientSetCameraMode(FName) - the
+    ///     other two thirds of boarding the battle bus. See SendClientSetViewTarget for the capture.
+    ///
+    ///     THE STATE IS Spectating, and the capture proves it by its TIMING rather than its content.
+    ///     The PR3.0 session sends ClientGotoState at 19:59:14.555, .587, then 19:59:16.652,
+    ///     19:59:18.685, 19:59:20.752 - i.e. every ~2.03-2.07 seconds. That is the fingerprint of
+    ///     APlayerController::ServerSetSpectatorLocation_Implementation (PlayerController.cpp:2739),
+    ///     which re-sends ClientGotoState(GetStateName()) only
+    ///     `if (IsInState(NAME_Spectating))` and only once
+    ///     `World->TimeSeconds - LastSpectatorStateSynchTime > 2.f`. Its other branch is
+    ///     ClientGotoState followed immediately by ClientSetViewTarget - exactly the pair the
+    ///     transition sends. A player on the bus is a SPECTATOR with the aircraft as view target.
+    ///
+    ///     THE CAMERA MODE IS Default, by elimination rather than by timing. Both RPCs are 18 bits,
+    ///     which is far too small for a string, so both names must be hardcoded ENames. UE's
+    ///     camera-mode names are Default, ThirdPerson, FirstPerson and FreeCam - and only `Default`
+    ///     (204) is in UnrealNames.inl at all; the other three are not hardcoded and could not fit.
+    ///     It is also what APlayerController::ResetCameraMode sends (PlayerController.cpp:1579).
+    ///
+    ///     18 bits is the check on the encoding, and it lands exactly: 1 presence bit (the rule
+    ///     SendNetMulticastAthenaBatchedDamageCues documents - one per non-bool parameter) + 1 bit
+    ///     bHardcoded + 16 bits for SerializeIntPacked of a two-byte index (both 204 and 322 need
+    ///     two) = 18.
+    ///
+    ///     Both are overridable (BUS_GOTO_STATE_NAME / BUS_CAMERA_MODE_NAME, EName indices) so an
+    ///     alternative can be tried against a live client without a rebuild.
+    /// </summary>
+    public void SendClientGotoState(uint nameIndex) =>
+        SendRpc("ClientGotoState", writer => {
+            writer.WriteBit(true);              // the parameter's presence bit
+            WriteHardcodedName(writer, nameIndex);
+        });
+
+    /// <summary>See SendClientGotoState.</summary>
+    public void SendClientSetCameraMode(uint nameIndex) =>
+        SendRpc("ClientSetCameraMode", writer => {
+            writer.WriteBit(true);
+            WriteHardcodedName(writer, nameIndex);
+        });
+
+    /// <summary>
+    ///     APlayerController::ClientSetRotation(FRotator NewRotation, bool bResetCamera) - the
+    ///     server telling the client which way the player is facing.
+    ///
+    ///     This server never sent it, and a real one does: the PR3.0 capture has it at login
+    ///     (decoded_new.txt #356, `field[11] = ClientSetRotation (21 bits)`) and again around the
+    ///     jump (#8505). Without it nothing on the client's side is ever told what the initial
+    ///     control rotation should be.
+    ///
+    ///     The 21 bits are the check on the encoding and they land exactly: 1 presence bit for the
+    ///     rotator parameter (the one-per-non-bool-parameter rule
+    ///     SendNetMulticastAthenaBatchedDamageCues documents) + FRotator::SerializeCompressedShort's
+    ///     three per-axis presence bits + 16 for the single non-zero axis + 1 for bResetCamera,
+    ///     which is a bool and so gets no presence bit of its own = 21. The capture's other size,
+    ///     37, is the same thing with two axes present.
+    /// </summary>
+    public void SendClientSetRotation(FRotator rotation, bool bResetCamera) =>
+        SendRpc("ClientSetRotation", writer => {
+            writer.WriteBit(true);
+            rotation.NetSerializeWrite(writer);
+            writer.WriteBit(bResetCamera);
+        });
+
+    /// <summary>
+    ///     APlayerController::ClientSetViewTarget(AActor* A, FViewTargetTransitionParams Params) -
+    ///     what actually puts the camera ON the battle bus.
+    ///
+    ///     Setting AFortPlayerStateAthena::bInAircraft alone gets the HUD into its aircraft state,
+    ///     which is enough to make the phase LOOK like it worked - the reported symptom was "the view
+    ///     feels like the bus but I am still in third person and never board". The camera does not
+    ///     move until the view target does, and only this RPC moves it.
+    ///
+    ///     GROUND TRUTH, not derivation. The PR3.0 capture shows exactly three RPCs on the player
+    ///     controller's channel at the Aircraft transition, in this order
+    ///     (PriveDev/PacketProxy/decoded_new.txt, packet #8050):
+    ///
+    ///         field[45] = ClientSetCameraMode   (18 bits)
+    ///         field[24] = ClientGotoState       (18 bits)
+    ///         field[50] = ClientSetViewTarget   (86 bits)
+    ///
+    ///     and the server log confirms the same pair by name at 19:59:14.555.
+    ///
+    ///     The 86 bits ARE the check on the encoding below. Following the rule
+    ///     SendNetMulticastAthenaBatchedDamageCues documents - one presence bit per non-bool
+    ///     PARAMETER, then that parameter's flattened leaves - this writes
+    ///     1 + objectRef + 1 + 32 (BlendTime) + 3 (BlendFunction) + 32 (BlendExp) + 1 (bLockOutgoing)
+    ///     = 70 + objectRef, so the capture's 86 pins the object reference at 16 bits, which is what
+    ///     a mid-range NetGUID costs. A layout that did not add up would have shown here.
+    ///
+    ///     FViewTargetTransitionParams and EViewTargetBlendFunction are read from the real 4.23
+    ///     source (Engine/Classes/Camera/PlayerCameraManager.h): BlendTime, BlendFunction, BlendExp,
+    ///     bLockOutgoing in that order, VTBlend_MAX = 5 so the enum is SerializeInt(_, 6) = 3 bits.
+    ///     The values sent are the struct's own constructor defaults - a cut, not a blend, which is
+    ///     what boarding a bus should look like.
+    /// </summary>
+    public unsafe void SendClientSetViewTarget(UObject target) =>
+        SendRpc("ClientSetViewTarget", writer => {
+            writer.WriteBit(true);
+            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, target);
+
+            writer.WriteBit(true);
+            writer.WriteFloat(0f);                  // BlendTime - 0 means no blend at all
+            var blendFunction = 1u;                 // VTBlend_Cubic, the struct's default
+            writer.SerializeInt(&blendFunction, 6); // EViewTargetBlendFunction, VTBlend_MAX = 5
+            writer.WriteFloat(2f);                  // BlendExp, the struct's default
+            writer.WriteBit(false);                 // bLockOutgoing
+        });
+
+    /// <summary>
     ///     AFortPlayerController::ClientSpawnWeakSpotOnBuildingActor(const FBuildingWeakSpotData&amp;) -
     ///     the RPC that actually puts the weak-spot marker on screen (bJustHitWeakspot above only
     ///     reports that an EXISTING one was hit; nothing shows without this one firing first). See
@@ -1621,6 +1840,7 @@ public class UActorChannel : UChannel {
             // trigger threw away the rest of the bunch without saying what was in it.
             UObject? subObject = null;
             var subObjectPath = string.Empty;
+            string? subObjectHeader = null;
 
             if (!bIsActor) {
                 subObject = ((UPackageMapClient) Connection!.PackageMap!)
@@ -1632,15 +1852,43 @@ public class UActorChannel : UChannel {
                     return;
                 }
 
-                Console.WriteLine($"UActorChannel.ReceivedBunch: SUB-OBJECT content block ChIndex={ChIndex} " +
+                // The client can name a sub-object by PATH when this server never assigned it an id -
+                // which is exactly how every interaction arrives, since InteractionComp is a default
+                // sub-object of the controller and so is stably named. SerializeObjectRead refuses to
+                // resolve a path (real UE refuses to CREATE from one, and rightly), but resolving it
+                // against the channel actor's OWN sub-objects is a different thing entirely: nothing
+                // is invented, the leaf name is only matched against components this server already
+                // built. Without this the whole content block is skipped and chests, ammo boxes and
+                // doors do nothing at all.
+                if (subObject == null && subObjectPath.Length > 0 && Actor is APlayerController pc) {
+                    var leaf = subObjectPath[(subObjectPath.LastIndexOf('.') + 1)..];
+                    subObject = pc.ResolveNamedSubObject(leaf);
+                }
+
+                subObjectHeader = $"UActorChannel.ReceivedBunch: SUB-OBJECT content block ChIndex={ChIndex} " +
                                   $"Actor={Actor?.GetFName()} guid={subObjectGuid} " +
                                   $"path='{(subObjectPath.Length > 0 ? subObjectPath : "(none - referenced by id)")}' " +
-                                  $"resolved={(subObject != null ? subObject.GetFName().ToString() : "NULL")}");
+                                  $"resolved={(subObject != null ? subObject.GetFName().ToString() : "NULL")}";
             }
 
             uint numPayloadBits = 0;
             bunch.SerializeIntPacked(&numPayloadBits);
             if (bunch.IsError()) break;
+
+            // Logged only now, with the payload size attached. A sub-object block carrying ZERO bits
+            // is UE merely naming the component, not calling anything on it - and without this number
+            // an empty block and a real RPC look identical in the log, which cost a round: the header
+            // said the component resolved, nothing followed, and there was no way to tell "decoded
+            // nothing" from "there was nothing to decode".
+            if (subObjectHeader != null) {
+                // bitsLeft as well as the declared count. A block whose payload is LARGER than what
+                // remains in the bunch is truncated - payloadEnd clamps to the end, the field loop
+                // never runs, and the result looks exactly like an empty block. That ambiguity is what
+                // made a real 2937-bit ServerAttemptInteract read as "nothing to decode".
+                var bitsLeft = bunch.GetBitsLeft();
+                var truncatedNote = numPayloadBits > bitsLeft ? "  *** TRUNCATED - payload exceeds the bunch ***" : "";
+                Console.WriteLine($"{subObjectHeader} numPayloadBits={numPayloadBits} bitsLeft={bitsLeft}{truncatedNote}");
+            }
 
             var payloadStart = bunch.Pos;
             var payloadEnd = payloadStart + Math.Min((long) numPayloadBits, bunch.GetBitsLeft());
@@ -1657,10 +1905,15 @@ public class UActorChannel : UChannel {
                 // A component we could not resolve has no ClassNetCache either, so its field indices
                 // cannot be decoded - but NumPayloadBits below still resyncs the bunch, so the rest
                 // survives either way.
-                if (subObject is UFortAbilitySystemComponent) {
+                var subObjectCache = subObject switch {
+                    UFortAbilitySystemComponent => NativeClassNetCache.FortAbilitySystemComponentCache,
+                    UFortControllerComponent_Interaction => NativeClassNetCache.FortControllerComponentInteractionCache,
+                    _ => null
+                };
+
+                if (subObjectCache != null) {
                     try {
-                        ReadContentBlockFields(bunch, NativeClassNetCache.FortAbilitySystemComponentCache,
-                            payloadEnd, subObject);
+                        ReadContentBlockFields(bunch, subObjectCache, payloadEnd, subObject);
                     } catch (Exception ex) {
                         Console.WriteLine($"UActorChannel.ReceivedBunch: sub-object field decode threw on ChIndex={ChIndex}: {ex}");
                     }
@@ -1707,13 +1960,32 @@ public class UActorChannel : UChannel {
             ? NativeRpcHandlers.GetForSubObject(subObject)
             : Actor != null ? NativeRpcHandlers.Get(Actor) : null;
 
+        // Not gated on verbose, and not silent on failure. Every OTHER path out of this loop logs
+        // something, so when a sub-object block resolved and then produced no output at all the only
+        // candidates left were the two bare `break`s below - and being unable to tell "read nothing"
+        // from "never entered the loop" cost a round of guessing.
+        if (subObject != null) {
+            Console.WriteLine($"UActorChannel.ReadContentBlockFields: {subObject.GetFName()} " +
+                              $"maxIndex={maxIndex} span={payloadEnd - bunch.Pos} bits " +
+                              $"rpcTable={(rpcTable == null ? "NONE" : rpcTable.Count.ToString())} " +
+                              $"isError={bunch.IsError()} pos={bunch.Pos} payloadEnd={payloadEnd}");
+        }
+
         while (bunch.Pos < payloadEnd && !bunch.IsError()) {
             var repIndex = (int) bunch.ReadInt((uint) (maxIndex + 1));
-            if (bunch.IsError()) break;
+            if (bunch.IsError()) {
+                Console.WriteLine($"UActorChannel.ReadContentBlockFields: field-index read FAILED on " +
+                                  $"{target?.GetFName()} (maxIndex={maxIndex}) - abandoning this block");
+                break;
+            }
 
             uint fieldNumBits = 0;
             bunch.SerializeIntPacked(&fieldNumBits);
-            if (bunch.IsError()) break;
+            if (bunch.IsError()) {
+                Console.WriteLine($"UActorChannel.ReadContentBlockFields: field-size read FAILED on " +
+                                  $"{target?.GetFName()} after index {repIndex} - abandoning this block");
+                break;
+            }
 
             var fieldStart = bunch.Pos;
             var fieldEnd = Math.Min(fieldStart + (long) fieldNumBits, payloadEnd);

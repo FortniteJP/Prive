@@ -106,6 +106,9 @@ public sealed class FRepLayout {
                     ? NotComparable
                     : string.Join('|', def.GetObjectArrayValue(instance)
                         .Select(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode));
+            case ERepPropertyKind.Rotator:
+                // Same reason as the vectors below: FRotator is a mutable reference type here.
+                return def.GetRotatorValue == null ? NotComparable : def.GetRotatorValue(instance).ToString();
             case ERepPropertyKind.VectorQuantize10:
             case ERepPropertyKind.VectorQuantize100:
                 // Compared by string: FVector is a mutable reference type here, so holding the
@@ -236,6 +239,16 @@ public sealed class FRepLayout {
 
                 payload.SerializeIntPacked(&handle);
                 FUniqueNetIdRepl.Write(payload, cmd.Def.GetNetIdValue(instance) ?? new FUniqueNetIdRepl());
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.Rotator) {
+                if (cmd.Def.GetRotatorValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no rotator value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                cmd.Def.GetRotatorValue(instance).NetSerializeWrite(payload);
                 continue;
             }
 

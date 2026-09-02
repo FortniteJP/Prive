@@ -62,19 +62,51 @@ internal static class NativeRepLayouts {
         // Live-probed 2026-08-24: handles 7,8,9,10 (and, by the Owner=13/Role=14/Instigator=15
         // handles that follow) 11,12 too all resolve to "AttachmentReplication" on a real 10.40
         // client - six consecutive wire handles for what UEDumper's static dump shows as a single
-        // repIndex slot. Modeled as StructRecurse with six identically-named placeholder children
-        // purely to reserve six handles in a row (this project never sends any of them - the
-        // actual per-element type doesn't matter here, only the count).
+        // repIndex slot.
+        //
+        // These were six same-named placeholders for a long time, reserving the handle count and
+        // nothing else, because nothing needed to attach one actor to another. The battle bus does:
+        // bInAircraft gets the client as far as EnterAircraft and ClientSetViewTarget moves the
+        // camera, but the PAWN stays where it is until the client is told what it is attached to.
+        // The six are now real, named and typed exactly as FRepAttachment declares them
+        // (EngineTypes.h:3197) - which is the order FRepLayout flattens them into handles 7-12, so
+        // the count that was verified against a live client is unchanged.
         new() {
             Name = "AttachmentReplication",
             Kind = ERepPropertyKind.StructRecurse,
-            Children = new[] {
-                Reserved("AttachmentReplication[0]"),
-                Reserved("AttachmentReplication[1]"),
-                Reserved("AttachmentReplication[2]"),
-                Reserved("AttachmentReplication[3]"),
-                Reserved("AttachmentReplication[4]"),
-                Reserved("AttachmentReplication[5]")
+            Children = new FRepPropertyDef[] {
+                new() {                                                           // 7
+                    Name = "AttachmentReplication.AttachParent",
+                    Kind = ERepPropertyKind.ObjectRef,
+                    GetObjectValue = obj => ((AActor) obj).AttachParent
+                },
+                new() {                                                           // 8
+                    Name = "AttachmentReplication.LocationOffset",
+                    Kind = ERepPropertyKind.VectorQuantize100,
+                    GetVectorValue = obj => ((AActor) obj).AttachLocationOffset
+                },
+                new() {                                                           // 9
+                    Name = "AttachmentReplication.RelativeScale3D",
+                    Kind = ERepPropertyKind.VectorQuantize100,
+                    GetVectorValue = obj => ((AActor) obj).AttachRelativeScale3D
+                },
+                new() {                                                           // 10
+                    Name = "AttachmentReplication.RotationOffset",
+                    Kind = ERepPropertyKind.Rotator,
+                    GetRotatorValue = obj => ((AActor) obj).AttachRotationOffset
+                },
+                new() {                                                           // 11
+                    Name = "AttachmentReplication.AttachSocket",
+                    Kind = ERepPropertyKind.Name,
+                    GetNameValue = obj => ((AActor) obj).AttachSocket
+                },
+                // 12 - AttachComponent. Always null here: attaching to the actor is enough, and a
+                // component reference would need the aircraft's own components replicated first.
+                new() {
+                    Name = "AttachmentReplication.AttachComponent",
+                    Kind = ERepPropertyKind.ObjectRef,
+                    GetObjectValue = _ => null
+                }
             }
         },
         new() {
@@ -712,7 +744,16 @@ internal static class NativeRepLayouts {
         Reserved("WorldLevel"), // 26, 0x02C4 - int32
         Reserved("CraftingBonus"), // 27, 0x02C8 - int32
         Reserved("CurrentReadyToContinueTimer"), // 28, 0x02CC - float
-        Reserved("TeamCount"), // 29, 0x02D0 - int32
+        new() {
+            // 29, 0x02D0 - int32, on AFortGameState (not the Athena subclass). How many teams the
+            // match has, which for a solo playlist is one per player slot. The client uses it to
+            // size its own team bookkeeping; left at its default it treats the match as having none,
+            // which is why anything team-shaped (the "N players left" style counters that are keyed
+            // by team) had nothing to hang off.
+            Name = "TeamCount",
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((AGameState) obj).TeamCount
+        },
         Reserved("bDBNOEnabledForGameMode"), // 30, 0x02D4 - bool
         Reserved("GameFlagData"), // 31, 0x02D8 - uint32
         Reserved("PoiManager"), // 32, 0x02E0 - class AFortPoiManager*
@@ -820,7 +861,13 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.Float,
             GetFloatValue = obj => ((AGameState) obj).AircraftStartTime
         },
-        Reserved("SafeZonesStartTime"), // 112, 0x1270 - float
+        new() {
+            // 112, 0x1270 - float. When the FIRST circle starts closing, in match-clock seconds. The
+            // client's map shows the countdown against it.
+            Name = "SafeZonesStartTime",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AGameState) obj).SafeZonesStartTime
+        },
         Reserved("EndGameStartTime"), // 113, 0x1274 - float
         Reserved("EndGameKickPlayerTime"), // 114, 0x1278 - float
         new() {
@@ -872,7 +919,15 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.Int32,
             GetIntValue = obj => ((AGameState) obj).CurrentPlaylistId
         },
-        Reserved("SafeZoneIndicator"), // 149, 0x1678 - class AFortSafeZoneIndicator*
+        new() {
+            // 149, 0x1678 - class AFortSafeZoneIndicator*. How the client FINDS the circle: it has an
+            // OnRep (OnRep_SafeZoneIndicator, seen in ObjectsDump) and the map/minimap hang off it.
+            // The indicator actor replicating on its own channel is not enough - without this
+            // reference the client has an actor and nothing pointing at it.
+            Name = "SafeZoneIndicator",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).SafeZoneIndicator
+        },
         Reserved("MapInfo"), // 150, 0x1BA0 - class AFortAthenaMapInfo*
         Reserved("BroadcastSpectatorInfo"), // 151, 0x1BB0 - class AFortBroadcastSpectatorInfo*
         new() {
@@ -911,7 +966,176 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.Bool,
             GetByteValue = obj => (byte) (((AGameState) obj).bGameModeWillSkipAircraft ? 1 : 0)
         },
-        Reserved("SafeZonePhase"), // 157, 0x1DA9 - uint8
+        new() {
+            // 157, 0x1DA9 - uint8. Which circle the match is on; the HUD prints it as "Storm phase N".
+            // A plain uint8, not an enum property, so it is eight raw bits - which this table spells
+            // as ByteEnum with EnumMaxValue 256, the same way TeamIndex does (CeilLogTwo(256) == 8).
+            Name = "SafeZonePhase",
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 256,
+            GetByteValue = obj => ((AGameState) obj).SafeZonePhase
+        },
+        Reserved("PlayerBotsLeft", ERepPropertyKind.Int32), // 158, 0x1DB8 - int32
+        new() {
+            // 159, 0x1DD0 - TArray<AFortAthenaAircraft*>. The client finds the battle bus through
+            // THIS, not by looking for an actor of that class: AFortAthenaAircraft.AircraftIndex is
+            // the index into this array. One bus, so one element.
+            Name = "Aircrafts",
+            Kind = ERepPropertyKind.ObjectRefArray,
+            GetObjectArrayValue = obj => ((AGameState) obj).Aircrafts
+        },
+        new() {
+            // 160, 0x1DE0 - uint8. True while the doors are shut; the client refuses to send
+            // ServerAttemptAircraftJump at all while this is set, so it is the server's actual
+            // control over when players may leave.
+            Name = "bAircraftIsLocked",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AGameState) obj).bAircraftIsLocked ? 1 : 0)
+        }
+    }).ToArray();
+
+    /// <summary>
+    ///     AFortAthenaAircraft - the battle bus. AFortAircraft adds JumpFlashCount (16) over AActor's
+    ///     15, then AFortAthenaAircraft's own flight plan runs 17-28. Handles derived with
+    ///     Tools/RepHandles (`rep_handles.py AFortAthenaAircraft`), which reproduces every
+    ///     live-probed handle this project has - see [[rep_handle_derivation]].
+    ///
+    ///     FlightInfo is an FAircraftFlightInfo with no native NetSerialize, so RepLayout RECURSES
+    ///     into it and its six members take six handles (17-22) rather than the struct taking one.
+    ///     That is the same rule that splits MinimalReplicationProxy on a building.
+    /// </summary>
+    private static readonly FRepPropertyDef[] AircraftProps = ActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("JumpFlashCount", ERepPropertyKind.Int32),                       // 16, 0x0218
+        new() {
+            Name = "FlightInfo.FlightStartLocation",                              // 17, 0x02A8
+            Kind = ERepPropertyKind.VectorQuantize100,
+            GetVectorValue = obj => ((AFortAthenaAircraft) obj).FlightStartLocation
+        },
+        new() {
+            Name = "FlightInfo.FlightStartRotation",                              // 18
+            Kind = ERepPropertyKind.Rotator,
+            GetRotatorValue = obj => ((AFortAthenaAircraft) obj).FlightStartRotation
+        },
+        new() {
+            Name = "FlightInfo.FlightSpeed",                                      // 19
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).FlightSpeed
+        },
+        new() {
+            Name = "FlightInfo.TimeTillFlightEnd",                                // 20
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).TimeTillFlightEnd
+        },
+        new() {
+            Name = "FlightInfo.TimeTillDropStart",                                // 21
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).TimeTillDropStart
+        },
+        new() {
+            Name = "FlightInfo.TimeTillDropEnd",                                  // 22
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).TimeTillDropEnd
+        },
+        new() {
+            Name = "FlightStartTime",                                             // 23, 0x02D0
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).FlightStartTime
+        },
+        new() {
+            Name = "FlightEndTime",                                               // 24
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).FlightEndTime
+        },
+        new() {
+            Name = "DropStartTime",                                               // 25
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).DropStartTime
+        },
+        new() {
+            Name = "DropEndTime",                                                 // 26
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).DropEndTime
+        },
+        new() {
+            Name = "ReplicatedFlightTimestamp",                                   // 27, 0x02E0
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortAthenaAircraft) obj).ReplicatedFlightTimestamp
+        },
+        new() {
+            Name = "AircraftIndex",                                               // 28, 0x0438
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((AFortAthenaAircraft) obj).AircraftIndex
+        }
+    }).ToArray();
+
+    /// <summary>
+    ///     AFortSafeZoneIndicator - the storm circle. Handles 16-32 over AActor's 15, and this is the
+    ///     one layout in this file that has been verified END TO END against a real server rather than
+    ///     only derived: packet #16837 of the PR3.0 capture was hand-decoded bit by bit against these
+    ///     exact numbers and parsed cleanly to its handle-0 terminator. See AFortSafeZoneIndicator for
+    ///     the decoded values.
+    ///
+    ///     Handles 24-28 and 30-31 stay Reserved on purpose - the real server does not send them
+    ///     either, because they were still at their class defaults in that capture.
+    /// </summary>
+    private static readonly FRepPropertyDef[] SafeZoneIndicatorProps = ActorProps.Concat(new FRepPropertyDef[] {
+        new() {
+            Name = "LastRadius",                                                  // 16, 0x0220
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).LastRadius
+        },
+        new() {
+            Name = "NextRadius",                                                  // 17
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).NextRadius
+        },
+        new() {
+            Name = "NextNextRadius",                                              // 18
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).NextNextRadius
+        },
+        new() {
+            Name = "LastCenter",                                                  // 19, 0x022C
+            Kind = ERepPropertyKind.VectorQuantize100,
+            GetVectorValue = obj => ((AFortSafeZoneIndicator) obj).LastCenter
+        },
+        new() {
+            Name = "NextCenter",                                                  // 20
+            Kind = ERepPropertyKind.VectorQuantize100,
+            GetVectorValue = obj => ((AFortSafeZoneIndicator) obj).NextCenter
+        },
+        new() {
+            Name = "NextNextCenter",                                              // 21
+            Kind = ERepPropertyKind.VectorQuantize100,
+            GetVectorValue = obj => ((AFortSafeZoneIndicator) obj).NextNextCenter
+        },
+        new() {
+            Name = "SafeZoneStartShrinkTime",                                     // 22, 0x0250
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).SafeZoneStartShrinkTime
+        },
+        new() {
+            Name = "SafeZoneFinishShrinkTime",                                    // 23
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).SafeZoneFinishShrinkTime
+        },
+        Reserved("bSafezoneEventDriven"),                                         // 24, 0x0258
+        Reserved("bPaused"),                                                      // 25, 0x0259
+        Reserved("bPausedForPreview"),                                            // 26, 0x025A
+        Reserved("NextNextMegaStormGridCellThickness", ERepPropertyKind.Int32),   // 27, 0x0264
+        Reserved("NextMegaStormGridCellThickness", ERepPropertyKind.Int32),       // 28, 0x0268
+        new() {
+            Name = "MegaStormDelayTimeBeforeDestruction",                         // 29, 0x026C
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).MegaStormDelayTimeBeforeDestruction
+        },
+        Reserved("NumActiveMegaStormCircles", ERepPropertyKind.Int32),            // 30, 0x0270
+        Reserved("ActiveMegaStormCircleGridCellCountFromEdge", ERepPropertyKind.Int32), // 31, 0x0274
+        new() {
+            Name = "Radius",                                                      // 32, 0x039C
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortSafeZoneIndicator) obj).Radius
+        }
     }).ToArray();
 
     /// <summary>
@@ -1328,7 +1552,14 @@ internal static class NativeRepLayouts {
         Reserved("Banner.IconId"), // 249, 0x0F00 - FString
         Reserved("Banner.ColorId"), // 250, 0x0F00 - FString
         Reserved("Banner.Level"), // 251, 0x0F00 - int32
-        Reserved("bInAircraft"), // 252, 0x0F28 - uint8
+        new() {
+            // 252, 0x0F28 - uint8. Whether this player is still aboard the battle bus. The client
+            // gates a great deal on it: the HUD, whether the pawn is drawn, and whether the jump
+            // input is even offered. Nothing sent it before the aircraft existed.
+            Name = "bInAircraft",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APlayerState) obj).bInAircraft ? 1 : 0)
+        },
         Reserved("bThankedBusDriver"), // 253, 0x0F28 - uint8
         Reserved("bUsingAnonymousCharacterMode"), // 254, 0x0F28 - uint8
         Reserved("bUsingAnonymousMode"), // 255, 0x0F28 - uint8
@@ -1956,6 +2187,82 @@ internal static class NativeRepLayouts {
         // atomic, format not decoded, deliberately not declared and never written.
     }).ToArray();
 
+    /// <summary>
+    ///     ABuildingContainer - a chest or ammo box. Derives from ABuildingSMActor, so it inherits
+    ///     every building handle unchanged and adds its own at 69-77.
+    ///
+    ///     Handle 68 has to be DECLARED here even though it is never sent: handles are positional, and
+    ///     BuildingActorProps stops at 67 with 68 left as a comment. Skipping it would renumber
+    ///     everything after it by one - the exact failure mode [[rep-handle-derivation]] warns about.
+    ///
+    ///     FSearchBounceData has no native NetSerialize, so RepLayout recurses and its two members are
+    ///     handles 75 and 76 rather than the struct taking one.
+    /// </summary>
+    private static readonly FRepPropertyDef[] BuildingContainerProps = BuildingActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("ProxyGameplayCueDamagePhysical.EffectContext", ERepPropertyKind.StructAtomic), // 68
+        Reserved("SearchedMesh", ERepPropertyKind.ObjectRef),                     // 69, 0x0B30
+        new() {
+            Name = "ReplicatedLootTier",                                          // 70, 0x0B64
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((ABuildingContainer) obj).ReplicatedLootTier
+        },
+        new() {
+            // 71, 0x0C41 - the one that matters. OnRep_bAlreadySearched swaps in the opened mesh.
+            Name = "bAlreadySearched",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingContainer) obj).bAlreadySearched ? 1 : 0)
+        },
+        Reserved("bBuriedTreasure"),                                              // 72, 0x0C42
+        Reserved("bHasRaisedTreasure"),                                           // 73, 0x0C42
+        Reserved("bRegenerateLoot"),                                              // 74, 0x0C42
+        Reserved("SearchBounceData.BounceNormal", ERepPropertyKind.StructAtomic),  // 75, 0x0C48
+        new() {
+            // 76 - the open ANIMATION. The client watches for a change, not a value.
+            Name = "SearchBounceData.SearchAnimationCount",
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => (int) ((ABuildingContainer) obj).SearchAnimationCount
+        },
+        Reserved("TimeUntilLootRegenerates", ERepPropertyKind.Float)              // 77, 0x0CA4
+    }).ToArray();
+
+    /// <summary>
+    ///     ABuildingWall - a wall with a door. Also derives from ABuildingSMActor, so it too has to
+    ///     re-declare handle 68 (see BuildingContainerProps for why) and then takes 69-74 of its own.
+    /// </summary>
+    private static readonly FRepPropertyDef[] BuildingWallProps = BuildingActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("ProxyGameplayCueDamagePhysical.EffectContext", ERepPropertyKind.StructAtomic), // 68
+        Reserved("DoorMesh", ERepPropertyKind.ObjectRef),                         // 69, 0x0B78
+        new() {
+            // 70, 0x0BD0 - an FRotator, and the answer to "how far, and which way".
+            //
+            // bDoorOpen alone tells the client THAT the door is open, not what open looks like. Left
+            // unsent this stays at whatever the client's own default is, and the swing came out wrong
+            // - the door appeared to turn right round. Sent as a plain FRotator NetSerialize, the same
+            // path AFortAthenaAircraft's rotation already uses.
+            //
+            // DOOR_ROT_OFFSET=0 stops sending it. That escape hatch exists because handle 70 has never
+            // been on the wire before, and a property written at the wrong WIDTH does not look wrong -
+            // it silently drops the connection a few ticks later.
+            Name = "DoorDesiredRotOffset",
+            Kind = ERepPropertyKind.Rotator,
+            GetRotatorValue = obj => ((ABuildingWall) obj).DoorDesiredRotOffset
+        },
+        Reserved("DoorDesiredXLocation", ERepPropertyKind.Float),                 // 71, 0x0C0C
+        Reserved("SlidingDoorDesiredXLocation", ERepPropertyKind.Float),          // 72, 0x0C10
+        new() {
+            // 73, 0x0C25 - OnRep_bDoorOpen swings the mesh. The client predicts the swing locally
+            // (bLocalDoorOpen) and runs VerifyDoorOpenMatchesServer, so this really has to come back.
+            Name = "bDoorOpen",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingWall) obj).bDoorOpen ? 1 : 0)
+        },
+        new() {
+            Name = "bDoorCollisionDisabled",                                      // 74, 0x0C27
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingWall) obj).bDoorCollisionDisabled ? 1 : 0)
+        }
+    }).ToArray();
+
     public static readonly FRepLayout PlayerAttrSet = new(PlayerAttrSetProps);
     public static readonly FRepLayout MovementSet = new(MovementSetProps);
     public static readonly FRepLayout BuildingActorSet = new(BuildingActorSetProps);
@@ -1968,6 +2275,8 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout PlayerController = new(PlayerControllerProps);
     public static readonly FRepLayout Pawn = new(PawnProps);
     public static readonly FRepLayout GameState = new(GameStateProps);
+    public static readonly FRepLayout Aircraft = new(AircraftProps);
+    public static readonly FRepLayout SafeZoneIndicator = new(SafeZoneIndicatorProps);
     public static readonly FRepLayout PlayerState = new(PlayerStateProps);
 
     public static readonly FRepLayout Inventory = new(InventoryProps);
@@ -1976,9 +2285,16 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout Weapon = new(WeaponProps);
 
     public static readonly FRepLayout BuildingActor = new(BuildingActorProps);
+    public static readonly FRepLayout BuildingContainer = new(BuildingContainerProps);
+    public static readonly FRepLayout BuildingWall = new(BuildingWallProps);
 
     public static FRepLayout Get(AActor actor) => actor switch {
+        // Before ABuildingActor: a container IS one, and the first arm wins.
+        ABuildingContainer => BuildingContainer,
+        ABuildingWall => BuildingWall,
         ABuildingActor => BuildingActor,
+        AFortAthenaAircraft => Aircraft,
+        AFortSafeZoneIndicator => SafeZoneIndicator,
         AFortPickup => Pickup,
         AFortWeapon => Weapon,
         AFortInventory => Inventory,

@@ -63,6 +63,10 @@ public class GUClassArray {
         // parent, so either class name gives the same field index space (see the component's own
         // doc comment).
         [typeof(UFortAbilitySystemComponent)] = "/Script/FortniteGame.FortAbilitySystemComponentAthena",
+        // The controller's InteractionComp. Registered only so NewObject can construct it - this
+        // component is never replicated OUTWARDS, it exists so the client's own sub-object reference
+        // resolves to something this server can dispatch ServerAttemptInteract on.
+        [typeof(UFortControllerComponent_Interaction)] = "/Script/FortniteGame.FortControllerComponent_Interaction",
         // A placed building's health attribute set. Native, and it MUST be: unlike the PlayerState's
         // stably-named sets, this one is created at runtime and so travels as a sub-object content
         // block carrying its class, which the client has to be able to resolve to construct it - the
@@ -97,7 +101,18 @@ public class GUClassArray {
         // The same now goes for any other Blueprint class the client has not already loaded.
         [typeof(AFortTimeOfDayManager)] = Environment.GetEnvironmentVariable("TODM_CLASS") is { Length: > 0 } todm
             ? todm
-            : "/Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C"
+            : "/Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C",
+        // The battle bus. Read straight off the PR3.0 capture, which exports
+        // `/Game/Athena/Aircraft/AthenaAircraft.Default__AthenaAircraft_C` as the spawned actor's
+        // archetype (PriveDev/PacketProxy/decoded_new.txt packet #357) - so this is the class it is
+        // the CDO of. A Blueprint, like TODM_BR above, and it relies on the same MustBeMappedGuids
+        // machinery to survive the client's async load.
+        [typeof(AFortAthenaAircraft)] = "/Game/Athena/Aircraft/AthenaAircraft.AthenaAircraft_C",
+        // The storm circle. Read off the PR3.0 capture the same way the bus was - packet #16837
+        // exports `/Game/Athena/SafeZone/SafeZoneIndicator.Default__SafeZoneIndicator_C` as the
+        // spawned actor's archetype. A Blueprint, so it relies on MustBeMappedGuids for the client's
+        // async load, exactly as TODM_BR and the aircraft do.
+        [typeof(AFortSafeZoneIndicator)] = "/Game/Athena/SafeZone/SafeZoneIndicator.SafeZoneIndicator_C"
     };
 
     public static UClass StaticClass<T>() => StaticClass(typeof(T));

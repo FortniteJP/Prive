@@ -186,6 +186,34 @@ public class AActor : UObject {
     ///     inventory actor behind AFortPlayerController::WorldInventory is owned by that
     ///     PlayerController on a real server.
     /// </summary>
+    /// <summary>
+    ///     AActor::AttachmentReplication (FRepAttachment) - what makes a pawn RIDE something.
+    ///
+    ///     This is how a player stays on the battle bus. Setting AFortPlayerStateAthena::bInAircraft
+    ///     gets the client as far as running EnterAircraft and loading the bus skin, and
+    ///     ClientSetViewTarget moves the camera, but neither of them moves the PAWN: the client has
+    ///     no reason to take the character off the spawn island until it is told what it is attached
+    ///     to. Six replicated members, in the order EngineTypes.h:3197 declares them, which is the
+    ///     order FRepLayout flattens them into wire handles 7-12.
+    ///
+    ///     Engine note worth honouring: "movement replication will not happen while AttachParent is
+    ///     non-nullptr". This server does not send ReplicatedMovement at all, so nothing to suppress
+    ///     - but a future one must not fight the attachment.
+    /// </summary>
+    public AActor? AttachParent { get; set; }
+
+    /// <summary>FRepAttachment::LocationOffset - where on the parent this actor sits.</summary>
+    public FVector AttachLocationOffset { get; set; } = new();
+
+    /// <summary>FRepAttachment::RelativeScale3D. ForceInit in the engine's own constructor, so zero.</summary>
+    public FVector AttachRelativeScale3D { get; set; } = new();
+
+    /// <summary>FRepAttachment::RotationOffset.</summary>
+    public FRotator AttachRotationOffset { get; set; } = new();
+
+    /// <summary>FRepAttachment::AttachSocket - NAME_None unless attaching to a named socket.</summary>
+    public FName AttachSocket { get; set; } = new();
+
     public AActor? Owner { get; private set; }
 
     public void SetOwner(AActor? newOwner) => Owner = newOwner;

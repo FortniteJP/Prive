@@ -3,6 +3,13 @@
 public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     private UGameInstance? _OwningGameInstance;
     private AGameModeBase? _AuthorityGameMode;
+
+    /// <summary>
+    ///     AWorldSettings::GetGameState's stand-in - the replicated match state, reachable from
+    ///     anything that already has a UWorld. An RPC handler needs it to read the battle bus out of
+    ///     AGameState.Aircrafts, and going back through the game mode is the only route there.
+    /// </summary>
+    public AGameState? GameState => _AuthorityGameMode?.GameState;
     
     /// <summary>
     ///     Array of levels currently in this world. Not serialized to disk to avoid hard references.
@@ -114,9 +121,22 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // Ahead of the NetDriver below so a cascade's channel closes go out on this same tick.
         BuildingStructuralSupportSystem.Tick(TimeSeconds);
 
+        // The storm. Off unless SAFEZONE_ENABLED=1 - see FortSafeZoneSystem for why it is opt-in.
+        // Placed with the structural tick rather than after the NetDriver so a radius change and the
+        // damage it causes go out on the same tick they happen.
+        FortSafeZoneSystem.Tick(this, TimeSeconds);
+
+        // Floor loot, rolled lazily near players rather than all at match start - see FortFloorLoot
+        // for why. On by default (FLOOR_LOOT_ENABLED=0 turns it off); unlike the storm and the bus it
+        // cannot strand or kill anyone, it only adds pickups.
+        FortFloorLoot.Tick(this, TimeSeconds);
+
         // Diagnostic only, off unless HEALTH_DEBUG_RAMP=1 - see FortDamageSystem.DebugRamp for the
         // question it answers.
         FortDamageSystem.DebugRamp(this, TimeSeconds);
+
+        // Warmup -> Aircraft. Nothing happens until the first player joins and starts the clock.
+        _AuthorityGameMode?.TickPhases(this, TimeSeconds);
 
         if (NetDriver != null) {
             NetDriver.TickDispatch(deltaTime);
@@ -586,6 +606,12 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                     // never recognizes it controls this pawn and keeps calling
                     // ServerSetSpectatorLocation forever instead of actually moving.
                     pcChannel.SendClientRestart(newPlayerController.Pawn);
+
+                    // And tell the client which way it is facing. A real server sends this at login
+                    // too (see UActorChannel.SendClientSetRotation); without it the client's initial
+                    // control rotation is whatever it happened to be, which is the shape of the
+                    // "spawned looking 90 degrees off" report.
+                    pcChannel.SendClientSetRotation(newPlayerController.Pawn.GetActorRotation(), true);
                 }
             }
 
