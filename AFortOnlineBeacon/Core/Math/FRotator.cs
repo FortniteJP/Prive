@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Core.Math;
+﻿namespace AFortOnlineBeacon.Core.Math;
 
 /// <summary>Minimal port of FRotator - just enough state and wire format to read RPC parameters.</summary>
 public class FRotator {
@@ -32,6 +32,29 @@ public class FRotator {
         WriteAxis(ar, Yaw);
         WriteAxis(ar, Roll);
     }
+
+    /// <summary>
+    ///     FRotator::SerializeCompressed - the BYTE-per-axis form, which is what FRepMovement uses
+    ///     (ERotatorQuantization::ByteComponents is FRepMovement's constructor default, EngineTypes.cpp:268).
+    ///     Same shape as the short form above - a presence bit per axis computed from the COMPRESSED
+    ///     value, then the byte - and the same trap: an angle that rounds to 0 or 256 sends a clear
+    ///     bit however non-zero the float was.
+    /// </summary>
+    public void NetSerializeWriteCompressedByte(FBitWriter ar) {
+        WriteAxisByte(ar, Pitch);
+        WriteAxisByte(ar, Yaw);
+        WriteAxisByte(ar, Roll);
+    }
+
+    private static void WriteAxisByte(FBitWriter ar, float angle) {
+        var compressed = CompressAxisToByte(angle);
+        ar.WriteBit(compressed != 0);
+        if (compressed != 0) ar.WriteByte(compressed);
+    }
+
+    /// <summary>FRotator::CompressAxisToByte - map [0,360) onto [0,256) and mask off winding.</summary>
+    private static byte CompressAxisToByte(float angle) =>
+        (byte) ((int) MathF.Round(angle * 256f / 360f) & 0xFF);
 
     private static void WriteAxis(FBitWriter ar, float angle) {
         var compressed = CompressAxisToShort(angle);

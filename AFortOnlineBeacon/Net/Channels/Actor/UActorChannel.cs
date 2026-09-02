@@ -242,6 +242,18 @@ public class UActorChannel : UChannel {
         // with no controller and no player state.
         APawn => WithPawnAttachment(new HashSet<string> {
             "RemoteRole", "Role", "Owner", "PlayerState", "Controller",
+            // Handles 2 and 6 - where everyone ELSE sees this pawn. Without them a remote player is
+            // frozen at the position their actor-spawn header carried; see Core.Math.FRepMovement.
+            "bReplicateMovement", "ReplicatedMovement",
+            // Handles 29 and 30 - what a remote player is DOING there. Position alone leaves them
+            // upright and unanimated whatever they are actually up to; see APawn.
+            "ReplicatedMovementMode", "bIsCrouched",
+            // Handles 103, 104 and 106 - the descent. All three have their own OnRep, which is what
+            // makes them the ones the animation is actually driven by.
+            "bIsSkydiving", "bIsParachuteOpen", "bIsSkydivingFromBus",
+            // Handle 145. Without it the client dereferences a null glider a second into the
+            // skydive - see APawn.CosmeticGlider.
+            "CosmeticLoadout.Glider",
             // Handles 7-12, and DELIBERATELY NOT SENT unless BUS_ATTACH_PAWN=1 asks for them.
             //
             // Sending them unconditionally was actively harmful. With nothing attached, AttachParent
@@ -265,7 +277,11 @@ public class UActorChannel : UChannel {
             // Null until this player emotes, and back to null when they stop - the only part of an
             // emote that reaches anybody but the emoter. See APawn.LastReplicatedEmoteExecuted;
             // listed here for the same reason as the two above.
-            "LastReplicatedEmoteExecuted"
+            "LastReplicatedEmoteExecuted",
+            // Handles 95, 126 and 127 - the storm. All three CHANGE mid-match, so they have to be
+            // listed here or the per-tick diff would never compare them. bIsInAnyStorm is the one
+            // that actually lights up the screen effect - see APawn.bIsInAnyStorm.
+            "bIsNearSafeZoneEdge", "bIsInAnyStorm", "bIsInsideSafeZone"
         }),
         APlayerController => new HashSet<string> {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
@@ -396,6 +412,12 @@ public class UActorChannel : UChannel {
         // APlayerController, which is what every probe so far has targeted. Only one actor should
         // ever match: the probe deliberately corrupts that channel, and the client closes the
         // connection as soon as it fails.
+        // The OPEN burst gets the per-connection role too, and so does the shadow seeded from it at
+        // the end - see FScopedRoleDowngrade. Without this a non-owning client is told
+        // ROLE_AutonomousProxy at spawn and only corrected a tick later, which is a whole tick of
+        // believing it owns somebody else's pawn.
+        using var openRoleDowngrade = new FScopedRoleDowngrade(Actor, IsNetOwner);
+
         var probeActor = Environment.GetEnvironmentVariable("REPLAYOUT_PROBE_ACTOR") ?? nameof(APlayerController);
         if (Actor.GetType().Name.Contains(probeActor, StringComparison.OrdinalIgnoreCase)
             && uint.TryParse(probeHandleEnv, out var probeHandle) && probeHandle > 0) {
@@ -436,9 +458,49 @@ public class UActorChannel : UChannel {
     ///     writes to the console and to a file), and the diff pass runs every tick.
     /// </summary>
     private HashSet<string>? _replicatedProperties;
+    private HashSet<string>? _replicatedPropertiesForOwner;
 
-    private HashSet<string> ReplicatedProperties =>
-        _replicatedProperties ??= GetInitialReplicatedProperties(Actor!);
+    /// <summary>
+    ///     COND_SimulatedOnly - properties a connection must NOT be told about its OWN pawn.
+    ///
+    ///     This is the first replication CONDITION this project has needed, and it is not a nicety:
+    ///     sending these to the owner actively breaks the game. The owning client predicts its own
+    ///     movement and owns the truth about it; a server value arriving for one of these runs the
+    ///     property's OnRep and overwrites that truth with a slightly older, coarser copy. The live
+    ///     symptom was a player deploying their glider and then standing bolt upright and floating -
+    ///     their own bIsParachuteOpen was being switched back off by this server a tick later.
+    ///
+    ///     The three engine ones are quoted, not guessed - ACharacter::GetLifetimeReplicatedProps
+    ///     (Character.cpp:1489):
+    ///
+    ///         DOREPLIFETIME_CONDITION(ACharacter, ReplicatedMovementMode, COND_SimulatedOnly);
+    ///         DOREPLIFETIME_CONDITION(ACharacter, bIsCrouched,            COND_SimulatedOnly);
+    ///
+    ///     and AActor's ReplicatedMovement is COND_SimulatedOrPhysics, which is the same thing here
+    ///     because nothing on this server simulates physics.
+    ///
+    ///     bIsSkydiving and bIsParachuteOpen are Fortnite's own and their conditions cannot be read
+    ///     from any source available here - but they are derived FROM the owner's own move in the
+    ///     first place (see APawn.TrackMoveFlags), so echoing them back at it can only ever be stale.
+    ///
+    ///     bIsSkydivingFromBus is deliberately NOT in this list. It is the one piece of descent state
+    ///     the owner cannot know - a bus jump and a launch pad are the same custom movement mode, and
+    ///     only the server can tell them apart.
+    /// </summary>
+    private static readonly HashSet<string> SimulatedOnlyProperties = new() {
+        "ReplicatedMovement", "ReplicatedMovementMode", "bIsCrouched",
+        "bIsSkydiving", "bIsParachuteOpen"
+    };
+
+    private HashSet<string> ReplicatedProperties {
+        get {
+            _replicatedProperties ??= GetInitialReplicatedProperties(Actor!);
+            if (!IsNetOwner) return _replicatedProperties;
+
+            return _replicatedPropertiesForOwner ??=
+                _replicatedProperties.Where(name => !SimulatedOnlyProperties.Contains(name)).ToHashSet();
+        }
+    }
 
     /// <summary>
     ///     Of those, the ones the OPEN bunch actually writes - everything except the properties
@@ -495,6 +557,51 @@ public class UActorChannel : UChannel {
     ///
     ///     Sends nothing at all when nothing changed, which is the normal case.
     /// </summary>
+    /// <summary>
+    ///     FScopedRoleDowngrade (DataChannel.cpp:2692) - THE THING THAT MAKES A REMOTE PLAYER MOVE.
+    ///
+    ///     A player pawn is set ROLE_AutonomousProxy so its own client can predict its movement. That
+    ///     role is correct for exactly one connection. Sent to ANY OTHER client it is a lie with
+    ///     teeth: that client also believes it owns the pawn, runs its own prediction on it, and
+    ///     therefore IGNORES the replicated position - which is a pawn frozen wherever it was
+    ///     created, however correctly ReplicatedMovement is being sent.
+    ///
+    ///     Real UE mutates the actor for the duration of the replication and puts it back afterwards,
+    ///     which is exactly what this does. It has to be done here rather than in the layout's
+    ///     getter, because the answer is per CONNECTION and a getter only sees the object.
+    ///
+    ///     Applied around the diff as well as the write: the shadow state is per channel, so the
+    ///     comparison has to see the same downgraded value it is going to send, or every tick would
+    ///     find RemoteRole "changed" and resend it forever.
+    /// </summary>
+    private readonly struct FScopedRoleDowngrade : IDisposable {
+        private readonly AActor _actor;
+        private readonly ENetRole _actualRemoteRole;
+
+        public FScopedRoleDowngrade(AActor actor, bool bNetOwner) {
+            _actor = actor;
+            _actualRemoteRole = actor.RemoteRole;
+
+            if (_actualRemoteRole == ENetRole.ROLE_AutonomousProxy && !bNetOwner) {
+                actor.SetAutonomousProxy(false);
+            }
+        }
+
+        public void Dispose() {
+            if (_actor.RemoteRole != _actualRemoteRole && _actualRemoteRole == ENetRole.ROLE_AutonomousProxy) {
+                _actor.SetAutonomousProxy(true);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     FReplicationFlags::bNetOwner - does the connection this channel belongs to own the actor?
+    ///     The owner chain ends at the PlayerController, which is what a connection has.
+    /// </summary>
+    private bool IsNetOwner =>
+        Connection?.PlayerController is { } owner && Actor != null &&
+        (Actor.IsOwnedBy(owner) || Actor == owner || (Actor as APawn)?.Controller == owner);
+
     public unsafe bool ReplicateActorUpdate() {
         if (Actor == null || Connection == null || Closing || Broken) return false;
 
@@ -516,6 +623,11 @@ public class UActorChannel : UChannel {
         _nextUpdateTime = driverTime + 1.0f / frequency;
 
         var layout = NativeRepLayouts.Get(Actor);
+
+        // Everything from here to the end of the write sees the per-connection role - see
+        // FScopedRoleDowngrade.
+        using var roleDowngrade = new FScopedRoleDowngrade(Actor, IsNetOwner);
+
         var changed = layout.CompareProperties(Actor, ReplicatedProperties, _shadowState);
 
         // Custom deltas go in their own bunch, so an actor with no changed RepLayout property can
@@ -1484,6 +1596,12 @@ public class UActorChannel : UChannel {
         });
 
     /// <summary>
+    ///     APlayerController::ClientOnPawnSpawned() - no parameters, and the capture sends it as
+    ///     part of the jump response. See AGameModeBase.TickBoarding for the full sequence.
+    /// </summary>
+    public void SendClientOnPawnSpawned() => SendRpc("ClientOnPawnSpawned", _ => { });
+
+    /// <summary>
     ///     APlayerController::ClientSetRotation(FRotator NewRotation, bool bResetCamera) - the
     ///     server telling the client which way the player is facing.
     ///
@@ -1549,6 +1667,65 @@ public class UActorChannel : UChannel {
             writer.SerializeInt(&blendFunction, 6); // EViewTargetBlendFunction, VTBlend_MAX = 5
             writer.WriteFloat(2f);                  // BlendExp, the struct's default
             writer.WriteBit(false);                 // bLockOutgoing
+        });
+
+    /// <summary>
+    ///     AFortPlayerController::ClientOnPawnDied(FFortPlayerDeathReport) - the RPC that makes a
+    ///     death a DEATH on the client.
+    ///
+    ///     Why this and not the replicated flags. The server was already setting AFortPawn::bIsDying
+    ///     (handle 47), FDeathInfo on the PlayerState and bMarkedAlive=false, and the live symptom was
+    ///     a player at 0 HP who could not shoot or build but was otherwise alive and walking around.
+    ///     `AFortPawn::bIsDying` HAS NO OnRep - the SDK header lists OnRep_IsDBNO, OnRep_IsKnockedBack
+    ///     and a dozen others next to it, and nothing for bIsDying - so it replicates perfectly and
+    ///     runs nothing. (Same trap as bIsInsideSafeZone vs bIsInAnyStorm one round earlier.) The
+    ///     death path a real server actually drives is this RPC: Project-Reboot-3.0 HOOKS
+    ///     ClientOnPawnDied rather than calling anything else, which is only possible because the
+    ///     native death already goes through it, and FortniteUI's own
+    ///     `HandleLocalPawnDied(FFortPlayerDeathReport)` is what puts the elimination screen up.
+    ///
+    ///     THE STRUCT, verified twice over. raider3.5's Chapter 1 SDK gives FFortPlayerDeathReport as
+    ///     0x50 bytes laid out ServerTimeForRespawn 0x00, ServerTimeForResurrect 0x04, LethalDamage
+    ///     0x08, KillerPlayerState 0x10, KillerPawn 0x18, DamageCauser 0x20, bDroppedBackpack and
+    ///     bNotifyUI as bits of 0x28, Tags 0x30 - and 10.40's own SDK agrees on the 0x50 size. The
+    ///     dump confirms the order independently: execClientOnPawnDied (0x141F36840) reads three
+    ///     floats, then three qwords, then the bitfield byte, then the tag container, and copies them
+    ///     to struct+0, +4, +8, +0x10, +0x18, +0x20, +0x28, +0x30 before calling vtable[0x1FF8].
+    ///
+    ///     So the wire is this project's usual RPC rule - one presence bit for the single struct
+    ///     PARAMETER, then its members flattened in offset order with no further bits - with two
+    ///     details worth naming:
+    ///
+    ///       * the two bools are bits IN PLACE, no presence bit, same as everywhere else here;
+    ///       * FGameplayTagContainer has a native NetSerializer, so it is NOT flattened. Its
+    ///         serializer writes the tag count in UGameplayTagsManager::NumBitsForContainerSize bits
+    ///         first, and that is 6 by default and is NOT overridden in FortniteGame's DefaultGame.ini
+    ///         (checked with Tools/PakReader) - so an empty container is exactly six zero bits.
+    ///
+    ///     UNTESTED against a live client.
+    /// </summary>
+    public unsafe void SendClientOnPawnDied(UObject? killerPlayerState, UObject? killerPawn,
+                                            UObject? damageCauser, float lethalDamage,
+                                            bool notifyUI = true) =>
+        SendRpc("ClientOnPawnDied", writer => {
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+            writer.WriteBit(true);          // the DeathReport parameter is present
+
+            writer.WriteFloat(0f);          // 0x00 ServerTimeForRespawn  - no respawn in Battle Royale
+            writer.WriteFloat(0f);          // 0x04 ServerTimeForResurrect
+            writer.WriteFloat(lethalDamage); // 0x08 LethalDamage
+
+            packageMap.SerializeObject(writer, killerPlayerState); // 0x10
+            packageMap.SerializeObject(writer, killerPawn);        // 0x18
+            packageMap.SerializeObject(writer, damageCauser);      // 0x20
+
+            writer.WriteBit(false);         // 0x28 bit 0 bDroppedBackpack
+            writer.WriteBit(notifyUI);      // 0x28 bit 1 bNotifyUI
+
+            // 0x30 Tags - an empty FGameplayTagContainer. See above for the six bits.
+            var tagCount = 0u;
+            writer.SerializeInt(&tagCount, 1u << 6);
         });
 
     /// <summary>

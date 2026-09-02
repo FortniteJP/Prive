@@ -181,6 +181,18 @@ public abstract class UNetDriver {
 
         var updated = 0;
 
+        // AActor::PreReplication's one job that matters here. Done ONCE for every replicating actor
+        // before any connection is walked, not per connection: the comparison that follows is
+        // against a per-connection shadow, but the value being compared has to be the same for all
+        // of them or two clients would be told different positions for the same pawn on the same
+        // tick. It also has to happen before the loop rather than inside UActorChannel, because the
+        // first connection's pass would otherwise gather and the second would compare against an
+        // already-updated value and send nothing.
+        var now = World?.TimeSeconds ?? 0f;
+        foreach (var actor in NetworkObjectList) {
+            if (actor.bReplicateMovement && !actor.IsPendingKillPending()) actor.GatherCurrentMovement(now);
+        }
+
         foreach (var connection in ClientConnections) {
             updated += OpenChannelsForNewlyRelevantActors(connection);
 

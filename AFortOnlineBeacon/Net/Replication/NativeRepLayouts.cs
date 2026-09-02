@@ -42,7 +42,12 @@ internal static class NativeRepLayouts {
 
     private static readonly FRepPropertyDef[] ActorProps = {
         Reserved("bHidden"),
-        Reserved("bReplicateMovement"),
+        new() {
+            // 2, and the client's own gate on everything below - see AActor.bReplicateMovement.
+            Name = "bReplicateMovement",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AActor) obj).bReplicateMovement ? 1 : 0)
+        },
         Reserved("bTearOff"),
         Reserved("bCanBeDamaged"),
         new() {
@@ -58,7 +63,12 @@ internal static class NativeRepLayouts {
             EnumMaxValue = (int) ENetRole.ROLE_MAX,
             GetByteValue = obj => (byte) ((AActor) obj).RemoteRole
         },
-        Reserved("ReplicatedMovement", ERepPropertyKind.StructAtomic),
+        new() {
+            // 6 - where every OTHER client sees this actor. See Core.Math.FRepMovement.
+            Name = "ReplicatedMovement",
+            Kind = ERepPropertyKind.RepMovement,
+            GetRepMovementValue = obj => ((AActor) obj).ReplicatedMovement
+        },
         // Live-probed 2026-08-24: handles 7,8,9,10 (and, by the Owner=13/Role=14/Instigator=15
         // handles that follow) 11,12 too all resolve to "AttachmentReplication" on a real 10.40
         // client - six consecutive wire handles for what UEDumper's static dump shows as a single
@@ -487,8 +497,19 @@ internal static class NativeRepLayouts {
         Reserved("AnimRootMotionTranslationScale"), // 26, 0x02F0 - float
         Reserved("ReplicatedServerLastTransformUpdateTimeStamp"), // 27, 0x0310 - float
         Reserved("ReplayLastTransformUpdateTimeStamp"), // 28, 0x0314 - float
-        Reserved("ReplicatedMovementMode"), // 29, 0x0318 - uint8
-        Reserved("bIsCrouched"), // 30, 0x0320 - uint8
+        new() {
+            // 29, 0x0318 - walking / falling / one of Fortnite's custom modes. See APawn.
+            Name = "ReplicatedMovementMode",
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 256,
+            GetByteValue = obj => ((APawn) obj).ReplicatedMovementMode
+        },
+        new() {
+            // 30, 0x0320 - crouching. Resizes the proxy's capsule as well as animating it.
+            Name = "bIsCrouched",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsCrouched ? 1 : 0)
+        },
         Reserved("bProxyIsJumpForceApplied"), // 31, 0x0320 - uint8
         Reserved("JumpMaxHoldTime"), // 32, 0x0330 - float
         Reserved("JumpMaxCount"), // 33, 0x0334 - int32
@@ -576,7 +597,132 @@ internal static class NativeRepLayouts {
         // lives on the emote asset itself (UAthenaDanceItemDefinition::WalkForwardSpeed), which an
         // out-of-process server has no way to read - see FortEmoteSystem for the same limitation on
         // bMovingEmote (52) / bMovingEmoteForwardOnly (53).
-        Reserved("EmoteWalkSpeed", ERepPropertyKind.Float)
+        Reserved("EmoteWalkSpeed", ERepPropertyKind.Float),
+
+        // 72..145, derived with Tools/RepHandles (`rep_handles.py AFortPlayerPawn`) and
+        // cross-checked by Tools/RepHandles/verify_cs_handles.py. All reserved except the
+        // last, because handles are POSITIONAL - CosmeticLoadout.Glider is 145 and there is
+        // no way to reach it without declaring everything in front of it.
+        //
+        // Why bother: the client crashes about a second into the skydive without it.
+        // AFortPlayerPawn resolves "which glider am I using" as
+        // GliderOverrideStack.Last() -> GliderClass (+0x22C8) -> CosmeticLoadout.Glider
+        // (+0x18C0+0x28 = 0x18E8), and with all three null the last one is dereferenced
+        // anyway - the fault was `mov rax,[rcx]` at 0x141962AC7 on a null rcx. A real
+        // server sends /Game/Athena/Items/Cosmetics/Gliders/DefaultGlider here, which the
+        // PR3.0 capture registers as NetGUID 979 in the pawn's very first property burst.
+        Reserved("VocalChords"), // 72, 0x0C40 - DynamicArray TArray<struct FFortPawnVocalChord>
+        Reserved("DisplayName"), // 73, 0x0D38 - class FText
+        Reserved("CurrentCalloutTag"), // 74, 0x0DA0 - atomic struct FGameplayTag
+        Reserved("CurrentSentence.SpeechAudio.Audio"), // 75, 0x0ED8 - TSoftObjectPtr<class USoundBase>
+        Reserved("CurrentSentence.SpeechAudio.Handle.FeedbackBank"), // 76, 0x0ED8 - class UFortFeedbackBank*
+        Reserved("CurrentSentence.SpeechAudio.Handle.EventName"), // 77, 0x0ED8 - class FName
+        Reserved("CurrentSentence.SpeechAudio.Handle.bReadOnly"), // 78, 0x0ED8 - bool
+        Reserved("CurrentSentence.SpeechAudio.Handle.bBankDefined"), // 79, 0x0ED8 - bool
+        Reserved("CurrentSentence.SpeechAudio.Handle.BroadcastFilterOverride"), // 80, 0x0ED8 - T1ByteEnum<EFortFeedbackBroadcastFilter>
+        Reserved("CurrentSentence.SpeechText"), // 81, 0x0ED8 - class FText
+        Reserved("CurrentSentence.TalkingHeadTexture"), // 82, 0x0ED8 - TSoftObjectPtr<class UTexture2D>
+        Reserved("CurrentSentence.TalkingHeadTitle"), // 83, 0x0ED8 - class FText
+        Reserved("CurrentSentence.AnimMontage"), // 84, 0x0ED8 - TSoftObjectPtr<class UAnimMontage>
+        Reserved("CurrentSentence.PostSentenceDelay"), // 85, 0x0ED8 - float
+        Reserved("CurrentSentence.DisplayDuration"), // 86, 0x0ED8 - float
+        Reserved("VehicleInputStateReliable.bIgnoreForwardInAir"), // 87, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bIsBraking"), // 88, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bIsHonking"), // 89, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bIsJumping"), // 90, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bIsSprinting"), // 91, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bMovementModifier0"), // 92, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bMovementModifier1"), // 93, 0x1130 - uint8
+        Reserved("VehicleInputStateReliable.bMovementModifier2"), // 94, 0x1130 - uint8
+        new() {
+            // 95, 0x1131 - the storm wall is close. See APawn.bIsNearSafeZoneEdge.
+            Name = "bIsNearSafeZoneEdge",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsNearSafeZoneEdge ? 1 : 0)
+        },
+        Reserved("bIsTargeting"), // 96, 0x1132 - uint8
+        Reserved("StasisMode"), // 97, 0x1134 - EFortPawnStasisMode
+        Reserved("BuildingState"), // 98, 0x1135 - T1ByteEnum<EFortBuildingState>
+        Reserved("AccelerationZPack"), // 99, 0x1136 - int8
+        Reserved("bIsInWaterVolume"), // 100, 0x1170 - bool
+        Reserved("CachedTeamControllingRC"), // 101, 0x1171 - uint8
+        Reserved("BalloonActiveCount"), // 102, 0x1172 - uint8
+        new() {
+            // 103, 0x1174 - falling from the bus. OnRep_IsSkydiving. See APawn.
+            Name = "bIsSkydiving",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsSkydiving ? 1 : 0)
+        },
+        new() {
+            // 104, 0x1175 - the glider is out. OnRep_IsParachuteOpen.
+            Name = "bIsParachuteOpen",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsParachuteOpen ? 1 : 0)
+        },
+        Reserved("bIsParachuteForcedOpen"), // 105, 0x1176 - uint8
+        new() {
+            // 106, 0x1176 - from the BUS rather than a launch pad. OnRep_IsSkydivingFromBus.
+            Name = "bIsSkydivingFromBus",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsSkydivingFromBus ? 1 : 0)
+        },
+        Reserved("bIsSkydivingFromLaunchPad"), // 107, 0x1176 - uint8
+        Reserved("bReplicatedIsInVortex"), // 108, 0x1176 - uint8
+        Reserved("bInGliderRedeploy"), // 109, 0x1177 - uint8
+        Reserved("bIsProxySimulationTimedOut"), // 110, 0x1177 - uint8
+        Reserved("bIsSlopeSliding"), // 111, 0x1177 - uint8
+        Reserved("bReplicatedIsInSlipperyMovement"), // 112, 0x1177 - uint8
+        Reserved("bIsPlayingEmote"), // 113, 0x1178 - uint8
+        Reserved("bIsRespawning"), // 114, 0x1178 - uint8
+        Reserved("bIsUsingJetpack"), // 115, 0x1178 - uint8
+        Reserved("bStartedInteractSearch"), // 116, 0x1178 - uint8
+        Reserved("bIsRespawningInAir"), // 117, 0x1179 - uint8
+        Reserved("VehicleInputStateUnreliable.ForwardAlpha"), // 118, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.RightAlpha"), // 119, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.PitchAlpha"), // 120, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.LookUpDelta"), // 121, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.TurnDelta"), // 122, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.SteerAlpha"), // 123, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.GravityOffset"), // 124, 0x120C - float
+        Reserved("VehicleInputStateUnreliable.MovementDir"), // 125, 0x120C - atomic struct FVector_NetQuantize100
+        new() {
+            // 126, 0x126C bit 0 - THE storm flag. This is the one with an OnRep, and so the one that
+            // turns the screen effect on. See APawn.bIsInAnyStorm.
+            Name = "bIsInAnyStorm",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsInAnyStorm ? 1 : 0)
+        },
+        new() {
+            // 127, 0x126C - in the circle or in the storm. This is what the client draws the storm
+            // vignette from; without it a player standing in the storm takes damage with no visual
+            // sign of why. See APawn.bIsInsideSafeZone.
+            Name = "bIsInsideSafeZone",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsInsideSafeZone ? 1 : 0)
+        },
+        Reserved("ZiplineState.Zipline"), // 128, 0x1338 - class AFortAthenaZipline*
+        Reserved("ZiplineState.bIsZiplining"), // 129, 0x1338 - bool
+        Reserved("ZiplineState.bJumped"), // 130, 0x1338 - bool
+        Reserved("ZiplineState.AuthoritativeValue"), // 131, 0x1338 - int32
+        Reserved("ZiplineState.SocketOffset"), // 132, 0x1338 - atomic struct FVector
+        Reserved("bCanPredictJumpApex"), // 133, 0x13D0 - bool
+        Reserved("VehicleStateRep.Vehicle"), // 134, 0x1530 - class AActor*
+        Reserved("VehicleStateRep.VehicleApexZ"), // 135, 0x1530 - float
+        Reserved("VehicleStateRep.SeatIndex"), // 136, 0x1530 - uint8
+        Reserved("VehicleStateRep.ExitSocketIndex"), // 137, 0x1530 - uint8
+        Reserved("VehicleStateRep.bOverrideVehicleExit"), // 138, 0x1530 - bool
+        Reserved("VehicleStateRep.SeatTransitionVector"), // 139, 0x1530 - atomic struct FVector
+        Reserved("VehicleStateRep.EntryTime"), // 140, 0x1530 - float
+        Reserved("PossessedProp"), // 141, 0x15C0 - class ABuildingGameplayActorPlayerPropAttachment*
+        Reserved("CosmeticLoadout.BannerIconId"), // 142, 0x18C0 - class FString
+        Reserved("CosmeticLoadout.BannerColorId"), // 143, 0x18C0 - class FString
+        Reserved("CosmeticLoadout.SkyDiveContrail"), // 144, 0x18C0 - class UAthenaSkyDiveContrailItemDefinition*
+        new() {
+            // 145, 0x18C0 (+0x28) - the glider. See above.
+            Name = "CosmeticLoadout.Glider",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).CosmeticGlider
+        }
     }).ToArray();
 
     /// <summary>

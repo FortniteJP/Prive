@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net;
+﻿namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Every way a PLAYER loses health, in one place - the server half of what real Fortnite spreads
@@ -249,12 +249,24 @@ public static class FortDamageSystem {
     ///       * FDeathInfo (handles 258-262) on the PlayerState, which the elimination feed and the
     ///         death screen read.
     ///
-    ///     The pawn is NOT destroyed. A dead Battle Royale player becomes a spectator, and this
-    ///     project has no spectator path yet; destroying the pawn out from under a client whose view
-    ///     is still attached to it would be a worse lie than leaving a dead body standing.
+    ///     NONE OF WHICH ACTUALLY KILLS ANYBODY, which is what the first live test found: at 0 HP
+    ///     the player could not shoot and could not build, and was otherwise alive and walking about.
+    ///     Two of the three above are inert on the client, and for the same reason:
     ///
-    ///     bMarkedAlive is cleared for the same reason it was set at spawn: it is the client's own
-    ///     answer to "am I alive", and it locally gates jumping and building.
+    ///       * `AFortPawn::bIsDying` HAS NO OnRep. The SDK header lists OnRep_IsDBNO,
+    ///         OnRep_IsKnockedBack and a dozen more right beside it and nothing at all for bIsDying,
+    ///         so it arrives correctly and runs nothing.
+    ///       * FDeathInfo is read by the elimination FEED and the death SCREEN once they are up. It
+    ///         does not put them up.
+    ///
+    ///     What was doing the visible half was bMarkedAlive: it is the client's own answer to "am I
+    ///     alive" and it locally gates jumping and building, which is exactly the half-dead state
+    ///     that was reported.
+    ///
+    ///     The part that actually kills is AFortPlayerController::ClientOnPawnDied, driven from
+    ///     <see cref="Tick"/> a tick later - see UActorChannel.SendClientOnPawnDied. Kill() only sets
+    ///     state; nothing here touches a channel, because every object reference in the death report
+    ///     has to exist on the client first and this class has no way to know that.
     /// </summary>
     public static void Kill(APlayerState victim, EDeathCause cause, APlayerState? instigator = null) {
         if (victim.bIsDead) return;
@@ -276,12 +288,116 @@ public static class FortDamageSystem {
         victim.DeathInfoDistance = DistanceBetween(victimPawn, killerPawn);
         victim.DeathInfoInitialized = true;
 
-        if (victim.GetOwningController() is APlayerController controller) controller.bMarkedAlive = false;
+        if (victim.GetOwningController() is APlayerController controller) {
+            controller.bMarkedAlive = false;
+            Pending.Add(new FPendingDeath(controller, victimPawn, killerPawn, instigator, float.NaN));
+
+            // One fewer player alive. This is what the HUD's "N left" reads (handle 116), and it is
+            // also the number the match-over check will want when there is one.
+            if (controller.GetWorld()?.GameState is { } gameState && gameState.PlayersLeft > 0) {
+                gameState.PlayersLeft--;
+            }
+        }
 
         Console.WriteLine($"FortDamageSystem: {victim.GetFName()} was ELIMINATED ({cause})" +
                           (instigator != null
                               ? $" by {instigator.GetFName()} at {victim.DeathInfoDistance / 100.0f:F0}m"
                               : string.Empty));
+    }
+
+    /// <summary>
+    ///     A death waiting for the client to be told about it. <see cref="ReportedAt"/> is NaN until
+    ///     ClientOnPawnDied has gone out, and the world time it went out at afterwards.
+    /// </summary>
+    private sealed record FPendingDeath(APlayerController Controller, APawn? Pawn, APawn? KillerPawn,
+                                        APlayerState? Killer, float ReportedAt) {
+        public float ReportedAt { get; set; } = ReportedAt;
+    }
+
+    private static readonly List<FPendingDeath> Pending = new();
+
+    /// <summary>
+    ///     How long the body stays before it is taken away and the player becomes a spectator. Long
+    ///     enough for the client to have played its own death handling; short enough not to leave a
+    ///     corpse standing about. Not a sourced number.
+    /// </summary>
+    private static float LingerSeconds =>
+        float.TryParse(Environment.GetEnvironmentVariable("DEATH_LINGER_SECONDS"), out var v) ? v : 4f;
+
+    /// <summary>
+    ///     Finishes every death that <see cref="Kill"/> started. Two beats, both deferred for reasons
+    ///     this project has hit before:
+    ///
+    ///     1. SEND ClientOnPawnDied, but not before the killer's pawn and PlayerState have channels
+    ///        on this connection. An object reference that is not resolvable on the client arrives as
+    ///        null - the same trap that sent the battle bus's ClientSetViewTarget at an aircraft the
+    ///        client had never heard of. Waiting a tick costs nothing and removes the whole class.
+    ///
+    ///     2. THEN, after DEATH_LINGER_SECONDS, take the pawn away and leave the player spectating.
+    ///        The teardown order is the one the battle bus already proved: UnequipCurrentWeapon
+    ///        FIRST (it reaches the ability system through Controller-&gt;PlayerState, so after
+    ///        UnPossess it would silently skip clearing the weapon's ability specs), then UnPossess,
+    ///        then Destroy. The camera goes to the killer's pawn when there is one, which is what a
+    ///        real match does; with no killer there is nothing sensible to look at, so the pawn stays
+    ///        and only control is taken away - a standing body is a much smaller lie than a camera
+    ///        bound to a destroyed actor.
+    /// </summary>
+    public static void Tick(UWorld world, float now) {
+        if (Pending.Count == 0) return;
+
+        for (var i = Pending.Count - 1; i >= 0; i--) {
+            var death = Pending[i];
+            if (world.NetDriver?.ClientConnections.FirstOrDefault(c => c.PlayerController == death.Controller)
+                is not { } connection) {
+                Pending.RemoveAt(i);   // gone from the game entirely
+                continue;
+            }
+
+            if (connection.FindActorChannel(death.Controller) is not { } pcChannel) continue;
+
+            if (float.IsNaN(death.ReportedAt)) {
+                // Every reference has to be resolvable, or it lands as null - see above.
+                if (death.KillerPawn != null && connection.FindActorChannel(death.KillerPawn) == null) continue;
+                if (death.Killer != null && connection.FindActorChannel(death.Killer) == null) continue;
+
+                pcChannel.SendClientOnPawnDied(death.Killer, death.KillerPawn, death.KillerPawn,
+                                               lethalDamage: death.Controller.PlayerState?.HealthSet?.MaxHealth ?? 100f);
+                death.ReportedAt = now;
+
+                Console.WriteLine($"FortDamageSystem: sent ClientOnPawnDied to {death.Controller.GetFName()} " +
+                                  $"(killer={(death.Killer == null ? "none" : death.Killer.GetFName().ToString())})");
+                continue;
+            }
+
+            if (now < death.ReportedAt + LingerSeconds) continue;
+            Pending.RemoveAt(i);
+
+            if (death.Pawn == null || Environment.GetEnvironmentVariable("DEATH_KEEP_BODY") is "1") continue;
+
+            // WHERE THE CAMERA GOES. The killer's pawn is what a real match uses; failing that, any
+            // other living player, which is what a real match falls back to when the killer has
+            // already left. With NEITHER - the solo case, and the one a storm or fall death in
+            // testing actually hits - no view target is sent at all, and UE's own
+            // APlayerController::TickActor handles a view target that has gone away by falling back
+            // to the controller, which sits where the player died. That is a death cam looking at
+            // the place of death, which is the right thing anyway.
+            var spectate = death.KillerPawn ?? world.NetDriver?.ClientConnections
+                .Where(c => c != connection && c.PlayerController?.PlayerState is { bIsDead: false })
+                .Select(c => c.PlayerController!.Pawn)
+                .FirstOrDefault(p => p != null);
+
+            // The teardown order the battle bus already proved - see the doc comment.
+            death.Pawn.UnequipCurrentWeapon();
+            death.Controller.UnPossess();
+            death.Pawn.Destroy();
+            if (death.Controller.PlayerState?.AbilitySystemComponent is { } asc) asc.AvatarActor = null;
+
+            pcChannel.SendClientGotoState(322);   // NAME_Spectating - a spectator has no pawn
+            if (spectate != null) pcChannel.SendClientSetViewTarget(spectate);
+
+            Console.WriteLine($"FortDamageSystem: {death.Controller.GetFName()}'s body was removed; " +
+                              $"now spectating {(spectate == null ? "where it died" : spectate.GetFName().ToString())}");
+        }
     }
 
     /// <summary>Straight-line distance between two pawns, or 0 when there is no killer to measure to.</summary>

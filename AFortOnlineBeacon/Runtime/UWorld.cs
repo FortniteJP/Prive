@@ -121,6 +121,10 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // Ahead of the NetDriver below so a cascade's channel closes go out on this same tick.
         BuildingStructuralSupportSystem.Tick(TimeSeconds);
 
+        // Finishes any death that has been started this frame or an earlier one. Ahead of the
+        // storm tick so a storm kill is reported on the same tick the damage landed.
+        Net.FortDamageSystem.Tick(this, TimeSeconds);
+
         // The storm. Off unless SAFEZONE_ENABLED=1 - see FortSafeZoneSystem for why it is opt-in.
         // Placed with the structural tick rather than after the NetDriver so a radius change and the
         // damage it causes go out on the same tick they happen.
@@ -311,10 +315,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                         // without adding a lot of extra unnecessary complexity throughout the login code.
                         // NOTE: This code differs from NMT_JoinSplit, by counting + 1 for SplitscreenCount
                         //			(since this is the primary connection, not counted in Children)
-                        // TODO: Implement proper FUrl constructor
-                        var inUrl = new FUrl {
-                            Map = Url.Map + newRequestUrl
-                        };
+                        var inUrl = FUrl.FromString(Url.Map + newRequestUrl);
 
                         if (!inUrl.Valid) {
                             connection.RequestURL = newRequestUrl;
@@ -326,7 +327,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                         var splitscreenCount = Math.Min(connection.Children.Count + 1, 255);
                         
                         // Don't allow clients to specify this value
-                        inUrl.Options.Remove("SplitscreenCount");
+                        inUrl.RemoveOption("SplitscreenCount");
                         inUrl.Options.Add($"SplitscreenCount={splitscreenCount}");
 
                         connection.RequestURL = inUrl.ToString();
@@ -361,8 +362,14 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                         // Spawn the player-actor for this network player.
                         // Logger.Debug("Join request: {Request}", connection.RequestURL);
 
-                        // TODO: Proper constructor
-                        var inURL = new FUrl();
+                        // THE CLIENT'S OWN URL, not a blank one. This was `new FUrl()`, so the
+                        // option string handed to AGameModeBase.Login was empty and every option the
+                        // client sent - ?Name=, ?Platform=, ?AuthTicket= - was discarded here rather
+                        // than anywhere interesting. connection.RequestURL is the one rewritten
+                        // during NMT_Login above, so it still carries all of them.
+                        var inURL = FUrl.FromString(connection.RequestURL);
+
+                        Console.WriteLine($"UWorld: join request {connection.RequestURL}");
 
                         connection.PlayerController = SpawnPlayActor(connection, ENetRole.ROLE_AutonomousProxy, inURL, connection.PlayerId, out var errorMsg);
                     }

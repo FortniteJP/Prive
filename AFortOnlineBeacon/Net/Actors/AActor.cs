@@ -31,6 +31,49 @@ public class AActor : UObject {
 
     public FVector GetActorLocation() => Location;
     public void SetActorLocation(FVector newLocation) => Location = newLocation;
+
+    /// <summary>
+    ///     AActor::bReplicateMovement - wire handle 2. The client's own gate: OnRep_AttachmentReplication
+    ///     and the movement path both check it before doing anything with ReplicatedMovement.
+    /// </summary>
+    public bool bReplicateMovement { get; set; }
+
+    /// <summary>AActor::ReplicatedMovement - wire handle 6. See FRepMovement.</summary>
+    public FRepMovement ReplicatedMovement { get; } = new();
+
+    private FVector? _lastGatheredLocation;
+    private float _lastGatheredTime;
+
+    /// <summary>
+    ///     AActor::GatherCurrentMovement - copies the actor's live transform into
+    ///     <see cref="ReplicatedMovement"/> so the next comparison pass has something to notice.
+    ///
+    ///     VELOCITY IS DERIVED, not measured, and that is a real difference from UE: a real server
+    ///     runs the character movement component and has a velocity to copy. This one does not - the
+    ///     owning client reports positions through ServerMoveNoBase and nothing here integrates
+    ///     anything - so velocity comes from the distance between two gathers over the time between
+    ///     them. It is worth computing rather than sending zero: the receiving client feeds it to
+    ///     PostNetReceiveVelocity, and the animation blueprint picks the run/idle state off it, so a
+    ///     zero would leave remote players sliding around in an idle pose.
+    /// </summary>
+    public void GatherCurrentMovement(float now) {
+        var location = GetActorLocation();
+        var elapsed = now - _lastGatheredTime;
+
+        if (_lastGatheredLocation is { } previous && elapsed > 0.0001f) {
+            ReplicatedMovement.LinearVelocity = new FVector {
+                X = (location.X - previous.X) / elapsed,
+                Y = (location.Y - previous.Y) / elapsed,
+                Z = (location.Z - previous.Z) / elapsed
+            };
+        }
+
+        ReplicatedMovement.Location = new FVector { X = location.X, Y = location.Y, Z = location.Z };
+        ReplicatedMovement.Rotation = GetActorRotation();
+
+        _lastGatheredLocation = ReplicatedMovement.Location;
+        _lastGatheredTime = now;
+    }
     public FRotator GetActorRotation() => Rotation;
     public void SetActorRotation(FRotator newRotation) => Rotation = newRotation;
     public FVector GetActorScale3D() => Scale3D;

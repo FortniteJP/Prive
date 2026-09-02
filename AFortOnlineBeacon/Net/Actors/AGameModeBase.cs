@@ -183,6 +183,17 @@ public class AGameModeBase : AInfo {
     private void TickBoarding(Runtime.UWorld world) {
         if (_pendingBoarding is not { } aircraft || world.NetDriver is not { } netDriver) return;
 
+        // Open the doors once the drop window arrives. AFortGameStateAthena::bAircraftIsLocked is
+        // handle 160, and the client will not even SEND ServerAttemptAircraftJump while it is set,
+        // so this is the gate that stops a player leaving before DropStartTime.
+        if (GameState is { bAircraftIsLocked: true } && world.TimeSeconds >= aircraft.DropStartTime) {
+            GameState.bAircraftIsLocked = false;
+            Console.WriteLine($"AGameModeBase: the bus doors are open at {world.TimeSeconds:F1} " +
+                              $"(DropStartTime={aircraft.DropStartTime:F1})");
+        }
+
+        TickDropDeadline(world, aircraft);
+
         foreach (var connection in netDriver.ClientConnections) {
             if (connection.PlayerController is not { } pc) continue;
             if (_boardedConnections.Contains(connection)) continue;
@@ -232,6 +243,17 @@ public class AGameModeBase : AInfo {
                 // put into NAME_Spectating with the aircraft as view target - a spectator has no
                 // pawn to stand anywhere. Leaving the warmup pawn alive is what left the character
                 // standing on the spawn island while the camera flew off.
+                // THE WEAPON GOES FIRST, AND BEFORE UnPossess. Destroying the pawn on its own left
+                // its pickaxe actor alive on every client - owned by an actor that no longer exists
+                // - and left that weapon's ability specs sitting in ActivatableAbilities, where they
+                // are handles the client can still name for a weapon that is gone. The new pawn then
+                // equipped a SECOND pickaxe and granted a second set, which is what the log's
+                // `abilities=8` after a jump was.
+                //
+                // Ordering matters: UnequipCurrentWeapon reaches the ability system through
+                // Controller->PlayerState, so calling it after UnPossess would silently skip the
+                // ClearAbility half and only destroy the actor.
+                warmupPawn.UnequipCurrentWeapon();
                 pc.UnPossess();
                 warmupPawn.Destroy();
 
@@ -270,12 +292,31 @@ public class AGameModeBase : AInfo {
 
             _restartedPawns.Add(pawn);
 
-            pcChannel.SendClientGotoState(EnvName("PLAYING_STATE_NAME", 320));   // Playing
+            // THE CAPTURE'S EXACT JUMP RESPONSE, packet #8505 of decoded_new.txt:
+            //
+            //     field[39]  = ClientRestart        (17 bits)
+            //     field[50]  = ClientSetViewTarget  (86 bits)
+            //     field[11]  = ClientSetRotation    (21 bits)
+            //     field[277] = ClientOnPawnSpawned  (0 bits)
+            //     field[11]  = ClientSetRotation    (37 bits)
+            //
+            // Three differences from what this server used to send, and the middle one is the
+            // dangerous one:
+            //
+            //   * THE VIEW TARGET GOES BACK ONTO THE PAWN. Boarding pointed it at the aircraft and
+            //     nothing ever pointed it back, so the camera stayed bound to a bus that keeps
+            //     flying away (and is eventually torn down) while the player skydives.
+            //   * ClientOnPawnSpawned is sent and was not.
+            //   * NO ClientGotoState. The real server does not send one here - ClientRestart's own
+            //     SetPawn/AcknowledgePossession is what leaves the spectating state - and this used
+            //     to send GotoState(Playing) on top of it.
             pcChannel.SendClientRestart(pawn);
+            pcChannel.SendClientSetViewTarget(pawn);
             pcChannel.SendClientSetRotation(pawn.GetActorRotation(), true);
+            pcChannel.SendClientOnPawnSpawned();
 
             Console.WriteLine($"AGameModeBase: handed {pc.GetFName()} control of {pawn.GetFName()} " +
-                              "after the jump (State=Playing, ClientRestart)");
+                              "after the jump (ClientRestart, ViewTarget=pawn, SetRotation, OnPawnSpawned)");
         }
     }
 
@@ -304,6 +345,60 @@ public class AGameModeBase : AInfo {
         SpawnAircraft(world, new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
     }
 
+    private bool _dropWindowClosed;
+
+    /// <summary>
+    ///     Drops anyone still aboard when the drop window closes, then ends the aircraft phase when
+    ///     the flight does.
+    ///
+    ///     Both halves became necessary the moment the storm could actually hurt anybody. Before
+    ///     that, a player who never pressed jump merely sat in a bus that flew off the edge of the
+    ///     spawn zone forever, and the phase staying on Aircraft for the rest of the match cost
+    ///     nothing. With the storm on, GamePhase is what says the storm may bite, and a passenger
+    ///     who is never put down is a passenger the match cannot continue without.
+    ///
+    ///     DropEndTime and FlightEndTime are the map's own times now - both fall out of where the
+    ///     flight line crosses the drop and spawn zone boxes (AFortAthenaAircraft.PlanFlightAcrossMap).
+    /// </summary>
+    private void TickDropDeadline(Runtime.UWorld world, AFortAthenaAircraft aircraft) {
+        if (GameState == null || world.NetDriver is not { } netDriver) return;
+
+        if (world.TimeSeconds >= aircraft.DropEndTime) {
+            // EVERY tick past the deadline, not once: a player who joins inside the closing window
+            // is boarded by Login (bInAircraft = Aircrafts.Count > 0) and would otherwise be the one
+            // passenger nothing ever puts down. The loop costs nothing when nobody is aboard.
+            var dropped = 0;
+            foreach (var connection in netDriver.ClientConnections) {
+                if (connection.PlayerController is not { PlayerState: { bInAircraft: true } playerState } pc) continue;
+                Rpc.NativeRpcHandlers.LeaveAircraft(pc, playerState, "the drop window closed");
+                dropped++;
+            }
+
+            if (!_dropWindowClosed) {
+                _dropWindowClosed = true;
+                Console.WriteLine($"AGameModeBase: drop window closed at {world.TimeSeconds:F1} " +
+                                  $"(DropEndTime={aircraft.DropEndTime:F1}), force-dropped {dropped} player(s)");
+            }
+        }
+
+        if (GameState.GamePhase != EAthenaGamePhase.Aircraft || world.TimeSeconds < aircraft.FlightEndTime) return;
+
+        // The flight is over. The capture shows a real server destroying the aircraft here - the
+        // pile of `reason=Destroyed` channel closes at the end of its aircraft phase - and this is
+        // also the moment the storm is allowed to start biting (see FortSafeZoneSystem.Tick).
+        //
+        // _pendingBoarding is deliberately NOT cleared: the loop below it, the one that hands a
+        // jumped player control of their new pawn, lives in TickBoarding too and would stop running
+        // with it. Both branches above are already idempotent, so leaving it set costs nothing.
+        GameState.GamePhase = EAthenaGamePhase.SafeZones;
+        GameState.Aircrafts.Remove(aircraft);
+        aircraft.Destroy();
+
+        Console.WriteLine($"AGameModeBase: flight ended at {world.TimeSeconds:F1} " +
+                          $"(FlightEndTime={aircraft.FlightEndTime:F1}) - bus destroyed, " +
+                          $"GamePhase={GameState.GamePhase}");
+    }
+
     /// <summary>Where solo team indices start - 0 is "no team" and 1/2 are reserved, see Login.</summary>
     private const int FirstTeamIndex = 3;
 
@@ -319,9 +414,14 @@ public class AGameModeBase : AInfo {
     ///     than not having a bus at all. So the default path stays byte-identical to what already
     ///     works, and this is opt-in until it has actually been flown.
     ///
-    ///     The flight plan itself is a straight line and the numbers are chosen, not sourced: a real
-    ///     playlist derives the path from the safe-zone plan, which this server has no equivalent of.
-    ///     All of it is env-overridable so a path can be retried without a rebuild.
+    ///     The flight plan is no longer chosen. It is the map's own: a straight line on a random
+    ///     heading through the map centre, entering and leaving on AircraftSpawnZone, with the doors
+    ///     open for exactly the stretch inside AircraftDropZone, at the shipped Height and Speed.
+    ///     See AFortAthenaAircraft.PlanFlightAcrossMap for every constant's provenance and for the
+    ///     two things about it that are still NOT native.
+    ///
+    ///     AIRCRAFT_YAW pins the heading (otherwise it is random per match) and AIRCRAFT_HEIGHT /
+    ///     AIRCRAFT_SPEED override the two magnitudes, so a path can be retried without a rebuild.
     /// </summary>
     private void SpawnAircraft(Runtime.UWorld world, FActorSpawnParameters spawnInfo) {
         if (GameState == null) return;
@@ -331,30 +431,29 @@ public class AGameModeBase : AInfo {
             GUClassArray.StaticClass<AFortAthenaAircraft>(), spawnInfo);
         if (aircraft == null) return;
 
-        var startX = EnvFloat("AIRCRAFT_START_X", -40000f);
-        var startY = EnvFloat("AIRCRAFT_START_Y", 0f);
-        var startZ = EnvFloat("AIRCRAFT_START_Z", 15000f);
-        var yaw = EnvFloat("AIRCRAFT_YAW", 0f);
-        var flightDuration = EnvFloat("AIRCRAFT_FLIGHT_SECONDS", 40f);
-        var dropStart = EnvFloat("AIRCRAFT_DROP_START_SECONDS", 5f);
-        var dropEnd = EnvFloat("AIRCRAFT_DROP_END_SECONDS", 35f);
+        // A different bus path every match, which is what a real one does. Pinned by AIRCRAFT_YAW
+        // when a run needs to be repeatable - the drop window changes with the heading, because a
+        // diagonal crossing of a square box is longer than an axis-aligned one.
+        var yaw = EnvFloat("AIRCRAFT_YAW", float.NaN);
+        if (float.IsNaN(yaw)) yaw = Random.Shared.NextSingle() * 360f;
 
         aircraft.SetRole(ENetRole.ROLE_Authority);
         aircraft.SetReplicates(true);
         aircraft.AircraftIndex = 0;
-        aircraft.FlightSpeed = EnvFloat("AIRCRAFT_SPEED", 4000f);
-        aircraft.PlanFlight(world.TimeSeconds,
-            new Core.Math.FVector { X = startX, Y = startY, Z = startZ },
-            yaw, flightDuration, dropStart, dropEnd);
+        aircraft.PlanFlightAcrossMap(world.TimeSeconds, yaw,
+            EnvFloat("AIRCRAFT_HEIGHT", AFortAthenaAircraft.DefaultHeight),
+            EnvFloat("AIRCRAFT_SPEED", AFortAthenaAircraft.DefaultSpeed));
 
         GameState.Aircrafts.Add(aircraft);
         GameState.bGameModeWillSkipAircraft = false;
         GameState.GamePhase = EAthenaGamePhase.Aircraft;
         GameState.AircraftStartTime = aircraft.FlightStartTime;
-        // Doors shut until the drop window opens. Nothing ticks this yet - see
-        // NativeRpcHandlers.ServerAttemptAircraftJump for why the client's own DropStartTime check
-        // is what actually gates jumping, and why leaving this false is the safer default.
-        GameState.bAircraftIsLocked = false;
+        // DOORS SHUT until the drop window opens, and now actually ticked open - see
+        // TickBoarding. This was left false on the theory that the client polices its own
+        // DropStartTime, which turned out not to be true: a player jumped well before the timer
+        // expired and the client crashed a second later. Locking it is both what the real game does
+        // and the cheapest way to keep anyone out of a code path that is still broken.
+        GameState.bAircraftIsLocked = true;
 
         // EVERYONE ALREADY IN THE WORLD BOARDS. Login only sets bInAircraft for a player who joins
         // while the bus already exists, which used to cover everyone because the bus was spawned
@@ -376,15 +475,90 @@ public class AGameModeBase : AInfo {
         // The camera RPCs CANNOT go out yet - see TickBoarding.
         _pendingBoarding = aircraft;
 
-        Console.WriteLine($"AGameModeBase.SpawnAircraft: battle bus at ({startX}, {startY}, {startZ}) " +
-                          $"Yaw={yaw} Speed={aircraft.FlightSpeed} flight={flightDuration}s " +
-                          $"drop={dropStart}s..{dropEnd}s (FlightStartTime={aircraft.FlightStartTime}), " +
+        Console.WriteLine($"AGameModeBase.SpawnAircraft: battle bus enters at " +
+                          $"{aircraft.FlightStartLocation} Yaw={yaw:F1} Speed={aircraft.FlightSpeed} " +
+                          $"flight={aircraft.TimeTillFlightEnd:F1}s " +
+                          $"drop={aircraft.TimeTillDropStart:F1}s..{aircraft.TimeTillDropEnd:F1}s " +
+                          $"(FlightStartTime={aircraft.FlightStartTime:F1}), leaves at " +
+                          $"{aircraft.LocationAt(aircraft.FlightEndTime)}, " +
                           $"GamePhase={GameState.GamePhase}, boarded {boarded} player(s)");
     }
 
     public void PreLogin(string options, string address, FUniqueNetIdRepl uniqueId, out string? errorMessage) {
         // Login unique id must match server expected unique id type OR No unique id could mean game doesn't use them
         errorMessage = null;
+    }
+
+    /// <summary>
+    ///     UGameplayStatics::ParseOption - pulls one `?Key=Value` out of a join URL's option string.
+    ///
+    ///     The options are NOT `&amp;`-separated like a web query: UE separates every one of them with
+    ///     its own `?`. Ground truth, straight out of the reference server's log
+    ///     (PriveDev/PacketProxy/FortniteGame_PR3.0Server.log:1167338):
+    ///
+    ///         Login request: /Game/Maps/Frontend?Name=dev?AuthTicket=e9dbeebb...?ASID={8316E734-...}
+    ///                        ?Platform=WIN?AnalyticsPlat=Windows?bIsFirstServerJoin=1
+    ///
+    ///     so splitting on '?' and matching `Key=` is the whole of it. Key comparison is
+    ///     case-insensitive, as UE's is.
+    /// </summary>
+    private static string ParseOption(string options, string key) {
+        foreach (var option in options.Split('?', StringSplitOptions.RemoveEmptyEntries)) {
+            if (option.Length > key.Length && option[key.Length] == '=' &&
+                option.AsSpan(0, key.Length).Equals(key, StringComparison.OrdinalIgnoreCase)) {
+                return option[(key.Length + 1)..];
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    ///     A DELIBERATE HACK, off unless NAME_PRECOMPENSATE is set, and the only honest description of
+    ///     it is: this server does not know why the client mangles the name, so this cancels the
+    ///     mangling out arithmetically.
+    ///
+    ///     WHAT IS ACTUALLY KNOWN, all of it measured. The name reaches the client correctly - the
+    ///     URL parse, the FString encoder (round-tripped at every leading bit offset) and the real
+    ///     bunch (decoded handle by handle to `handle 26 = "dev"`) are all verified - and the squad
+    ///     list in the HUD then displays it with every character shifted:
+    ///
+    ///         delta[j] = (C - 3j) mod 8,  j counted from the END of the string
+    ///
+    ///     Four samples of three different lengths fit that exactly and nothing else:
+    ///
+    ///         dev -> jfz (C=4)                      devv -> gkwz (C=4)
+    ///         ZZZZZZZZ -> ]`[^a\_Z (C=0)            developer123456789 -> ieykmswgw15959=9=9 (C=0)
+    ///
+    ///     C is constant within a session; it was 4 in one session and 0 in the two most recent. With
+    ///     C=0 the LAST character is untouched and the damage grows toward the front, so the
+    ///     transform is anchored at the END of the string.
+    ///
+    ///     WHY THIS IS A HACK AND NOT A FIX. A per-character arithmetic progression modulo 8 is not a
+    ///     designed behaviour - no feature scrambles a name that way - so it is an aliasing artifact
+    ///     somewhere in the client's display path, and the right repair is to find that. This exists
+    ///     for two narrower reasons: it makes names READABLE now, and switching it on is a decisive
+    ///     test of the model - if the squad list reads back correctly with NAME_PRECOMPENSATE=0 then
+    ///     the rule above is exactly right and C really is 0, which is worth knowing before spending
+    ///     any more time in the client.
+    ///
+    ///     It only ever alters what is SENT. Nothing else on this server reads PlayerNamePrivate back.
+    /// </summary>
+    private static string PreCompensateName(string name) {
+        if (Environment.GetEnvironmentVariable("NAME_PRECOMPENSATE") is not { Length: > 0 } raw) return name;
+        if (!int.TryParse(raw, out var c)) return name;
+
+        var compensated = new char[name.Length];
+        for (var i = 0; i < name.Length; i++) {
+            var j = name.Length - 1 - i;                 // distance from the END
+            var delta = ((c - 3 * j) % 8 + 8) % 8;
+            compensated[i] = (char) (name[i] - delta);
+        }
+
+        var result = new string(compensated);
+        Console.WriteLine($"AGameModeBase: NAME_PRECOMPENSATE={c} - sending \"{result}\" so the client's " +
+                          $"squad list should read \"{name}\"");
+        return result;
     }
 
     public APlayerController? Login(UPlayer newPlayer, ENetRole inRemoteRole, string portal, string options, FUniqueNetIdRepl uniqueId, out string errorMessage) {
@@ -577,6 +751,22 @@ public class AGameModeBase : AInfo {
             playerState.SquadId = (byte) _playersJoined;
             _playersJoined++;
 
+            // THE PLAYER'S OWN NAME, which until now was the literal string "Player" for everybody.
+            // AGameModeBase::InitNewPlayer's own shape: take `?Name=` from the join URL, cap it at 20
+            // characters, and fall back to DefaultPlayerName plus the player id when it is absent.
+            // The client really does send it - see ParseOption for the captured URL - and it is the
+            // Epic display name, so this is the player's actual name and not a guess.
+            //
+            // PLAYER_NAME overrides it, which is worth having for a reason beyond convenience: with
+            // one account there is no way to tell "the name replicated" from "the name happened to be
+            // right", and a name nothing else could have produced settles that in one look.
+            var name = Environment.GetEnvironmentVariable("PLAYER_NAME") is { Length: > 0 } forced
+                ? forced
+                : ParseOption(options, "Name");
+            if (name.Length > 20) name = name[..20];
+            if (name.Length == 0) name = $"Player{_playersJoined}";
+            playerState.PlayerNamePrivate = PreCompensateName(name);
+
             // First player on the island starts the warmup countdown - see StartWarmupClock.
             StartWarmupClock(world.TimeSeconds);
 
@@ -589,9 +779,9 @@ public class AGameModeBase : AInfo {
                 playerState.bInAircraft = GameState.Aircrafts.Count > 0;
             }
 
-            Console.WriteLine($"AGameModeBase.Login: team assignment - TeamIndex={playerState.TeamIndex} " +
-                              $"SquadId={playerState.SquadId} bInAircraft={playerState.bInAircraft}, " +
-                              $"TeamCount={GameState?.TeamCount}");
+            Console.WriteLine($"AGameModeBase.Login: \"{playerState.PlayerNamePrivate}\" - " +
+                              $"TeamIndex={playerState.TeamIndex} SquadId={playerState.SquadId} " +
+                              $"bInAircraft={playerState.bInAircraft}, TeamCount={GameState?.TeamCount}");
 
             // AController::InitPlayerState does this, and APlayerState::GetOwningController is just
             // Cast<AController>(GetOwner()) - so without it the player state has no way back to its
@@ -889,6 +1079,11 @@ public class AGameModeBase : AInfo {
         pawn.SetReplicates(true);
         pawn.SetAutonomousProxy(true); // possessed by pc's own connection
         pawn.SetActorLocation(at);
+
+        // Tell every OTHER client where this pawn is, every tick. Off on the class default because
+        // most of what this server replicates never moves; a player pawn is exactly the case it
+        // exists for. See Core.Math.FRepMovement.
+        pawn.bReplicateMovement = true;
 
         pc.Possess(pawn);
 

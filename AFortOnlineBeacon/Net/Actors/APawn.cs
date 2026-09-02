@@ -224,8 +224,14 @@ public class APawn : AActor {
         var elapsed = now - _lastTrackedTime;
         if (elapsed < 1.0f) return;
 
-        Console.WriteLine($"APawn.TrackMovementSpeed: {_trackedDistance / elapsed:F1} uu/s over {elapsed:F1}s " +
-                          $"(Fortnite RunSpeed is 410)");
+        // NOT while descending. This line exists to catch a walking speed that disagrees with the
+        // movement attributes, and comparing a skydive against RunSpeed reads like a speed-hack
+        // warning when it is just gravity - the descent legitimately runs at thousands of uu/s
+        // (Default.SkydivingControlActive.TerminalVelocity is 6000).
+        if (!bIsSkydiving && !bIsParachuteOpen) {
+            Console.WriteLine($"APawn.TrackMovementSpeed: {_trackedDistance / elapsed:F1} uu/s over {elapsed:F1}s " +
+                              $"(Fortnite RunSpeed is 410)");
+        }
 
         _trackedDistance = 0.0f;
         _lastTrackedTime = now;
@@ -253,7 +259,75 @@ public class APawn : AActor {
     ///     matter what else is right. EMovementMode: 1 Walking, 2 NavWalking, 3 Falling, 4 Swimming,
     ///     5 Flying, 6 Custom.
     /// </summary>
+    /// <summary>
+    ///     ACharacter::ReplicatedMovementMode - wire handle 29, and what a remote player's ANIMATION
+    ///     runs off. `OnRep_ReplicatedMovementMode` calls
+    ///     UCharacterMovementComponent::ApplyNetworkMovementMode, which is how a simulated proxy
+    ///     learns it is walking, falling, or - and this is the one that matters here - in one of
+    ///     Fortnite's CUSTOM modes. Skydiving and gliding are custom modes, which is why a remote
+    ///     player fell to earth standing bolt upright: with this at its default the proxy believed it
+    ///     was walking the whole way down.
+    ///
+    ///     Relayed verbatim from the owning client rather than derived. ServerMoveNoBase's last
+    ///     parameter IS `PackNetworkMovementMode()`'s output, computed by the one machine that knows
+    ///     what mode the character is in - so there is nothing to work out and nothing to get wrong,
+    ///     including whatever Fortnite packs into the custom bits.
+    /// </summary>
+    public byte ReplicatedMovementMode { get; set; }
+
+    /// <summary>
+    ///     ACharacter::bIsCrouched - wire handle 30. `OnRep_IsCrouched` calls Crouch()/UnCrouch() on
+    ///     the proxy, which plays the animation AND resizes the capsule.
+    ///
+    ///     The capsule is why the symptom was "standing, and sunk into the ground": the replicated
+    ///     LOCATION is the crouched actor's, which sits lower, but a proxy still at full height puts
+    ///     its feet that much below the floor. Two bugs looking like one.
+    ///
+    ///     From FSavedMove_Character::GetCompressedFlags bit 1, FLAG_WantsToCrouch - the same byte
+    ///     TrackMoveFlags already reads.
+    /// </summary>
+    public bool bIsCrouched { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerPawn::bIsSkydiving - wire handle 103, with an OnRep (OnRep_IsSkydiving). The
+    ///     packed movement mode alone is not enough: Fortnite's animation blueprint reads these
+    ///     dedicated flags, and each of the three below has its own OnRep, which is what makes them
+    ///     the ones the client is actually driven by.
+    /// </summary>
+    public bool bIsSkydiving { get; set; }
+
+    /// <summary>AFortPlayerPawn::bIsParachuteOpen - handle 104, OnRep_IsParachuteOpen. The glider.</summary>
+    public bool bIsParachuteOpen { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerPawn::bIsSkydivingFromBus - handle 106, OnRep_IsSkydivingFromBus. Not derivable
+    ///     from the movement mode: skydiving from the battle bus and skydiving off a launch pad are
+    ///     the same custom mode. The SERVER is the only one that knows which, so it is set in
+    ///     NativeRpcHandlers.LeaveAircraft and cleared here when the descent ends.
+    /// </summary>
+    public bool bIsSkydivingFromBus { get; set; }
+
     public void TrackMoveFlags(byte compressedMoveFlags, byte clientMovementMode) {
+        // The two the OTHER clients need, taken straight from the owning client's own move.
+        ReplicatedMovementMode = clientMovementMode;
+        bIsCrouched = (compressedMoveFlags & 0x02) != 0;
+
+        // EFortCustomMovement rides INSIDE the packed mode, and the packing is exact rather than
+        // guessed - UCharacterMovementComponent::PackNetworkMovementMode (CharacterMovementComponent
+        // .cpp:1148) is `CustomMovementMode + CustomModeThr` for a custom mode, and CustomModeThr is
+        // `2 << CeilLogTwo(MOVE_MAX)` = 16. So Parachuting (EFortCustomMovement 3) arrives as 19 and
+        // Skydiving (4) as 20; anything below 16 is a plain EMovementMode with a ground-mode bit.
+        const int customModeThreshold = 16;
+        var customMode = clientMovementMode >= customModeThreshold
+            ? clientMovementMode - customModeThreshold
+            : -1;
+
+        bIsSkydiving = customMode == 4;      // EFortCustomMovement::Skydiving
+        bIsParachuteOpen = customMode == 3;  // EFortCustomMovement::Parachuting
+
+        // Back on the ground - whatever started the descent, it is over.
+        if (!bIsSkydiving && !bIsParachuteOpen) bIsSkydivingFromBus = false;
+
         // FSavedMove_Character::CompressedFlags. Only the first two are standard input; the Custom
         // ones are whatever the game's own movement component defines (Fortnite uses them for
         // sprint and the like), and they are worth seeing precisely because we do not know which.
@@ -365,6 +439,63 @@ public class APawn : AActor {
     public bool bIsDying { get; set; }
 
     public void SetController(AController? controller) => Controller = controller;
+
+    /// <summary>
+    ///     The glider asset, built lazily rather than in a field initializer - the same static
+    ///     ordering trap that killed FortFloorLoot's first world tick.
+    /// </summary>
+    private static UObject? _defaultGlider;
+
+    public static UObject DefaultGlider => _defaultGlider ??=
+        UAssetRegistry.GetOrCreate("/Game/Athena/Items/Cosmetics/Gliders/DefaultGlider.DefaultGlider");
+
+    /// <summary>
+    ///     AFortPlayerPawn::CosmeticLoadout.Glider - wire handle 145, and the reason the client used
+    ///     to crash about a second into a skydive.
+    ///
+    ///     The pawn resolves "which glider am I using" as GliderOverrideStack.Last() ->
+    ///     GliderClass (+0x22C8) -> CosmeticLoadout.Glider (+0x18E8), and the last step is
+    ///     dereferenced WITHOUT a null check - the fault was `mov rax,[rcx]` at 0x141962AC7. This
+    ///     server set none of the three, so a player who jumped had no glider to open.
+    ///
+    ///     A real server sends /Game/Athena/Items/Cosmetics/Gliders/DefaultGlider here; the PR3.0
+    ///     capture registers it as NetGUID 979 in the pawn's very first property burst, alongside
+    ///     DefaultPickaxe and CID_001_Athena_Commando_F_Default. Only the glider is sent here,
+    ///     because only the glider is dereferenced blind.
+    /// </summary>
+    public UObject? CosmeticGlider { get; set; } = DefaultGlider;
+
+    /// <summary>
+    ///     AFortPlayerPawn::bIsInAnyStorm - wire handle 126, and THE ONE THAT DRIVES THE SCREEN
+    ///     EFFECT. Sending only bIsInsideSafeZone changed nothing on screen, and this is why:
+    ///
+    ///     Both bools live in the same byte at 0x126C - bIsInAnyStorm is bit 0, bIsInsideSafeZone is
+    ///     bit 1 - but only bIsInAnyStorm has an OnRep. `AFortPlayerPawn::OnRep_IsInAnyStorm`
+    ///     (0x141972BF0 in the dump, reached from the name table via dumpwork/findfn.py) reads
+    ///     `byte [this+0x126C] & 1`, folds the answer into a bit of 0x1131, and tail-calls
+    ///     `vtable[0xEF0]`. The post-process it ends up driving is right there in the class next to
+    ///     the flags: OutsideSafeZoneBlendSpeed (0x1278), CurrentOutsideSafeZonePPVBlend (0x127C),
+    ///     TargetOutsideSafeZonePPVBlend (0x1280), OutsideSafeZonePPComponent (0x1288). A property
+    ///     with no OnRep can be perfectly replicated and still light nothing up.
+    /// </summary>
+    public bool bIsInAnyStorm { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerPawn::bIsInsideSafeZone - wire handle 127, the inverse of
+    ///     <see cref="bIsInAnyStorm"/>. Sent as well because it is what the rest of the client's
+    ///     safe-zone logic reads, but on its own it is invisible - see above.
+    ///
+    ///     True by default so a pawn that exists before the storm does is not born in the storm:
+    ///     with the storm off nothing ever writes either of these, and the defaults are what get
+    ///     sent.
+    /// </summary>
+    public bool bIsInsideSafeZone { get; set; } = true;
+
+    /// <summary>
+    ///     AFortPlayerPawn::bIsNearSafeZoneEdge - wire handle 95. The client's cue that the wall is
+    ///     close; set inside <see cref="Net.FortSafeZoneSystem"/> along with bIsInsideSafeZone.
+    /// </summary>
+    public bool bIsNearSafeZoneEdge { get; set; }
 
     /// <summary>
     ///     Stand-in for FNetworkPredictionData_Server_Character::PendingAdjustment.TimeStamp with

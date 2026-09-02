@@ -109,6 +109,10 @@ public sealed class FRepLayout {
             case ERepPropertyKind.Rotator:
                 // Same reason as the vectors below: FRotator is a mutable reference type here.
                 return def.GetRotatorValue == null ? NotComparable : def.GetRotatorValue(instance).ToString();
+            case ERepPropertyKind.RepMovement:
+                // Same reason again - and FRepMovement.ToString is written to be exactly this
+                // snapshot, so a pawn that has not moved compares equal and sends nothing.
+                return def.GetRepMovementValue == null ? NotComparable : def.GetRepMovementValue(instance).ToString();
             case ERepPropertyKind.VectorQuantize10:
             case ERepPropertyKind.VectorQuantize100:
                 // Compared by string: FVector is a mutable reference type here, so holding the
@@ -249,6 +253,16 @@ public sealed class FRepLayout {
 
                 payload.SerializeIntPacked(&handle);
                 cmd.Def.GetRotatorValue(instance).NetSerializeWrite(payload);
+                continue;
+            }
+
+            if (cmd.Def.Kind == ERepPropertyKind.RepMovement) {
+                if (cmd.Def.GetRepMovementValue == null) {
+                    throw new InvalidOperationException($"FRepLayout: '{cmd.Def.Name}' has no movement value serializer yet, can't be in a changed set.");
+                }
+
+                payload.SerializeIntPacked(&handle);
+                cmd.Def.GetRepMovementValue(instance).NetSerializeWrite(payload);
                 continue;
             }
 

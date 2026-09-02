@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 
 namespace AFortOnlineBeacon.Core;
@@ -16,6 +16,49 @@ public class FUrl {
     public List<string> Options { get; set; } = new List<string>();
     public string Portal { get; set; } = string.Empty;
     public bool Valid { get; set; } = true;
+
+    /// <summary>
+    ///     FURL::FURL - splits `map?opt=a?opt=b#portal` into <see cref="Map"/>, <see cref="Options"/>
+    ///     and <see cref="Portal"/>. Options are separated by '?', each carrying its own, which is
+    ///     what the client sends:
+    ///
+    ///         /Game/Maps/Frontend?Name=dev?AuthTicket=e9dbeebb...?Platform=WIN?bIsFirstServerJoin=1
+    ///
+    ///     This is what the two "TODO: Implement proper FUrl constructor" sites in UWorld were
+    ///     standing in for, and the stand-in threw the options away: the login path put the whole
+    ///     option string inside Map and left Options empty, and the JOIN path built a blank FUrl and
+    ///     handed that to the game mode. So AGameModeBase.Login has never seen a single option the
+    ///     client sent - `?Name=` included, which is why the player name fell back to Player&lt;N&gt;
+    ///     however correctly it was parsed.
+    /// </summary>
+    public static FUrl FromString(string url) {
+        var result = new FUrl();
+
+        var portalAt = url.IndexOf('#');
+        if (portalAt >= 0) {
+            result.Portal = url[(portalAt + 1)..];
+            url = url[..portalAt];
+        }
+
+        var parts = url.Split('?');
+        result.Map = parts[0];
+
+        for (var i = 1; i < parts.Length; i++) {
+            if (parts[i].Length > 0) result.Options.Add(parts[i]);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     Drops every option with this key, whatever its value. FURL::RemoveOption matches on the
+    ///     KEY - List.Remove matches the whole "Key=Value" string, so the caller that removes
+    ///     SplitscreenCount to stop a client specifying it was removing nothing at all.
+    /// </summary>
+    public void RemoveOption(string key) =>
+        Options.RemoveAll(option =>
+            option.StartsWith(key, StringComparison.OrdinalIgnoreCase) &&
+            (option.Length == key.Length || option[key.Length] == '='));
 
     public string? GetOption(string match, string? defaultValue) {
         var len = match.Length;

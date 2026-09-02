@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -65,26 +65,80 @@ public class AFortSafeZoneIndicator : AActor {
     /// <summary>Wire handle 32 - the current radius, and what this server's own damage test uses.</summary>
     public float Radius { get; set; }
 
-    /// <summary>Puts the circle in a holding state at one radius and centre - no shrink in progress.</summary>
-    public void HoldAt(FVector centre, float radius, float now) {
+    /// <summary>
+    ///     Holds the circle still at one radius and centre WHILE ALREADY ADVERTISING WHEN THE NEXT
+    ///     SHRINK STARTS.
+    ///
+    ///     BOTH TIMES GET THE SAME VALUE, and that is not a shortcut - it is exactly what the real
+    ///     server sent. The captured hold above carries
+    ///     `SafeZoneStartShrinkTime = SafeZoneFinishShrinkTime = 260.7586` while the circle is still
+    ///     sitting at 185000 with nothing shrinking. So a hold is a ZERO-LENGTH window placed at the
+    ///     moment the next shrink begins: it tells the client what to count down to and simultaneously
+    ///     says nothing is shrinking, and the real duration only arrives when the shrink actually
+    ///     starts and the server rewrites Finish.
+    ///
+    ///     Two earlier versions of this got it wrong in opposite directions. Setting both to `now`
+    ///     left the client counting down to a time in the past for the whole of every hold. Setting
+    ///     Finish to Start + ShrinkTime looked more informative but is a window the real server never
+    ///     sends, and a client that reads Finish &gt; Start as "a shrink is scheduled or running" would
+    ///     be told the storm is already moving through the entire hold.
+    ///
+    ///     Last and Next are BOTH the current circle, so the client's Last-&gt;Next lerp produces no
+    ///     movement whatever the times say - again exactly as in the capture, where Last and Next were
+    ///     the same 185000 and the upcoming 80000 sat in NextNextRadius.
+    /// </summary>
+    public void HoldUntil(FVector centre, float radius, float nextShrinkStart) {
         LastCenter = Copy(centre);
         NextCenter = Copy(centre);
         LastRadius = radius;
         NextRadius = radius;
         Radius = radius;
-        SafeZoneStartShrinkTime = now;
-        SafeZoneFinishShrinkTime = now;
+        SafeZoneStartShrinkTime = nextShrinkStart;
+        SafeZoneFinishShrinkTime = nextShrinkStart;
+    }
+
+    /// <summary>Holds with nothing further scheduled - the end of the plan.</summary>
+    public void HoldAt(FVector centre, float radius, float now) => HoldUntil(centre, radius, now);
+
+    /// <summary>
+    ///     PUTS THE FORECAST CIRCLE UP: promotes NextNext into Next, WITHOUT touching the times.
+    ///
+    ///     This is the step this server was missing entirely, and it is the whole of why the map
+    ///     never showed a circle to move towards. It only exists because of how the client draws
+    ///     things, which the dump settles rather than leaves to guesswork - the indicator's own
+    ///     update at 0x1412B3E0F does:
+    ///
+    ///         now = GameState-&gt;GetServerWorldTimeSeconds()
+    ///         if (now &lt; SafeZoneStartShrinkTime)  -&gt; SetSafeZoneRadiusAndCenter(LastRadius, LastCenter)
+    ///         else if (now &gt;= SafeZoneFinishShrinkTime) -&gt; ...(NextRadius, NextCenter)
+    ///         else                                  -&gt; ...(lerp Last-&gt;Next)
+    ///
+    ///     So BEFORE the window opens the storm is pinned to LAST no matter what Next says. Next is
+    ///     therefore free to hold the upcoming circle for the whole of the wait, and that is exactly
+    ///     what the map draws as the white circle. Promoting it only when the shrink begins - which
+    ///     is what this server did - makes the circle appear at the instant the storm starts moving,
+    ///     i.e. never as a forecast at all. That is the reported symptom precisely.
+    ///
+    ///     It also explains the captured spawn state, which had Last == Next == 185000 with the
+    ///     upcoming 80000 still parked in NextNext: that capture is the indicator's FIRST replication,
+    ///     at match start, BEFORE the first circle has been announced. Which is right - in a real
+    ///     match there is no white circle for the first minute either. What announces it is
+    ///     AFortGameStateAthena::SafeZonesStartTime arriving, one Default.SafeZone.StartDelay later.
+    /// </summary>
+    public void AnnounceNext() {
+        LastCenter = Copy(NextCenter);
+        LastRadius = NextRadius;
+        NextCenter = Copy(NextNextCenter);
+        NextRadius = NextNextRadius;
     }
 
     /// <summary>
-    ///     Starts a shrink. The client does the interpolation from here; this server only needs to keep
-    ///     <see cref="Radius"/> in step for its own out-of-zone test, which FortSafeZoneSystem does.
+    ///     Opens (or re-schedules) the shrink window. Last and Next are NOT touched - by the time this
+    ///     is called <see cref="AnnounceNext"/> has already put the target in Next and the client has
+    ///     been drawing it for the whole wait. A zero-length window (start == finish) is a hold; see
+    ///     <see cref="HoldUntil"/> for why that is the real server's own shape.
     /// </summary>
-    public void BeginShrink(FVector toCentre, float toRadius, float startTime, float finishTime) {
-        LastCenter = Copy(NextCenter);
-        LastRadius = NextRadius;
-        NextCenter = Copy(toCentre);
-        NextRadius = toRadius;
+    public void SetShrinkWindow(float startTime, float finishTime) {
         SafeZoneStartShrinkTime = startTime;
         SafeZoneFinishShrinkTime = finishTime;
     }

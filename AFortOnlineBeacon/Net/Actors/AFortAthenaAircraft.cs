@@ -69,12 +69,115 @@ public class AFortAthenaAircraft : AActor {
     public int AircraftIndex { get; set; }
 
     /// <summary>
+    ///     THE MAP'S OWN AIRCRAFT SETTINGS, read out of the shipped 10.40 data with Tools/PakReader -
+    ///     no longer the round numbers this class used to carry.
+    ///
+    ///     Where each one comes from, so it can be re-derived for another version:
+    ///
+    ///         pakreader actors FortniteGame/Content/Athena/Maps/Athena_Terrain.umap MapInfo
+    ///             -> DefaultMapInfo_4 at (32256, -25600, 1536)   = <see cref="MapCenter"/>
+    ///         pakreader props  FortniteGame/Content/Athena/Maps/Athena_Terrain.umap
+    ///             -> AircraftSpawnZone  Min=(-160000,-160000) Max=(160000,160000)
+    ///                AircraftDropZone   Min=(-110000,-110000) Max=(110000,110000)
+    ///         pakreader props  FortniteGame/Content/Athena/Balance/MapInfos/DefaultMapInfo
+    ///             -> AircraftHeight / AircraftSpeed / AircraftDeviationAngle /
+    ///                AircraftDistanceFromMidLine, each an FScalableFloat naming a curve row
+    ///         pakreader rows   FortniteGame/Content/Athena/Balance/DataTables/AthenaGameData
+    ///             -> Default.Aircraft.Height 80000, .Speed 7500, .DeviationAngle 45,
+    ///                .DistanceFromMidLine 0
+    ///
+    ///     THE TWO ZONE BOXES ARE CENTRED ON THE MAP INFO ACTOR, not on the world origin. That is a
+    ///     claim worth its evidence, because getting it wrong shifts the entire flight path by
+    ///     (32256, -25600). The same map info carries
+    ///     `CachedPlayableBoundsForClients Origin=(31488,-23808) BoxExtent=(114432,118016,75000)
+    ///     SphereRadius=159757` - and 159757 is the spawn zone's 160000, while 114432/118016 is the
+    ///     drop zone's 110000. Two perfectly symmetric +/-N boxes whose N matches the playable area's
+    ///     own extents ARE those extents; a world-space box would have had to be authored off-centre
+    ///     to land on the same island.
+    ///
+    ///     That actor's location is also the centre the storm's first circle was seen using in the
+    ///     live capture (FortSafeZoneSystem.InitialCentre) - independent confirmation that this is
+    ///     what the game treats as the middle of the map.
+    /// </summary>
+    public static readonly FVector MapCenter = new() { X = 32256f, Y = -25600f, Z = 1536f };
+
+    /// <summary>AFortAthenaMapInfo::AircraftSpawnZone half-extent - the box the flight begins and ends on.</summary>
+    public const float SpawnZoneExtent = 160000f;
+
+    /// <summary>AFortAthenaMapInfo::AircraftDropZone half-extent - the box the doors are open inside.</summary>
+    public const float DropZoneExtent = 110000f;
+
+    /// <summary>Default.Aircraft.Height - the bus's world Z. Far higher than the 15000 this used to guess.</summary>
+    public const float DefaultHeight = 80000f;
+
+    /// <summary>Default.Aircraft.Speed, cm/s. Was 4000.</summary>
+    public const float DefaultSpeed = 7500f;
+
+    /// <summary>
+    ///     Plans the flight the way the game does: a straight line on the given heading THROUGH THE
+    ///     MAP CENTRE, entering and leaving on the spawn zone box, with the drop window set to
+    ///     exactly the stretch of that line lying inside the drop zone box.
+    ///
+    ///     That shape is the native one, and it is readable straight off the client binary's own log
+    ///     strings for InitializeFlightPath - "Failed to project path onto spawn zone", "...onto drop
+    ///     zone volume", "...onto drop zone box". Projecting a path onto a zone is what the four
+    ///     times ARE: flight start and end are where the line meets the spawn zone, drop start and
+    ///     end are where it meets the drop zone. None of the four is a chosen duration any more -
+    ///     they all fall out of the geometry and the speed.
+    ///
+    ///     WHAT IS STILL NOT NATIVE, stated plainly rather than papered over:
+    ///
+    ///     * The HEADING. A real server picks it, and `Default.Aircraft.DeviationAngle` = 45 is
+    ///       clearly part of how - but the exec that would have named its own arguments
+    ///       (`SetAircraftFlightPath(StartDegrees, OffsetFactor)`) is compiled out of the shipping
+    ///       build: the thunk registered for it tail-calls 0x140382DA0, which is a bare `ret`. The
+    ///       real InitializeFlightPath IS in the binary (0x141161D70, found from the log strings
+    ///       above) but is ~12 KB of inlined float code. Not read. So the heading here is uniformly
+    ///       random, or AIRCRAFT_YAW to pin it.
+    ///     * The DROP ZONE VOLUME. The map sets AircraftDropVolume = IslandZoneVolume_1, a brush,
+    ///       and the native code prefers it over the box - which is why there are two separate log
+    ///       strings for the two. This uses the box the volume is inscribed in, so the doors open a
+    ///       little early and shut a little late compared with a real match.
+    ///     * `AircraftDistanceFromMidLine` is 0 in 10.40, so a line through the centre is exactly
+    ///       right for THIS version. On a version where it is non-zero the line is offset sideways
+    ///       by that much, and this would need the offset adding perpendicular to the heading.
+    /// </summary>
+    public void PlanFlightAcrossMap(float matchTimeSeconds, float yawDegrees, float height, float speed) {
+        var radians = yawDegrees * MathF.PI / 180f;
+        var dirX = MathF.Cos(radians);
+        var dirY = MathF.Sin(radians);
+
+        // Distance from the map centre out to a box edge along +/- the heading. A ray leaving the
+        // centre of an axis-aligned box exits through whichever side it reaches first, which is the
+        // SMALLER of the two per-axis crossings; a heading lying exactly along one axis never
+        // crosses the other, hence the guard rather than a plain divide.
+        static float ToBoxEdge(float extent, float dirX, float dirY) {
+            var tx = MathF.Abs(dirX) > 1e-6f ? extent / MathF.Abs(dirX) : float.PositiveInfinity;
+            var ty = MathF.Abs(dirY) > 1e-6f ? extent / MathF.Abs(dirY) : float.PositiveInfinity;
+            return MathF.Min(tx, ty);
+        }
+
+        var toSpawnEdge = ToBoxEdge(SpawnZoneExtent, dirX, dirY);
+        var toDropEdge = ToBoxEdge(DropZoneExtent, dirX, dirY);
+
+        FlightSpeed = speed;
+        PlanFlight(matchTimeSeconds,
+            new FVector {
+                X = MapCenter.X - dirX * toSpawnEdge,
+                Y = MapCenter.Y - dirY * toSpawnEdge,
+                Z = height
+            },
+            yawDegrees,
+            flightDuration: toSpawnEdge * 2f / speed,
+            dropStartOffset: (toSpawnEdge - toDropEdge) / speed,
+            dropEndOffset: (toSpawnEdge + toDropEdge) / speed);
+    }
+
+    /// <summary>
     ///     Fills in one straight flight path across the map, in the units the client expects.
     ///
-    ///     The numbers are DELIBERATELY simple and are not claimed to match a real match's bus: a
-    ///     real playlist picks the path from the safe-zone plan, which this server has no equivalent
-    ///     of yet. What matters for the client is only that the four times are ordered and that the
-    ///     path is long enough to still be over the island when the doors open.
+    ///     The caller picks the geometry; <see cref="PlanFlightAcrossMap"/> is the one that
+    ///     reproduces the game's own. This only writes the fields.
     /// </summary>
     public void PlanFlight(float matchTimeSeconds, FVector start, float yaw, float flightDuration,
                            float dropStartOffset, float dropEndOffset) {

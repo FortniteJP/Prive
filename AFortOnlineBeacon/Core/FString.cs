@@ -1,34 +1,37 @@
-using System.Text;
+﻿using System.Text;
 
 namespace AFortOnlineBeacon.Core;
 
 public static class FString {
     private const int MaxSerializeSize = 1024;
 
+    /// <summary>
+    ///     FString::operator&lt;&lt; - a length then the characters, where the SIGN of the length picks the
+    ///     encoding: positive means one byte per character (ANSICHAR), negative means UCS2CHAR, i.e.
+    ///     UTF-16 code units. Either way the count INCLUDES the null terminator.
+    ///
+    ///     The unicode branch used to take its length from the UTF-8 BYTE count and then write UTF-8
+    ///     into a buffer sized for UTF-16 - wrong twice over, and mangling any value that was not pure
+    ///     ASCII. <see cref="Deserialize"/> reads that same field back as UTF-16 (Encoding.Unicode,
+    ///     saveNum * 2 bytes), so the two halves of this file did not even agree with each other; the
+    ///     ASCII branch is the only one that had ever been exercised.
+    ///
+    ///     UCS2 counts UTF-16 CODE UNITS, which is exactly what C#'s string.Length is - surrogate
+    ///     pairs counting as two - and exactly what UE writes for a TCHAR string.
+    /// </summary>
     public static void Serialize(FArchive archive, string value) {
-        var unicodeCount = Encoding.UTF8.GetByteCount(value);
-        var bSaveUnicodeChar = archive.IsForcingUnicode() || unicodeCount != value.Length;
+        var bSaveUnicodeChar = archive.IsForcingUnicode() || Encoding.UTF8.GetByteCount(value) != value.Length;
         if (bSaveUnicodeChar) {
-            var num = unicodeCount + 1;
-            var saveNum = -num;
+            var num = value.Length + 1;   // UTF-16 code units, null terminator included
+            archive.WriteInt32(-num);
 
-            archive.WriteInt32(saveNum);
+            var valueBytesSize = num * 2;
+            var valueBytes = valueBytesSize > 128 ? new byte[valueBytesSize] : stackalloc byte[valueBytesSize];
 
-            if (num != 0) {
-                var valueBytesSize = num * 2;
-                var valueBytes = valueBytesSize > 128 ? new byte[valueBytesSize] : stackalloc byte[valueBytesSize];
+            Encoding.Unicode.GetBytes(value, valueBytes);   // the trailing two bytes stay zero
 
-                Encoding.UTF8.GetBytes(value, valueBytes);
-                
-                if (!archive.IsByteSwapping()) archive.Serialize(valueBytes, valueBytesSize);
-                else {
-                    throw new NotImplementedException();
-                    // for (int i = 0; i < num; i++)
-                    // {
-                    //     valueBytes[i] = archive.ByteSwap(valueBytes[i]);
-                    // }
-                }
-            }
+            if (archive.IsByteSwapping()) throw new NotImplementedException();
+            archive.Serialize(valueBytes, valueBytesSize);
         } else {
             var num = value.Length;
             if (num != 0) {

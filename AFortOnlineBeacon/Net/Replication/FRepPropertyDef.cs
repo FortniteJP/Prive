@@ -19,6 +19,12 @@ public enum ERepPropertyKind {
     StructAtomic,
 
     /// <summary>
+    ///     AActor::ReplicatedMovement specifically - a StructAtomic that DOES have a serializer.
+    ///     See Core.Math.FRepMovement for the format and why it needs one of its own.
+    /// </summary>
+    RepMovement,
+
+    /// <summary>
     ///     A struct property with no native NetSerialize - FRepLayout doesn't assign it a handle of
     ///     its own; it recurses into <see cref="FRepPropertyDef.Children"/> instead, each of which
     ///     consumes its own handle(s).
@@ -172,6 +178,9 @@ public sealed class FRepPropertyDef {
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.String"/>.</summary>
     public Func<object, string>? GetStringValue { get; init; }
+
+    /// <summary>Leaf value getter for <see cref="ERepPropertyKind.RepMovement"/>.</summary>
+    public Func<object, Core.Math.FRepMovement>? GetRepMovementValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.NetId"/>.</summary>
     public Func<object, FUniqueNetIdRepl?>? GetNetIdValue { get; init; }

@@ -107,6 +107,61 @@ internal static class NativeRpcHandlers {
         _ => "None"
     };
 
+    /// <summary>
+    ///     Take <paramref name="pc"/> off the battle bus and put a pawn under them where the bus is.
+    ///
+    ///     ServerAttemptAircraftJump's body, factored out because the DropEnd timeout needs exactly
+    ///     the same thing: a real server drops everyone still aboard when the drop window closes
+    ///     rather than carrying them off the end of the map, and this is that path. Reusing the
+    ///     player-initiated one rather than writing a second is deliberate - the jump path is the one
+    ///     that has actually been flown, and the skydive crash it took to get there is not worth
+    ///     risking twice.
+    ///
+    ///     All the server can honestly do is clear bInAircraft: the client owns the skydive and the
+    ///     glider from there, exactly as it owns movement everywhere else here (see ServerMoveNoBase).
+    ///     What it must NOT do is leave the flag set - the client will not leave the bus until it
+    ///     comes back cleared.
+    /// </summary>
+    public static void LeaveAircraft(APlayerController pc, APlayerState playerState, string reason) {
+        playerState.bInAircraft = false;
+
+        // Off the bus, so stop riding it (only relevant under BUS_ATTACH_PAWN=1 - the default model
+        // destroys the pawn instead and there is nothing attached).
+        if (pc.Pawn is { } jumpingPawn) jumpingPawn.AttachParent = null;
+
+        AFortAthenaAircraft? jumpedFrom = null;
+        if (pc.GetWorld()?.GameState is { } gameState) {
+            foreach (var entry in gameState.Aircrafts) {
+                if (entry is not AFortAthenaAircraft aircraft) continue;
+
+                aircraft.JumpFlashCount++;
+                jumpedFrom ??= aircraft;
+            }
+        }
+
+        // A NEW PAWN, WHERE THE BUS IS. The warmup pawn was destroyed when the bus phase started
+        // (AGameModeBase.TickBoarding), matching what a real server does - the capture shows the
+        // local pawn's identity change across the bus - so the player has no pawn at all right now
+        // and the skydive has to start from one that does not exist yet.
+        // AFortAthenaAircraft.LocationAt puts it on the same straight line the client is already
+        // interpolating the bus along.
+        if (pc.Pawn == null && pc.GetWorld() is { } world && jumpedFrom != null) {
+            var at = jumpedFrom.LocationAt(world.TimeSeconds);
+            var spawned = AGameModeBase.SpawnAndPossessPawn(world, pc, at);
+
+            // Only the server can tell a bus jump from a launch pad - they are the same custom
+            // movement mode - so this one flag cannot come from the client's move like the rest.
+            // See APawn.bIsSkydivingFromBus; TrackMoveFlags clears it when the descent ends.
+            if (spawned != null) spawned.bIsSkydivingFromBus = true;
+
+            Console.WriteLine($"NativeRpcHandlers.LeaveAircraft: " +
+                              $"{(spawned == null ? "FAILED to spawn" : $"spawned {spawned.GetFName()}")} " +
+                              $"at the bus {at}");
+        }
+
+        Console.WriteLine($"NativeRpcHandlers.LeaveAircraft: {playerState.GetFName()} left the aircraft - {reason}");
+    }
+
     private static FRpcDef NoParams(string name, Action<APlayerController>? action = null) => new(
         name,
         Array.Empty<FRpcParamDef>(),
@@ -809,39 +864,17 @@ internal static class NativeRpcHandlers {
                 if (actor is not APlayerController { PlayerState: { } playerState } pc) return;
                 if (!playerState.bInAircraft) return;
 
-                playerState.bInAircraft = false;
-
-                // Off the bus, so stop riding it (only relevant under BUS_ATTACH_PAWN=1 - the
-                // default model destroys the pawn instead and there is nothing attached).
-                if (pc.Pawn is { } jumpingPawn) jumpingPawn.AttachParent = null;
-
-                AFortAthenaAircraft? jumpedFrom = null;
-                if (pc.GetWorld()?.GameState is { } gameState) {
-                    foreach (var entry in gameState.Aircrafts) {
-                        if (entry is not AFortAthenaAircraft aircraft) continue;
-
-                        aircraft.JumpFlashCount++;
-                        jumpedFrom ??= aircraft;
-                    }
+                // BEFORE THE DOORS OPEN, REFUSE. AFortGameStateAthena::bAircraftIsLocked already
+                // stops the client sending this, but a gate that only exists on the client is not a
+                // gate - and this one matters more than most, because a jump before DropStartTime is
+                // exactly what the user hit when the client crashed a second into the skydive.
+                if (pc.GetWorld()?.GameState is { bAircraftIsLocked: true }) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptAircraftJump from " +
+                                      $"{playerState.GetFName()} REFUSED - the bus doors are still shut");
+                    return;
                 }
 
-                // A NEW PAWN, WHERE THE BUS IS. The warmup pawn was destroyed when the bus phase
-                // started (AGameModeBase.TickBoarding), matching what a real server does - the
-                // capture shows the local pawn's identity change across the bus - so the player has
-                // no pawn at all right now and the skydive has to start from one that does not exist
-                // yet. AFortAthenaAircraft.LocationAt puts it on the same straight line the client
-                // is already interpolating the bus along.
-                if (pc.Pawn == null && pc.GetWorld() is { } world && jumpedFrom != null) {
-                    var at = jumpedFrom.LocationAt(world.TimeSeconds);
-                    var spawned = AGameModeBase.SpawnAndPossessPawn(world, pc, at);
-
-                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptAircraftJump - " +
-                                      $"{(spawned == null ? "FAILED to spawn" : $"spawned {spawned.GetFName()}")} " +
-                                      $"at the bus {at}");
-                }
-
-                Console.WriteLine($"NativeRpcHandlers: ServerAttemptAircraftJump - {playerState.GetFName()} " +
-                                  $"left the aircraft (ClientRotation={values[0]})");
+                LeaveAircraft(pc, playerState, $"jumped (ClientRotation={values[0]})");
             }
         ),
 
@@ -1322,7 +1355,15 @@ internal static class NativeRpcHandlers {
                 }
 
                 var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
-                if (view != null && actor is APawn viewPawn) viewPawn.LastClientViewRotation = view;
+                if (view != null && actor is APawn viewPawn) {
+                    viewPawn.LastClientViewRotation = view;
+
+                    // And onto the ACTOR, so ReplicatedMovement carries it and other clients see this
+                    // player facing the way they are actually facing. Yaw only: a character's capsule
+                    // never pitches or rolls, and the view's pitch belongs to the control rotation,
+                    // which is a separate thing the owning client keeps for itself.
+                    viewPawn.SetActorRotation(new FRotator { Yaw = view.Yaw });
+                }
                 if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerMoveNoBase on {actor.GetFName()} TimeStamp={values[0]} ClientLoc={clientLoc} CompressedMoveFlags={values[3]} ClientRoll={values[4]} View={view} ClientMovementMode={values[6]}");
             }
         ),
