@@ -22,6 +22,21 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     AGameState.ReplicatedWorldTimeSeconds, which is what the client compares them against.
 /// </summary>
 public class AFortAthenaAircraft : AActor {
+    /// <summary>
+    ///     ALWAYS RELEVANT, and this was learned the hard way (2026-09-04, live): after distance
+    ///     culling landed, the warmup timer expired and NOBODY WAS PUT ON THE BUS.
+    ///
+    ///     The bus enters from OUTSIDE the map and flies thousands of units up, so it is never within
+    ///     any sane cull radius of a player standing on the warmup island - and no login-time code
+    ///     opens its channel, it arrives through UNetDriver's newly-relevant sweep. Culled, it has no
+    ///     NetGUID; with no NetGUID, AGameModeBase's ClientSetViewTarget(aircraft) names an object the
+    ///     client cannot resolve, and the whole boarding sequence quietly does nothing.
+    ///
+    ///     It is also simply what the real game does: every player sees and hears the battle bus from
+    ///     anywhere on the map, whatever the distance, which is the definition of bAlwaysRelevant.
+    /// </summary>
+    public AFortAthenaAircraft() => bAlwaysRelevant = true;
+
     /// <summary>AFortAircraft::JumpFlashCount - wire handle 16. Bumped when a player jumps; purely cosmetic (the flash on the bus).</summary>
     public int JumpFlashCount { get; set; }
 

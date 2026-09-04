@@ -324,47 +324,162 @@ public class UPackageMapClient : UPackageMap {
         return !_exportedGuids.Contains(netGuid.Value);
     }
 
+    /// <summary>
+    ///     UPackageMapClient::ExportNetGUID (PackageMapClient.cpp) - write one object's PATH into the
+    ///     GUID-export bunch, spilling into a fresh bunch when the current one fills up.
+    ///
+    ///     THE TWO-PASS LOOP IS THE WHOLE FUNCTION, and leaving it out cost a live disconnect
+    ///     (2026-09-04). This used to write the object, notice the bunch had overflowed, drop the
+    ///     GUID and return - which leaves `_currentExportBunch` HOLDING A HALF-WRITTEN RECORD and
+    ///     STILL MARKED AS ERRORED, and every later export in the same batch appends to it. That
+    ///     bunch is then sent, and the client reads its own header as garbage:
+    ///
+    ///         LogNetPackageMap: Error: UPackageMapClient::ReceiveNetGUIDBunch:
+    ///                           NumGUIDsInBunch > MAX_GUID_COUNT (859117674)
+    ///         LogSecurity: Warning: Invalid_Data: Connection unknown channel type
+    ///         LogSecurity: Warning: Closed: Connection closed
+    ///
+    ///     The comment that used to sit here said our exports were small enough never to reach this.
+    ///     They were, until two consumable item definitions and their Blueprint actor classes joined
+    ///     the login batch - which is the general lesson: an overflow path that is never exercised is
+    ///     not a path that cannot be reached, and this one fails as data corruption rather than as an
+    ///     exception.
+    ///
+    ///     Real UE's shape, followed exactly:
+    ///
+    ///       1. mark the bunch, write the object;
+    ///       2. no error -> keep it, count it, done;
+    ///       3. error -> POP BACK TO THE MARK (which also clears the error - see FBitWriterMark.Pop),
+    ///          finish the bunch that was already full and queue it, then retry ONCE in a fresh one.
+    ///
+    ///     A GUID that will not fit in an empty bunch is a genuine fault (a path over ~512 bytes);
+    ///     real UE logs Fatal there. This logs and drops it, because killing the server over one
+    ///     unexportable asset path is worse than one client-side unresolved reference.
+    /// </summary>
     private bool ExportNetGUID(FNetworkGUID netGuid, UObject? obj, string pathName, UObject? objOuter) {
-        if (_currentExportBunch == null) {
-            _currentExportBunch = new FOutBunch(this, Connection!.GetMaxSingleBunchSizeBits()) {
-                bHasPackageMapExports = true
-            };
-            _currentExportBunch.WriteBit(false); // Not a rep-layout export.
-            _exportNetGuidCount = 0;
-            _currentExportBunch.WriteInt32(_exportNetGuidCount); // Placeholder, patched in ExportNetGUIDHeader.
-        }
+        for (var attempt = 0; attempt < 2; attempt++) {
+            if (_currentExportBunch == null) {
+                _currentExportBunch = new FOutBunch(this, Connection!.GetMaxSingleBunchSizeBits()) {
+                    bHasPackageMapExports = true
+                };
 
-        GuidCache!.IsExportingNetGUIDBunch = true;
-        InternalWriteObject(_currentExportBunch, netGuid, obj, pathName, objOuter);
-        GuidCache.IsExportingNetGUIDBunch = false;
+                // THE TWO CALLS THE LOOP BELOW DOES NOT WORK WITHOUT - PackageMapClient.cpp makes
+                // both of them explicitly. FNetBitWriter is resizable by default, so without these
+                // the bunch quietly GROWS past GetMaxSingleBunchSizeBits instead of erroring, the
+                // overflow branch below can never be reached, and the oversized bunch goes out with
+                // a length field that cannot represent it. See FBitWriter.SetAllowResize.
+                _currentExportBunch.SetAllowResize(false);
+                _currentExportBunch.SetAllowOverflow(true);
 
-        Console.WriteLine($"ExportNetGUID: guid={netGuid} obj={obj?.GetFName()} pathName='{pathName}' objOuter={objOuter?.GetFName()} currentExportNetGuidsCount={_currentExportNetGuids.Count} currentExportBunchIsError={_currentExportBunch.IsError()} currentExportBunchNumBits={_currentExportBunch.GetNumBits()}");
+                _currentExportBunch.WriteBit(false); // Not a rep-layout export.
+                _exportNetGuidCount = 0;
+                _currentExportBunch.WriteInt32(_exportNetGuidCount); // Placeholder, patched in ExportNetGUIDHeader.
+            }
 
-        if (_currentExportNetGuids.Count == 0) return false;
+            // Where to rewind to if this object does not fit.
+            var lastExportMark = new FBitWriterMark();
+            lastExportMark.Init(_currentExportBunch);
 
-        if (_currentExportBunch.IsError()) {
-            // Real UE retries in a fresh bunch here; our exports are small enough that we don't expect
-            // to hit this, so just drop it rather than port the overflow-retry machinery.
+            GuidCache!.IsExportingNetGUIDBunch = true;
+            InternalWriteObject(_currentExportBunch, netGuid, obj, pathName, objOuter);
+            GuidCache.IsExportingNetGUIDBunch = false;
+
+            Console.WriteLine($"ExportNetGUID: guid={netGuid} obj={obj?.GetFName()} pathName='{pathName}' objOuter={objOuter?.GetFName()} currentExportNetGuidsCount={_currentExportNetGuids.Count} currentExportBunchIsError={_currentExportBunch.IsError()} currentExportBunchNumBits={_currentExportBunch.GetNumBits()}");
+
+            // Nothing was written at all - no path to export, so this should not have been called.
+            // Rewind so the bunch is exactly as it was and give up on this GUID.
+            if (_currentExportNetGuids.Count == 0) {
+                lastExportMark.Pop(_currentExportBunch);
+                _exportedGuids.Remove(netGuid.Value);
+                return false;
+            }
+
+            if (!_currentExportBunch.IsError()) {
+                _currentExportBunch.ExportNetGUIDs.AddRange(_currentExportNetGuids);
+                _currentExportNetGuids.Clear();
+                _exportNetGuidCount++;
+                return true;
+            }
+
+            // Overflowed. Undo the partial write (this clears the error flag too), and TAKE BACK the
+            // "already exported" marks the failed attempt left behind - real UE decrements
+            // NetGUIDExportCountMap here for exactly this reason. Without it the retry sees those
+            // GUIDs as already sent and writes them as bare ids, so the client is handed a reference
+            // whose path it was never told (and ShouldSendFullPath refuses forever after).
+            lastExportMark.Pop(_currentExportBunch);
+            foreach (var pending in _currentExportNetGuids) _exportedGuids.Remove(pending.Value);
             _currentExportNetGuids.Clear();
-            return false;
+
+            if (_exportNetGuidCount == 0 || attempt == 1) {
+                Console.WriteLine($"ExportNetGUID: '{pathName}' ({obj?.GetFName().ToString() ?? "no object"}) does not " +
+                                  "fit in an empty export bunch - dropping it. The client will read this reference as " +
+                                  "unresolved. Real UE treats this as fatal; the path is probably malformed.");
+                return false;
+            }
+
+            // Close the full bunch and go round again with a fresh one.
+            Console.WriteLine($"ExportNetGUID: export bunch full at {_exportNetGuidCount} GUID(s) " +
+                              $"({_currentExportBunch.GetNumBits()} bits) - spilling '{pathName}' into a new one. " +
+                              "This is the path whose absence disconnected a client on 2026-09-04.");
+            ExportNetGUIDHeader();
         }
 
-        _currentExportBunch.ExportNetGUIDs.AddRange(_currentExportNetGuids);
-        _currentExportNetGuids.Clear();
-        _exportNetGuidCount++;
-
-        return true;
+        return false;
     }
 
     private void ExportNetGUIDHeader() {
         if (_currentExportBunch == null) return;
 
         PatchExportBunchHeaderCount(_currentExportBunch, _exportNetGuidCount);
+        VerifyExportBunchHeader(_currentExportBunch, _exportNetGuidCount);
+
+        // Unconditional and cheap - a login produces a handful of these. It answers, without a
+        // client, the question "is the export batch anywhere near the single-bunch limit", which is
+        // the difference between the overflow theory and everything else.
+        Console.WriteLine($"ExportNetGUIDHeader: finished export bunch - {_exportNetGuidCount} guid(s), " +
+                          $"{_currentExportBunch.GetNumBits()}/{Connection?.GetMaxSingleBunchSizeBits() ?? 0} bits" +
+                          (_currentExportBunch.IsError() ? " *** ERRORED ***" : ""));
 
         if (_currentExportBunch.ExportNetGUIDs.Count != 0) _exportBunches.Add(_currentExportBunch);
 
         _currentExportBunch = null;
         _exportNetGuidCount = 0;
+    }
+
+    /// <summary>
+    ///     Reads a finished export bunch back exactly the way UPackageMapClient::ReceiveNetGUIDBunch
+    ///     will - one bit, then an int32 count - and says so loudly if what comes out is not what
+    ///     went in.
+    ///
+    ///     THIS EXISTS BECAUSE THE ERROR IT CHECKS FOR IS OTHERWISE ONLY VISIBLE ON THE CLIENT, as a
+    ///     disconnect with a nonsense number in it:
+    ///
+    ///         UPackageMapClient::ReceiveNetGUIDBunch: NumGUIDsInBunch > MAX_GUID_COUNT (856062058)
+    ///
+    ///     and by then the server has no idea which bunch was at fault. A server-side read-back turns
+    ///     "the client died somewhere" into "this bunch, this count, this many bits" with no client
+    ///     needed at all. If this line never appears, the export bunches this server BUILDS are
+    ///     well-formed and the fault is downstream - in the bunch header, the packet, or the flag
+    ///     landing on a bunch that is not this one.
+    /// </summary>
+    private static void VerifyExportBunchHeader(FOutBunch bunch, int expectedCount) {
+        if (bunch.GetNumBits() < 33) {
+            Console.WriteLine($"ExportNetGUIDHeader: BUNCH TOO SHORT to hold its own header - " +
+                              $"{bunch.GetNumBits()} bits, expected at least 33 (1 + int32) for count={expectedCount}");
+            return;
+        }
+
+        var reader = new FBitReader(bunch.GetData(), (int) bunch.GetNumBits());
+        var isRepLayoutExport = reader.ReadBit();
+        var count = reader.ReadInt32();
+
+        if (!isRepLayoutExport && count == expectedCount && count is >= 0 and <= 2048) return;
+
+        Console.WriteLine($"ExportNetGUIDHeader: THIS BUNCH WILL DISCONNECT THE CLIENT. Read back " +
+                          $"bRepLayoutExport={isRepLayoutExport} count={count}, expected false/{expectedCount}. " +
+                          $"{bunch.GetNumBits()} bits, {bunch.ExportNetGUIDs.Count} exported guid(s), " +
+                          $"error={bunch.IsError()}, first bytes=" +
+                          Convert.ToHexString(bunch.GetData(), 0, (int) Math.Min(16, bunch.GetNumBytes())));
     }
 
     private static void PatchExportBunchHeaderCount(FOutBunch bunch, int newCount) {

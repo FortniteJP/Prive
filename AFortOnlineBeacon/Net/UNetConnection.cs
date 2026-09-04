@@ -132,6 +132,27 @@ public abstract class UNetConnection : UPlayer {
     public Dictionary<AActor, UActorChannel> ActorChannels { get; } = new();
 
     public UActorChannel? FindActorChannel(AActor actor) => ActorChannels.GetValueOrDefault(actor);
+
+    /// <summary>
+    ///     UNetConnection::ClientVisibleLevelNames - the streaming levels this client says it has
+    ///     loaded, maintained from APlayerController::ServerUpdateLevelVisibility (and its
+    ///     multi-level sibling). By far the most frequent RPC this server receives - 7685 of them in
+    ///     the logs when the unhandled list was last counted - and it was being discarded.
+    ///
+    ///     WHAT REAL UE DOES WITH IT, and what this server can and cannot do with it yet.
+    ///     AActor::IsNetRelevantFor consults it so that an actor living in a sublevel is never sent
+    ///     to a client that has not loaded that sublevel - the client would have nowhere to put it.
+    ///     That gate does nothing HERE, because every actor this server spawns is sent with a null
+    ///     level reference ("use whatever level you are in", see UPackageMapClient.SerializeNewActor)
+    ///     and so lands in the client's persistent level regardless.
+    ///
+    ///     It is recorded anyway, because it is the only direct statement the client makes about how
+    ///     much of the world it currently has in memory - and this project has already lost days to
+    ///     not knowing that (see Round 148: actor channels opened while the client was still
+    ///     streaming its own pawn). The moment anything here spawns an actor INTO a sublevel, or
+    ///     wants to pace work against the client's streaming, this is the input it needs.
+    /// </summary>
+    public HashSet<string> ClientVisibleLevelNames { get; } = new(StringComparer.OrdinalIgnoreCase);
     
     /// <summary>
     ///     Maximum packet size.

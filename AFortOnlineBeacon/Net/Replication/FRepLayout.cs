@@ -35,6 +35,17 @@ public sealed class FRepLayout {
 
     private readonly List<FRepLayoutCmd> _cmds = new();
 
+    /// <summary>
+    ///     Every leaf name this layout knows, in handle order. Exists so a table keyed on property
+    ///     NAMES can be checked against reality at startup - UActorChannel's replication-condition
+    ///     table is the one that needs it, and a key that matches nothing there would be silently
+    ///     useless rather than wrong.
+    /// </summary>
+    public IEnumerable<string> PropertyNames => _cmds.Select(cmd => cmd.Def.Name);
+
+    /// <summary>String properties whose starting bit offset has already been reported - once each.</summary>
+    private static readonly HashSet<string> LoggedStringOffsets = new();
+
     public FRepLayout(IEnumerable<FRepPropertyDef> topLevelProps) {
         uint handle = 0;
         foreach (var prop in topLevelProps) Visit(prop, ref handle);
@@ -337,6 +348,35 @@ public sealed class FRepLayout {
                 }
 
                 payload.SerializeIntPacked(&handle);
+
+                // THE BIT OFFSET AT WHICH THE STRING'S BYTES START, logged once per property name.
+                //
+                // This is a measurement aimed at ONE open question. The client mangles
+                // PlayerNamePrivate by delta[j] = (C - 3j) mod 8, j from the end of the string -
+                // a rule that four samples fit exactly, with C observed as 4 in some sessions and 0
+                // in others (see AGameModeBase.PreCompensateName). Nothing has explained what sets
+                // C, which is why the compensation is a hack rather than a fix.
+                //
+                // The shape of the corruption says what to look at: the delta is always mod 8, so
+                // only the LOW THREE BITS of each character change, and it advances by 3 per
+                // character - the signature of a stride or alignment error, whose phase would be set
+                // by where the string STARTS. If C turns out to track this offset mod 8, the
+                // compensation stops being a guess and becomes computable; if it does not, that
+                // whole line of thinking is dead and the search moves into the client.
+                var stringStartBit = payload.GetNumBits() + 32;   // +32: the FString length prefix
+
+                if (LoggedStringOffsets.Add(cmd.Def.Name)) {
+                    // The VALUE is logged too, and that is the point of the second sample. HeroId is
+                    // a 32-character uppercase GUID sitting in the same bunch as PlayerNamePrivate
+                    // at a different offset, so comparing what the client ends up holding for BOTH
+                    // measures the corruption at two known phases against two known inputs - which
+                    // three characters of "dev" can never do.
+                    Console.WriteLine($"FRepLayout: '{cmd.Def.Name}' = \"{cmd.Def.GetStringValue(instance)}\" - " +
+                                      $"string bytes start at bit {stringStartBit} of this payload " +
+                                      $"({stringStartBit % 8} mod 8). Compare with what the client reports for it " +
+                                      "(console: GetAll <Class> " + cmd.Def.Name + ").");
+                }
+
                 payload.WriteString(cmd.Def.GetStringValue(instance));
                 continue;
             }

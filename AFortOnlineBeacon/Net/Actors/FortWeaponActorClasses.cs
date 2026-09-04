@@ -50,7 +50,12 @@ internal static partial class FortWeaponActorClasses {
         if (itemDefinition == null) return null;
 
         var name = itemDefinition.GetFName().ToString();
-        return Table.GetValueOrDefault(name) ?? BuildingToolClasses.GetValueOrDefault(name);
+        return Table.GetValueOrDefault(name)
+               ?? BuildingToolClasses.GetValueOrDefault(name)
+               // Consumables live under Athena/Items/Consumables, not Athena/Items/Weapons, so the
+               // generated weapon table never saw them - see FortConsumables.Generated.cs. They are
+               // FortWeaponRangedItemDefinitions like any rifle and go through exactly this path.
+               ?? FortConsumables.ActorClassFor(name);
     }
 
     /// <summary>
@@ -60,7 +65,8 @@ internal static partial class FortWeaponActorClasses {
     public static UObject? FireAbilityFor(UObject? itemDefinition) {
         if (itemDefinition == null) return null;
 
-        var classPath = AbilityTable.GetValueOrDefault(itemDefinition.GetFName().ToString());
+        var name = itemDefinition.GetFName().ToString();
+        var classPath = AbilityTable.GetValueOrDefault(name) ?? FortConsumables.AbilityFor(name);
         if (classPath == null) return null;
 
         // FGameplayAbilitySpec::Ability is a UGameplayAbility POINTER, not a class - the spec

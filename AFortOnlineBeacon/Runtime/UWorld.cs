@@ -134,6 +134,12 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // for why. On by default (FLOOR_LOOT_ENABLED=0 turns it off); unlike the storm and the bus it
         // cannot strand or kill anyone, it only adds pickups.
         FortFloorLoot.Tick(this, TimeSeconds);
+        FortVehicleSpawns.Tick(this, TimeSeconds);
+        FortSupplyLlamas.Tick(this, TimeSeconds);
+
+        // Prints the ABSENCE of a jump, with everything a jump depends on, until one happens - see
+        // Net.JumpDiagnostics for why an absent log line is not good enough.
+        Net.JumpDiagnostics.Tick(this, TimeSeconds);
 
         // Diagnostic only, off unless HEALTH_DEBUG_RAMP=1 - see FortDamageSystem.DebugRamp for the
         // question it answers.
@@ -512,7 +518,30 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // below.
                 if (gameMode.GameState?.FortTimeOfDayManager != null)
                     OpenActorChannelFor(ownerConnection, gameMode.GameState.FortTimeOfDayManager);
+
+                // The five management actors, for the same reason and under the same rule: the
+                // GameState names each of them (handles 32, 38, 105, 106, 185) and an ObjectRef can
+                // only carry a NetGUID that already exists. Getting this order wrong does not fail
+                // loudly - the client just reads null and carries on - which is precisely the
+                // failure mode these actors exist to remove. See Net/Actors/FortManagementActors.cs.
+                foreach (var manager in new AActor?[] {
+                             gameMode.GameState?.PoiManager, gameMode.GameState?.AnnouncementManager,
+                             gameMode.GameState?.SpecialActorData, gameMode.GameState?.ReplOverrideData,
+                             gameMode.GameState?.VolumeManager
+                         }) {
+                    if (manager != null) OpenActorChannelFor(ownerConnection, manager);
+                }
+
+                // The playlist's mutators. Nothing names them at a handle, so this is not the
+                // ordering rule - it is just that they are part of the match's fixed setup and the
+                // real server opens them in this same burst, so they go out with it rather than
+                // trailing in on the next newly-relevant sweep.
+                foreach (var mutator in gameMode.Mutators) OpenActorChannelFor(ownerConnection, mutator);
+
                 if (gameMode.GameState != null) OpenActorChannelFor(ownerConnection, gameMode.GameState);
+                // Before the PlayerState, which names it at handle 69 - the same ordering rule again.
+                if (newPlayerController.PlayerState?.PlayerTeamPrivate != null)
+                    OpenActorChannelFor(ownerConnection, newPlayerController.PlayerState.PlayerTeamPrivate);
                 if (newPlayerController.PlayerState != null) OpenActorChannelFor(ownerConnection, newPlayerController.PlayerState);
                 // See AFortInventory's doc comment - a real actor with its own channel, opened before
                 // the PlayerController so its GUID is already assigned when the PC's own property
@@ -556,10 +585,40 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // replicated. It is not on this one.)
                 //
                 // CLIENT_INIT_RPCS overrides the list (comma-separated, empty string sends none), so
-                // the next candidate can be tried without a rebuild. The obvious other lever is
-                // ClientForceWorldInventoryUpdate, also parameterless, which drives
-                // HandleWorldInventoryLocalUpdate.
-                foreach (var rpcName in ClientInitRpcs) pcChannel.SendParameterlessRpc(rpcName);
+                // the next candidate can be tried without a rebuild.
+                //
+                // THE ORDER OF THIS WHOLE BLOCK IS THE CAPTURE'S, not a guess, and it is not the
+                // order this server used to send it in. PriveDev/PacketProxy/decoded_new.txt has the
+                // real server's login RPCs in exactly two bursts on the PlayerController's channel:
+                //
+                //     #56  (the same bunch that spawns the PlayerController)
+                //          field[135] = ClientRegisterWithParty            (0 bits)
+                //          field[48]  = ClientSetHUD                       (17 bits)
+                //          field[19]  = ClientEnableNetworkVoice           (1 bit)
+                //
+                //     #215 (after the client has acked its way through the map)
+                //          field[60]  = ClientUpdateMultipleLevelsStreamingStatus (333829 bits)
+                //          field[21]  = ClientFlushLevelStreaming          (0 bits)
+                //          field[127] = ClientOnGenericPlayerInitialization(0 bits)
+                //          field[16]  = ClientCapBandwidth                 (33 bits)
+                //          field[142] = ClientSetSpectatorCamera           (117 bits)
+                //          field[24]  = ClientGotoState                    (18 bits)
+                //
+                // The bit counts are what make this trustworthy rather than a decoder's guess at a
+                // field name: 33 = 1 presence + int32, 1 = a lone bool with no presence bit of its
+                // own, 17 = 1 presence + a 16-bit NetGUID, 0 = no parameters. Four independent size
+                // checks against four different signatures all land, so the field mapping is real.
+                //
+                // Two things follow that this server had wrong. ClientSetHUD comes BEFORE
+                // ClientOnGenericPlayerInitialization, not after - the HUD is up before Fortnite's
+                // own init hook runs. And ClientSetSpectatorCamera is part of the login sequence at
+                // all, which is where the pre-bus camera comes from.
+                //
+                // Still not sent: ClientUpdateMultipleLevelsStreamingStatus. That is the server
+                // driving the client's sublevel streaming, and this server has nothing to drive it
+                // with - every actor here goes out with a null level reference. See
+                // PriveDev/dumpwork/GAP-vs-PR30.md.
+                pcChannel.SendParameterlessRpc("ClientRegisterWithParty");
 
                 // AGameModeBase::InitializeHUDForPlayer - the OTHER half of GenericPlayerInitialization:
                 //
@@ -587,7 +646,30 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // AGameSession::RequiresPushToTalk() defaults to true, so the real argument here is
                 // false; NetSpeed matches UNetConnection's own default.
                 pcChannel.SendBoolRpc("ClientEnableNetworkVoice", false);
+
+                // --- the capture's second burst (#215) starts here ---
+
+                // APlayerController::ClientFlushLevelStreaming_Implementation (PlayerController.cpp:303)
+                // blocks the client on its pending streaming requests until they finish. The real
+                // server sends it right after handing over the level status list; this server has no
+                // list to hand over, so all it does here is make the client settle whatever it
+                // started for itself before the init hook below runs.
+                pcChannel.SendParameterlessRpc("ClientFlushLevelStreaming");
+
+                foreach (var rpcName in ClientInitRpcs) pcChannel.SendParameterlessRpc(rpcName);
+
                 pcChannel.SendIntRpc("ClientCapBandwidth", newPlayerController.Player?.CurrentNetSpeed ?? 10000);
+
+                // The pre-bus camera - see UActorChannel.SendClientSetSpectatorCamera. The player has
+                // not been given a pawn yet at this point in a real match, so the only sensible
+                // aiming point is where this connection is about to be put; the pawn's own transform
+                // once it exists, and the warmup anchor before that.
+                if (Environment.GetEnvironmentVariable("CLIENT_SPECTATOR_CAMERA") is not "0") {
+                    var cameraPawn = newPlayerController.Pawn;
+                    pcChannel.SendClientSetSpectatorCamera(
+                        cameraPawn?.GetActorLocation() ?? FortWarmupStarts.Anchor,
+                        cameraPawn?.GetActorRotation() ?? new FRotator());
+                }
 
                 if (newPlayerController.Pawn != null) {
                     // Before the pawn, for the third time in this block and for the same reason:
@@ -614,11 +696,42 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                     // ServerSetSpectatorLocation forever instead of actually moving.
                     pcChannel.SendClientRestart(newPlayerController.Pawn);
 
+                    // AFortPlayerController::ClientForceWorldInventoryUpdate() - parameterless, and it
+                    // drives the client's HandleWorldInventoryLocalUpdate.
+                    //
+                    // The capture puts it HERE and nowhere else: decoded_new.txt #356 is the login
+                    // restart burst and its field order is ClientGotoState, ClientRestart,
+                    // ClientForceWorldInventoryUpdate, ClientSetViewTarget, ClientSetRotation - i.e.
+                    // immediately after the restart that hands the client its pawn, before the camera
+                    // is pointed at it. It appears exactly once in the whole session, so it is a
+                    // login-time kick and not something the real server repeats.
+                    //
+                    // WorldInventory already has its own channel and its own property push by this
+                    // point (that happens ~80 lines up); what this adds is the client being told to
+                    // re-read it now rather than whenever it next notices.
+                    if (Environment.GetEnvironmentVariable("CLIENT_FORCE_INVENTORY_UPDATE") is not "0") {
+                        pcChannel.SendParameterlessRpc("ClientForceWorldInventoryUpdate");
+                    }
+
                     // And tell the client which way it is facing. A real server sends this at login
                     // too (see UActorChannel.SendClientSetRotation); without it the client's initial
                     // control rotation is whatever it happened to be, which is the shape of the
                     // "spawned looking 90 degrees off" report.
                     pcChannel.SendClientSetRotation(newPlayerController.Pawn.GetActorRotation(), true);
+
+                    // And which quickbar slot to hold - see UActorChannel.SendClientActivateSlot for
+                    // why every parameter goes out at its default, and for the capture that proves
+                    // the real server sends exactly this.
+                    //
+                    // KEPT ON THE STRENGTH OF THE CAPTURE, NOT BECAUSE IT FIXED ANYTHING. It was
+                    // added to stop the client picking a BUILDING TOOL for itself on joining and it
+                    // did not - what fixed that was removing this server's own pre-equip, which had
+                    // been pre-empting the client's slot choice (see AGameModeBase.SpawnAndPossessPawn).
+                    // It stays because the real server demonstrably sends it, and it stays switchable
+                    // because its benefit HERE has never been demonstrated: CLIENT_ACTIVATE_SLOT=0.
+                    if (Environment.GetEnvironmentVariable("CLIENT_ACTIVATE_SLOT") is not "0") {
+                        pcChannel.SendClientActivateSlot();
+                    }
                 }
             }
 

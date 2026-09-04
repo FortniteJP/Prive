@@ -552,6 +552,91 @@ internal static class NativeClassNetCache {
     ///     also turned the "PlayerPawn_Athena_Generic_C/_Parent_C add no NetFields" note below from
     ///     an assumption into a checked fact (both really are empty).
     /// </summary>
+    /// <summary>
+    ///     Every (field name, FieldNetIndex) pair the PR3.0 capture states outright, transcribed from
+    ///     PriveDev/PacketProxy/decoded_new.txt with
+    ///     `grep -o "field\[[0-9]*\] = [A-Za-z_0-9]*" | sort -u`.
+    ///
+    ///     WHY THIS IS WORTH A STARTUP CHECK. Everything above is derived, not observed: the tables
+    ///     are class-by-class field SETS from a reflection dump, and the wire order is reconstructed
+    ///     from UClass::SetUpRuntimeReplicationData's alphabetical sort. A single missing or extra
+    ///     field name anywhere in a chain shifts every index after it, and the failure is silent in
+    ///     both directions - an RPC we send lands on a different UFunction, and one we receive gets
+    ///     decoded as a different one. That is exactly the class of bug that is invisible until some
+    ///     unrelated feature misbehaves.
+    ///
+    ///     The capture pins 51 of these indices independently, spread from 0 to 384 and across both
+    ///     the PlayerController and the Pawn chains, so an off-by-one anywhere below index 384 in
+    ///     either chain cannot survive this check.
+    ///
+    ///     A pair is checked against BOTH chains and passes if either one places the name at the
+    ///     stated index, because the capture's own line does not say which channel it came from. It
+    ///     is a weaker statement than per-class checking would be, but it needs no hand-classifying
+    ///     of 51 names - and no name here is ambiguous in practice.
+    ///
+    ///     Result on the first run of this check (2026-09-04): all 51 match.
+    /// </summary>
+    private static readonly (string Name, int Index)[] CaptureFieldIndices = {
+        ("AttachmentReplication", 0), ("bReplicateMovement", 3), ("ReplicatedMovement", 8),
+        ("Controller", 10), ("ClientSetRotation", 11), ("RemoteViewPitch", 12),
+        ("ClientCapBandwidth", 16), ("ClientEnableNetworkVoice", 19), ("ClientFlushLevelStreaming", 21),
+        ("ClientGotoState", 24), ("ClientRestart", 39), ("ClientRetryClientRestart", 40),
+        ("ClientReturnToMainMenuWithTextReason", 42), ("ClientSetCameraMode", 45), ("ClientSetHUD", 48),
+        ("ClientSetViewTarget", 50), ("ClientUpdateMultipleLevelsStreamingStatus", 60),
+        ("ServerAcknowledgePossession", 64), ("ServerShortTimeout", 76),
+        ("ServerUpdateLevelVisibility", 80), ("ServerUpdateMultipleLevelsVisibility", 81),
+        ("ClientActivateSlot", 109), ("ClientForceWorldInventoryUpdate", 124),
+        ("ClientOnGenericPlayerInitialization", 127), ("ClientRegisterWithParty", 135),
+        ("ClientSetSpectatorCamera", 142), ("ClientSpawnWeakSpotOnBuildingActor", 143),
+        ("ClientStopUIFeedbackEvent", 145), ("ClientTriggerUIFeedbackEvent", 147),
+        ("ServerAttemptAircraftJump", 166), ("ServerBeginEditingBuildingActor", 170),
+        ("ServerClientPawnLoaded", 176), ("ServerCreateBuildingActor", 179),
+        ("ServerEditBuildingActor", 185), ("ServerEndEditingBuildingActor", 187),
+        ("ServerExecuteInventoryItem", 188), ("ServerLoadingScreenDropped", 197),
+        ("ServerModifyStat", 198), ("ServerOnMaterialSelection", 199), ("ServerReadyToStartMatch", 202),
+        ("ServerRepairBuildingActor", 207), ("ServerReturnToMainMenu", 213),
+        ("ServerSendClientProgressUpdate", 214), ("ServerSetClientHasFinishedLoading", 217),
+        ("ServerSetHero", 218), ("ServerSetPartyOwner", 221), ("ClientOnPawnDied", 275),
+        ("ClientOnPawnSpawned", 277), ("ServerAttemptExitVehicle", 284),
+        ("ServerClientIsReadyToRespawn", 358), ("ServerSetShouldSwapPickup", 384)
+    };
+
+    static NativeClassNetCache() {
+        if (Environment.GetEnvironmentVariable("VERIFY_NET_FIELDS") is "0") return;
+
+        var mismatches = new List<string>();
+        var unknown = new List<string>();
+
+        foreach (var (name, expected) in CaptureFieldIndices) {
+            var onController = PlayerControllerCache.GetFromName(name)?.FieldNetIndex;
+            var onPawn = PawnCache.GetFromName(name)?.FieldNetIndex;
+
+            if (onController == null && onPawn == null) { unknown.Add(name); continue; }
+            if (onController == expected || onPawn == expected) continue;
+
+            mismatches.Add($"{name}: capture says {expected}, we have " +
+                           $"PC={onController?.ToString() ?? "-"} Pawn={onPawn?.ToString() ?? "-"}");
+        }
+
+        if (mismatches.Count == 0 && unknown.Count == 0) {
+            Console.WriteLine($"NativeClassNetCache: all {CaptureFieldIndices.Length} capture-known " +
+                              "FieldNetIndex values match (PlayerController and Pawn chains).");
+            return;
+        }
+
+        Console.WriteLine("NativeClassNetCache: FIELD INDEX CHECK FAILED against the PR3.0 capture. " +
+                          "Every RPC on the affected chain is landing on the wrong UFunction - fix the " +
+                          "field tables before trusting anything else. (VERIFY_NET_FIELDS=0 silences this.)");
+        foreach (var line in mismatches) Console.WriteLine($"  MISMATCH {line}");
+        foreach (var name in unknown) Console.WriteLine($"  MISSING  {name}: in the capture, in neither of our field tables");
+    }
+
+    /// <summary>
+    ///     Touching any static member runs the static constructor above, which is the whole point -
+    ///     UNetDriver.Init calls this so the check reports at startup instead of at first join.
+    /// </summary>
+    public static void EnsureVerified() {}
+
     public static FClassNetCache Get(AActor actor) => actor switch {
         AFortWeapon weapon => FortWeaponNetCaches.For(weapon, ActorCache),
         AFortInventory => FortInventoryCache,

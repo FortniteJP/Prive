@@ -2,6 +2,19 @@
 
 public class APawn : AActor {
     /// <summary>
+    ///     EXEMPT FROM DISTANCE CULLING, on purpose. AActor.IsNetRelevantFor gained the real
+    ///     distance tail, and the engine default radius (15000 units) would cull other players at
+    ///     150 m - which is well inside sniper range and, more to the point, saves nothing: a match
+    ///     holds tens of pawns, not the thousands of pickups that made culling worth having. Losing a
+    ///     player is total, so the trade is entirely one-sided.
+    ///
+    ///     Real Fortnite reaches the same answer by a different road - its ReplicationGraph puts
+    ///     player pawns in an always-relevant-for-team / large-cell node rather than the spatial grid
+    ///     the small props live in.
+    /// </summary>
+    public APawn() => NetCullDistanceSquared = float.MaxValue;
+
+    /// <summary>
     ///     The view rotation the client last sent with a move (the packed "View" parameter of
     ///     ServerMove*). Real UE feeds this into AController::ControlRotation; here it is kept only
     ///     so the server knows which way the player is facing - a dropped item has to land in front
@@ -76,7 +89,14 @@ public class APawn : AActor {
     ///     ClientGivenTo RPC to be visible: CurrentWeapon is RepNotify (verified in the 10.40 SDK -
     ///     AFortPawn::OnRep_CurrentWeapon exists), so arriving IS the equip.
     /// </summary>
-    public void EquipInventoryItem(FFortItemEntry item) {
+    /// <summary>
+    ///     <paramref name="clientInitiated"/> records whether the CLIENT asked for this equip
+    ///     (ServerExecuteInventoryItem) or the server decided it. Nothing acts on it today: it was
+    ///     added to suppress the ClientInternalEquipWeapon echo for client-initiated equips, and that
+    ///     removed building altogether - see UActorChannel.ReplicateEquippedWeapon. Kept because the
+    ///     distinction is real and worth having recorded at the call sites.
+    /// </summary>
+    public void EquipInventoryItem(FFortItemEntry item, bool clientInitiated = false) {
         // Already holding it. The client re-sends this for the slot it is already on (a key repeat,
         // a quickbar refresh), and re-spawning would destroy and re-create the weapon each time.
         if (CurrentWeapon is { } held && held.ItemEntryGuid == item.ItemGuid) {
@@ -124,18 +144,15 @@ public class APawn : AActor {
             Console.WriteLine($"APawn.EquipInventoryItem: set DefaultMetadata={buildingMetadata.GetFName()} for building tool");
         }
 
-        // AFortPawn::ClientInternalEquipWeapon(AFortWeapon*) - originally scoped to building tools
-        // only (2026-08-29), on the reasoning that ordinary weapons already worked via
-        // CurrentWeapon's RepNotify alone. Widened to every weapon the same day: leaving a building
-        // tool for the pickaxe/a gun left the client stuck showing the ghost AND the build-mode arm
-        // pose forever, meaning the RPC (or something it triggers) is also what tells the client
-        // this equip REPLACES a previous one, and skipping it for a normal weapon left the client
-        // with no signal to tear down the OLD equip's state, only to raise the new one. See
-        // UNetDriver.OpenChannelsForNewlyRelevantActors for why the actual send is deferred to that
-        // weapon's own channel opening, not here (sending immediately here fails: the weapon has no
-        // NetGUID resolvable client-side yet, and the client logs "Unable to resolve RPC parameter
-        // ... Parameter Weap" and silently drops the call).
-        weapon.bNeedsClientInternalEquipWeaponRpc = true;
+        // AFortPawn::ClientInternalEquipWeapon(AFortWeapon*) IS NOT FLAGGED HERE ANY MORE. It used to
+        // set a bool on the weapon that UNetDriver consumed when that weapon's channel opened - which
+        // meant a RE-equip sent nothing, because the channel is already open and never opens twice.
+        // Leaving a building tool for the pickaxe therefore told the client nothing, and the client's
+        // build ghost and build-mode arm pose stayed up (found 2026-08-29, and again at spawn on
+        // 2026-09-03). It is now driven by CurrentWeapon CHANGING, per connection, in
+        // UActorChannel.ReplicateEquippedWeapon - which also keeps the "wait for the weapon's own
+        // channel" rule that made the flag necessary in the first place.
+        //
         // Grant the weapon's fire ability. Without a spec in ActivatableAbilities the client has
         // literally nothing to activate: the FGameplayAbilitySpecHandle it sends in
         // ServerTryActivateAbility is an index into that array, handed out by the server.
@@ -240,6 +257,17 @@ public class APawn : AActor {
     private byte? _lastMovementMode;
     private bool _reportedJumpPress;
     private byte _seenMoveFlags;
+    private byte _lastMoveFlags;
+
+    /// <summary>
+    ///     Which FSavedMove_Character compressed-move-flag bits this pawn's client has EVER set -
+    ///     read by Net.JumpDiagnostics, which reports the absence of bit 0 rather than leaving it as
+    ///     a log line that never appears.
+    /// </summary>
+    public byte SeenMoveFlags => _seenMoveFlags;
+
+    /// <summary>The last movement mode the client reported, or null if it never has.</summary>
+    public byte? LastClientMovementMode => _lastMovementMode;
 
     /// <summary>
     ///     Reports what every client move says about jumping, because nothing else can.
@@ -349,6 +377,25 @@ public class APawn : AActor {
             Console.WriteLine($"APawn.TrackMoveFlags: client move flag {names[bit]} (0x{mask:X2}) seen for the first " +
                               $"time - full flags=0x{compressedMoveFlags:X2}, movementMode={clientMovementMode}");
         }
+
+        // EVERY CHANGE of the flags byte, not just each bit's first appearance.
+        //
+        // The first-appearance probe above answers "which bits ever arrive" and that has now been
+        // answered - 0xC0, i.e. only Custom_2 and Custom_3, with JumpPressed never. What it CANNOT
+        // answer is the next question: does pressing jump change the byte AT ALL? If it does, then
+        // Fortnite's FSavedMove_FortCharacter::GetCompressedFlags does not put jump in bit 0 the way
+        // stock UE does and the whole "JumpPressed never arrives" reading is a false negative. If it
+        // does not, the client really is refusing before ACharacter::Jump() and the cause is
+        // client-side state.
+        //
+        // Deliberately noisy and deliberately default-ON while this is open; MOVE_FLAG_TRACE=0 mutes
+        // it. Only CHANGES are printed, so holding a key produces one line, not one per tick.
+        if (compressedMoveFlags != _lastMoveFlags && Environment.GetEnvironmentVariable("MOVE_FLAG_TRACE") is not "0") {
+            Console.WriteLine($"APawn.TrackMoveFlags: flags 0x{_lastMoveFlags:X2} -> 0x{compressedMoveFlags:X2} " +
+                              $"(movementMode={clientMovementMode})");
+        }
+
+        _lastMoveFlags = compressedMoveFlags;
 
         if ((compressedMoveFlags & 0x01) != 0 && !_reportedJumpPress) {
             _reportedJumpPress = true;

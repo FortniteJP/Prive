@@ -85,14 +85,6 @@ public class AFortWeapon : AActor {
     public UObject? DefaultMetadata { get; set; }
 
     /// <summary>
-    ///     Set by APawn.EquipInventoryItem for a building tool only, consumed and cleared by
-    ///     UNetDriver.OpenChannelsForNewlyRelevantActors the moment this weapon's OWN channel opens
-    ///     (not before - see that method's doc comment for why sending
-    ///     AFortPawn::ClientInternalEquipWeapon any earlier fails).
-    /// </summary>
-    public bool bNeedsClientInternalEquipWeaponRpc { get; set; }
-
-    /// <summary>
     ///     AFortWeap_EditingTool::EditActor - SAME wire handle as AFortWeap_BuildingTool's
     ///     DefaultMetadata (36): both classes add exactly one property after AFortWeapon's own 35,
     ///     confirmed by `rep_handles.py AFortWeap_EditingTool` landing EditActor at 0x0968, the

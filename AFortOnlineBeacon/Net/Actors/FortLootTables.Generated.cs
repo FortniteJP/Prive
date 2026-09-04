@@ -116,6 +116,10 @@ internal static partial class FortLootTables {
             new(0.0f, "WorldPKG.AthenaSupplyDrop.Weapon.Zapotron", 6.0f,
                 new[] { 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 }, new[] { 1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0 }, new[] { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }),
         },
+        ["Loot_AthenaLlama"] = new FLootTierRow[] {
+            new(1.0f, "WorldPKG.AthenaLlama", 49.0f,
+                new[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0 }, new[] { 10, 10, 10, 10, 0, 1, 1, 1, 3, 3, 0 }, new[] { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }),
+        },
     };
 
     /// <summary>Package rows by package id. A row is either a leaf item or a call into another package.</summary>
@@ -245,6 +249,15 @@ internal static partial class FortLootTables {
             new(0.5f, 1, 0, null, "/Game/Athena/Items/Weapons/WID_Badger_Grape_VR.WID_Badger_Grape_VR"),
             new(0.0f, 1, 0, null, "/Game/Athena/Items/Consumables/Bandage/Athena_Bandage.Athena_Bandage"),
             new(0.0f, 1, 0, null, "/Game/Athena/Items/Consumables/Bandage/Athena_Bandage.Athena_Bandage"),
+        },
+        ["WorldList.AthenaLlama.Metal"] = new FLootPackageRow[] {
+            new(1.0f, 350, 0, null, "/Game/Items/ResourcePickups/MetalItemData.MetalItemData"),
+        },
+        ["WorldList.AthenaLlama.Stone"] = new FLootPackageRow[] {
+            new(1.0f, 350, 0, null, "/Game/Items/ResourcePickups/StoneItemData.StoneItemData"),
+        },
+        ["WorldList.AthenaLlama.Wood"] = new FLootPackageRow[] {
+            new(1.0f, 350, 0, null, "/Game/Items/ResourcePickups/WoodItemData.WoodItemData"),
         },
         ["WorldList.AthenaLoot.Ammo"] = new FLootPackageRow[] {
             new(0.8f, 4, 0, null, "/Game/Athena/Items/Ammo/AthenaAmmoDataShells.AthenaAmmoDataShells"),
@@ -693,6 +706,18 @@ internal static partial class FortLootTables {
             new(0.0f, 1, 0, null, "/Game/Athena/Items/Consumables/Bandage/Athena_Bandage.Athena_Bandage"),
             new(0.0f, 1, 0, null, "/Game/Athena/Items/Traps/TID_Floor_MountedTurret_Athena.TID_Floor_MountedTurret_Athena"),
             new(0.0f, 1, 0, null, "/Game/Athena/Items/Traps/TID_PoisonDartTrap_Context.TID_PoisonDartTrap_Context"),
+        },
+        ["WorldPKG.AthenaLlama"] = new FLootPackageRow[] {
+            new(1.0f, 1, 0, "WorldList.AthenaLoot.Ammo.Shells", null),
+            new(1.0f, 1, 1, "WorldList.AthenaLoot.Ammo.Light", null),
+            new(1.0f, 1, 2, "WorldList.AthenaLoot.Ammo.Medium", null),
+            new(1.0f, 1, 3, "WorldList.AthenaLoot.Ammo.Heavy", null),
+            new(1.0f, 1, 4, "WorldList.AthenaLoot.Ammo.Rockets", null),
+            new(1.0f, 1, 5, "WorldList.AthenaLlama.Wood", null),
+            new(1.0f, 1, 6, "WorldList.AthenaLlama.Stone", null),
+            new(1.0f, 1, 7, "WorldList.AthenaLlama.Metal", null),
+            new(1.0f, 1, 8, "WorldList.AthenaHighConsumables", null),
+            new(1.0f, 1, 9, "WorldList.AthenaTraps", null),
         },
         ["WorldPKG.AthenaLoot.Ammo"] = new FLootPackageRow[] {
             new(1.0f, 1, 0, "WorldList.AthenaLoot.Ammo", null),

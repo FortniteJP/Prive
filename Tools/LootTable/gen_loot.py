@@ -40,6 +40,9 @@ ROOT_TIER_GROUPS = [
     "Loot_AthenaAmmoLarge",    # ammo boxes
     "Loot_AthenaAmmoSmall",
     "Loot_AthenaSupplyDrop",   # supply drops, for when those exist
+    # Supply llamas. The name is not a guess - AthenaSupplyDrop_Llama_C's CDO carries
+    # `LootTableName = Loot_AthenaLlama` (pakreader props on the Blueprint).
+    "Loot_AthenaLlama",
 ]
 
 

@@ -29,6 +29,27 @@
 ///     in whole hit points, and only the wire needs floats and int16s.
 /// </summary>
 public class ABuildingActor : AActor {
+    /// <summary>
+    ///     A DELIBERATELY LARGER cull radius than the engine default, and the number is a chosen
+    ///     safety margin rather than anything derived - say so plainly. AActor's 15000 units (150 m)
+    ///     is right for a small object on the ground; a build is a large, shootable, load-bearing
+    ///     thing seen across a valley, and the same class also carries destructible world scenery,
+    ///     which a player can shoot from further away than they can walk. 40000 units (400 m) keeps
+    ///     the win where the counts actually are (2895 floor-loot pickups, see AFortPickup) while
+    ///     leaving structures alone.
+    ///
+    ///     BUILDING_CULL_DISTANCE overrides it in UNITS, not squared. NET_CULL=0 disables culling
+    ///     entirely. AFortPickupAthena's and ABuildingSMActor's REAL NetCullDistanceSquared values
+    ///     are in their native CDOs and could be read out of the memory dump
+    ///     (see [[re-and-capture-techniques]]) - that has not been done, and doing it would retire
+    ///     both of these guesses at once.
+    /// </summary>
+    public ABuildingActor() =>
+        NetCullDistanceSquared =
+            float.TryParse(Environment.GetEnvironmentVariable("BUILDING_CULL_DISTANCE"), out var units) && units > 0
+                ? units * units
+                : 40000f * 40000f;
+
     public EBuildingMaterial Material { get; private set; } = EBuildingMaterial.Unknown;
     public EFortBuildingType BuildingType { get; private set; } = EFortBuildingType.None;
 

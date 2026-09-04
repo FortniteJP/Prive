@@ -20,10 +20,33 @@
 /// </summary>
 public class AFortPickup : AActor {
     /// <summary>
-    ///     Always relevant: a pickup on the ground belongs to no one, and this project has no
-    ///     distance culling to decide who is close enough to see it.
+    ///     DISTANCE-CULLED, as of 2026-09-04. This used to be bAlwaysRelevant with the comment
+    ///     "a pickup on the ground belongs to no one, and this project has no distance culling to
+    ///     decide who is close enough to see it" - and that second half is no longer true
+    ///     (AActor.IsNetRelevantFor now has the real tail), so the flag came off.
+    ///
+    ///     It matters more here than anywhere else in the project. The floor-loot generator finds
+    ///     2895 spawners across the whole Athena map; every one of them was getting a channel on
+    ///     every connection, in an untimed trickle bounded only by NEWLY_RELEVANT_PER_TICK. The map
+    ///     is over 200000 units across and this cull radius is 15000, so the overwhelming majority
+    ///     of them are now simply never opened for a given player - and the ones that are, are the
+    ///     ones that player could actually walk up to.
+    ///
+    ///     That trickle is not a hypothetical cost. Rounds 144-147 proved that WHAT LANDS IN THE
+    ///     POSSESSION WINDOW breaks jumping and collision (see UNetDriver.OpenChannelsForNewlyRelevantActors),
+    ///     and this is by far the largest source of channel opens in the whole server.
+    ///
+    ///     The radius is the engine default (AActor::NetCullDistanceSquared = 225000000, i.e. 15000
+    ///     units / 150 m), not a Fortnite-specific figure - AFortPickupAthena's real value lives in
+    ///     its native CDO and has not been read out of the dump yet. 150 m is generous for a small
+    ///     object on the ground, which is the right way to be wrong here.
+    ///     PICKUP_CULL_DISTANCE overrides it in UNITS (not squared); NET_CULL=0 disables culling
+    ///     everywhere and restores exactly the old behaviour.
     /// </summary>
-    public AFortPickup() => bAlwaysRelevant = true;
+    public AFortPickup() {
+        if (float.TryParse(Environment.GetEnvironmentVariable("PICKUP_CULL_DISTANCE"), out var units) && units > 0)
+            NetCullDistanceSquared = units * units;
+    }
 
     /// <summary>AFortPickup::PrimaryPickupItemEntry (0x0270, Net + RepNotify) - handles 17-36.</summary>
     public FFortItemEntry? PrimaryPickupItemEntry { get; set; }

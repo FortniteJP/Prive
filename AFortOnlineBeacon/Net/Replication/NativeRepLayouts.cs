@@ -40,6 +40,56 @@ internal static class NativeRepLayouts {
         Kind = kind
     };
 
+    /// <summary>
+    ///     How many wire handles one table entry contributes. ONE for almost everything, but a
+    ///     StructRecurse entry flattens into one handle per child (and recursively) - the same rule
+    ///     FRepLayout's constructor applies.
+    /// </summary>
+    private static int HandleCount(FRepPropertyDef def) =>
+        def.Kind == ERepPropertyKind.StructRecurse ? def.Children!.Sum(HandleCount) : 1;
+
+    /// <summary>
+    ///     The prefix of a table that covers handles 1..<paramref name="lastHandle"/>, for a class
+    ///     that BRANCHES OFF another rather than extending it.
+    ///
+    ///     THIS EXISTS BECAUSE `Take(n)` IS WRONG AND LOOKS RIGHT. Table entries are not handles:
+    ///     AActor's AttachmentReplication is a single StructRecurse entry that flattens into six
+    ///     handles (7-12), so BuildingActorProps' first 37 ENTRIES are 42 HANDLES. The supply llama
+    ///     was built with `BuildingActorProps.Take(37)` and every property after the cut landed five
+    ///     handles too high - Looted at 44 instead of 39 - which a real client rejected outright:
+    ///
+    ///         LogRep: Error: ReceiveProperties: Invalid property terminator handle - Handle=44
+    ///         LogNet: Error: UActorChannel::ProcessBunch: Replicator.ReceivedBunch failed.
+    ///                 Closing connection.
+    ///
+    ///     (that error means the handle read exceeded the client's own Cmds list, so the number it
+    ///     prints is literally the bad handle - see FRepLayout::ReceiveProperties, RepLayout.cpp:2954.)
+    ///
+    ///     Throws rather than silently truncating: a prefix that cannot land exactly on the
+    ///     requested handle means the table's shape is not what the caller believes, and every
+    ///     handle after it would be wrong.
+    /// </summary>
+    private static FRepPropertyDef[] HandlePrefix(IReadOnlyList<FRepPropertyDef> props, int lastHandle) {
+        var taken = new List<FRepPropertyDef>();
+        var handle = 0;
+
+        foreach (var def in props) {
+            var contributes = HandleCount(def);
+            if (handle + contributes > lastHandle) break;
+
+            handle += contributes;
+            taken.Add(def);
+        }
+
+        if (handle != lastHandle) {
+            throw new InvalidOperationException(
+                $"HandlePrefix: cannot cut this table at handle {lastHandle} - the nearest entry " +
+                $"boundary is {handle}. A struct property must straddle the cut.");
+        }
+
+        return taken.ToArray();
+    }
+
     private static readonly FRepPropertyDef[] ActorProps = {
         Reserved("bHidden"),
         new() {
@@ -902,13 +952,23 @@ internal static class NativeRepLayouts {
         },
         Reserved("bDBNOEnabledForGameMode"), // 30, 0x02D4 - bool
         Reserved("GameFlagData"), // 31, 0x02D8 - uint32
-        Reserved("PoiManager"), // 32, 0x02E0 - class AFortPoiManager*
+        new() {
+            // 32, 0x02E0 - class AFortPoiManager*. See Net/Actors/FortManagementActors.cs.
+            Name = "PoiManager",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).PoiManager
+        },
         Reserved("bPlayerRespawningBlocked_Temporarily"), // 33, 0x0320 - bool
         Reserved("AdditionalPlaylistLevelsStreamed"), // 34, 0x0338 - DynamicArray TArray<class FName>
         Reserved("WorldDaysElapsed"), // 35, 0x0348 - int32
         Reserved("FeedbackManager"), // 36, 0x0368 - class AFortFeedbackManager*
         Reserved("MissionManager"), // 37, 0x0370 - class AFortMissionManager*
-        Reserved("AnnouncementManager"), // 38, 0x0378 - class AFortClientAnnouncementManager*
+        new() {
+            // 38, 0x0378 - class AFortClientAnnouncementManager*.
+            Name = "AnnouncementManager",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).AnnouncementManager
+        },
         new FRepPropertyDef {
             // 39, offset 0x0390 - class AFortWorldManager*. The single property the client's in-game
             // UI state is gated on; see AGameState.WorldManager for the disassembly that proves it.
@@ -985,8 +1045,18 @@ internal static class NativeRepLayouts {
         Reserved("bSkyTubesShuttingDown"), // 102, 0x117F - bool
         Reserved("bSkyTubesDisabled"), // 103, 0x1180 - bool
         Reserved("ServerChangelistNumber"), // 104, 0x118C - int32
-        Reserved("SpecialActorData"), // 105, 0x1190 - class AFortSpecialActorReplicationInfo*
-        Reserved("ReplOverrideData"), // 106, 0x1198 - class AFortPropertyOverrideReplShared*
+        new() {
+            // 105, 0x1190 - class AFortSpecialActorReplicationInfo*.
+            Name = "SpecialActorData",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).SpecialActorData
+        },
+        new() {
+            // 106, 0x1198 - class AFortPropertyOverrideReplShared*.
+            Name = "ReplOverrideData",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).ReplOverrideData
+        },
         Reserved("bIsInCountdown"), // 107, 0x1261 - bool
         Reserved("bIsInFinalCountdown"), // 108, 0x1262 - bool
         new() {
@@ -1137,6 +1207,39 @@ internal static class NativeRepLayouts {
             Name = "bAircraftIsLocked",
             Kind = ERepPropertyKind.Bool,
             GetByteValue = obj => (byte) (((AGameState) obj).bAircraftIsLocked ? 1 : 0)
+        },
+        // 161-184 exist only so VolumeManager can be numbered correctly. A RepLayout is POSITIONAL -
+        // handle N is "the Nth entry in this array" - so reaching a property 25 slots further on
+        // means writing out the 24 in between, whether or not any of them is ever sent.
+        Reserved("LobbyAction", ERepPropertyKind.Int32), // 161, 0x1DE8 - int32
+        Reserved("MutatorEventData.EventId", ERepPropertyKind.Int32), // 162, 0x1DF0 - int32
+        Reserved("MutatorEventData.EventParam1", ERepPropertyKind.Int32), // 163, 0x1DF0 - int32
+        Reserved("MutatorEventData.EventParam2", ERepPropertyKind.Int32), // 164, 0x1DF0 - int32
+        Reserved("MutatorEventData.EventParam3", ERepPropertyKind.Int32), // 165, 0x1DF0 - int32
+        Reserved("MutatorObjectDataArray.ObjectDataList"), // 166, 0x1E00 - DynamicArray TArray<struct FGameplayMutatorObjectData>
+        Reserved("MutatorGenericInt_0", ERepPropertyKind.Int32), // 167, 0x1F18 - int32
+        Reserved("MutatorGenericInt_1", ERepPropertyKind.Int32), // 168, 0x1F1C - int32
+        Reserved("MutatorGenericInt_2", ERepPropertyKind.Int32), // 169, 0x1F20 - int32
+        Reserved("DefaultGliderRedeployCanRedeploy", ERepPropertyKind.Float), // 170, 0x1F38 - float
+        Reserved("DefaultRedeployGliderLateralVelocityMult", ERepPropertyKind.Float), // 171, 0x1F3C - float
+        Reserved("DefaultRedeployGliderHeightLimit", ERepPropertyKind.Float), // 172, 0x1F40 - float
+        Reserved("DefaultParachuteDeployTraceForGroundDistance", ERepPropertyKind.Float), // 173, 0x1F44 - float
+        Reserved("DefaultAllowNeutralWallEditing", ERepPropertyKind.Float), // 174, 0x1F48 - float
+        Reserved("DefaultRebootMachineHotfix", ERepPropertyKind.Float), // 175, 0x1F4C - float
+        Reserved("SignalInStormRegenSpeed", ERepPropertyKind.Float), // 176, 0x1F50 - float
+        Reserved("SignalInStormLostSpeed", ERepPropertyKind.Float), // 177, 0x1F54 - float
+        Reserved("StormCNDamageVulnerabilityLevel0", ERepPropertyKind.Float), // 178, 0x1F58 - float
+        Reserved("StormCNDamageVulnerabilityLevel1", ERepPropertyKind.Float), // 179, 0x1F5C - float
+        Reserved("StormCNDamageVulnerabilityLevel2", ERepPropertyKind.Float), // 180, 0x1F60 - float
+        Reserved("StormCNDamageVulnerabilityLevel3", ERepPropertyKind.Float), // 181, 0x1F64 - float
+        Reserved("MeshNetworkStatus.bEnabled"), // 182, 0x1F68 - bool
+        Reserved("MeshNetworkStatus.bConnectedToRoot"), // 183, 0x1F68 - bool
+        Reserved("MeshNetworkStatus.GameServerNodeType"), // 184, 0x1F68 - EMeshNetworkNodeType
+        new() {
+            // 185, 0x1F88 - class AFortVolumeManager*. See Net/Actors/FortManagementActors.cs.
+            Name = "VolumeManager",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AGameState) obj).VolumeManager
         }
     }).ToArray();
 
@@ -1446,7 +1549,13 @@ internal static class NativeRepLayouts {
         // 68 is the landmark worth probing: if it reports PlayerTeam, every count above - and in
         // particular FCustomCharacterData being 11 handles - is confirmed in one shot.
         Reserved("PlayerTeam"),        // 68, offset 1552
-        Reserved("PlayerTeamPrivate")  // 69, offset 1560
+        new FRepPropertyDef {
+            // 69, offset 1560 (0x0618) - class AFortTeamPrivateInfo*. The per-TEAM actor carrying
+            // what only teammates may see. See Net/Actors/FortManagementActors.cs.
+            Name = "PlayerTeamPrivate",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APlayerState) obj).PlayerTeamPrivate
+        }
     }).Concat(new FRepPropertyDef[] {
         // Handles 70-248, GENERATED by Tools/RepHandles/rep_handles.py and checked by
         // Tools/RepHandles/verify_cs_handles.py. Everything here is filler except TeamIndex (230)
@@ -2372,6 +2481,36 @@ internal static class NativeRepLayouts {
     }).ToArray();
 
     /// <summary>
+    ///     AAthenaSupplyDrop_Llama_C - a supply llama. THE FIRST TABLE IN THIS FILE THAT BRANCHES OFF
+    ///     ABuildingActor RATHER THAN EXTENDING BuildingActorProps, and the Take(37) is the whole
+    ///     point of it.
+    ///
+    ///     A llama is AFortAthenaSupplyDrop : ABuildingGameplayActor : ABuildingActor - a SIBLING of
+    ///     ABuildingSMActor, not a descendant. It shares ABuildingActor's handles 16-37 exactly, and
+    ///     then where a building piece has TextureData[0] at 38 a llama has SpecialActorID. Concat'ing
+    ///     onto the full BuildingActorProps (which runs to 67, all of it ABuildingSMActor's from 38 on)
+    ///     would put Looted somewhere in the seventies, at a handle the client's own Cmds array for
+    ///     this class does not reach - ReceiveProperties_r reports BunchIsError and the connection
+    ///     dies a few ticks later with nothing logged on this side. That is not hypothetical; it is
+    ///     exactly what sending handle 36 to a non-building-tool weapon did.
+    ///
+    ///     37 is where ABuildingActor's own properties end (BaselineScale), which is why the constant
+    ///     is 37 and not something tuned until it worked. It is a HANDLE, not an entry count -
+    ///     `Take(37)` was the first attempt and it cut in the wrong place; see HandlePrefix.
+    /// </summary>
+    private static readonly FRepPropertyDef[] SupplyDropLlamaProps = HandlePrefix(BuildingActorProps, 37).Concat(new FRepPropertyDef[] {
+        Reserved("SpecialActorID", ERepPropertyKind.Name),                        // 38, 0x081C - FName
+        new() {
+            // 39, 0x08D8 - RepNotify. OnRep_Looted calls PlayLootedFX, the pinata burst and its sound
+            // cue, so this is the llama's whole opened-state visual. See AFortAthenaSupplyDropLlama.
+            Name = "Looted",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AFortAthenaSupplyDropLlama) obj).Looted ? 1 : 0)
+        },
+        Reserved("FinalDestination", ERepPropertyKind.StructAtomic)               // 40, 0x0910 - FVector
+    }).ToArray();
+
+    /// <summary>
     ///     ABuildingWall - a wall with a door. Also derives from ABuildingSMActor, so it too has to
     ///     re-declare handle 68 (see BuildingContainerProps for why) and then takes 69-74 of its own.
     /// </summary>
@@ -2432,11 +2571,14 @@ internal static class NativeRepLayouts {
 
     public static readonly FRepLayout BuildingActor = new(BuildingActorProps);
     public static readonly FRepLayout BuildingContainer = new(BuildingContainerProps);
+    public static readonly FRepLayout SupplyDropLlama = new(SupplyDropLlamaProps);
     public static readonly FRepLayout BuildingWall = new(BuildingWallProps);
 
     public static FRepLayout Get(AActor actor) => actor switch {
         // Before ABuildingActor: a container IS one, and the first arm wins.
         ABuildingContainer => BuildingContainer,
+        // Likewise - a llama derives from ABuildingActor but has its OWN handles from 38 on.
+        AFortAthenaSupplyDropLlama => SupplyDropLlama,
         ABuildingWall => BuildingWall,
         ABuildingActor => BuildingActor,
         AFortAthenaAircraft => Aircraft,
@@ -2452,4 +2594,16 @@ internal static class NativeRepLayouts {
         APlayerState => PlayerState,
         _ => Actor
     };
+
+    /// <summary>
+    ///     Every property name across every layout, for tables that are keyed on names and would
+    ///     otherwise fail SILENTLY when one is misspelled or renamed. UActorChannel's
+    ///     replication-condition table is the case this exists for.
+    /// </summary>
+    public static IEnumerable<string> AllPropertyNames =>
+        typeof(NativeRepLayouts)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                       | System.Reflection.BindingFlags.Static)
+            .Where(layoutField => layoutField.FieldType == typeof(FRepLayout))
+            .SelectMany(layoutField => ((FRepLayout) layoutField.GetValue(null)!).PropertyNames);
 }

@@ -67,6 +67,25 @@ public enum ERpcParamKind {
 
     Float,
     Vector,
+
+    /// <summary>
+    ///     FVector_NetQuantize - SerializePackedVector&lt;1, 20&gt;, i.e. whole units and at most 20 bits
+    ///     per component. The plainest of the three quantized vectors and the one
+    ///     APlayerController::ServerUpdateCamera uses; the 10 and 100 variants below are the same
+    ///     thing at one and two decimal places.
+    /// </summary>
+    VectorQuantize,
+
+    /// <summary>
+    ///     Engine.UpdateLevelVisibilityLevelInfo - see FUpdateLevelVisibilityLevelInfo. Two FNames
+    ///     and a bit, and the only RPC parameter here whose decode can check itself, because the
+    ///     names are paths.
+    /// </summary>
+    LevelVisibility,
+
+    /// <summary>TArray&lt;FUpdateLevelVisibilityLevelInfo&gt; - a uint16 count then that many elements.</summary>
+    LevelVisibilityArray,
+
     VectorQuantize10,
     VectorQuantize100,
     Rotator,

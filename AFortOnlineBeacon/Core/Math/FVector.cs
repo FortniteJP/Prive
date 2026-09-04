@@ -149,6 +149,18 @@ public class FVector {
     }
 
     /// <summary>Matches FVector::Equals(FVector::ZeroVector, epsilon) - SerializeNewActor's own test.</summary>
+    /// <summary>
+    ///     FVector::DistSquared - the squared distance between two points. Squared because that is
+    ///     what net relevancy compares against (AActor::NetCullDistanceSquared is pre-squared
+    ///     precisely so the check never needs a square root).
+    /// </summary>
+    public static float DistSquared(FVector a, FVector b) {
+        var dx = a.X - b.X;
+        var dy = a.Y - b.Y;
+        var dz = a.Z - b.Z;
+        return dx * dx + dy * dy + dz * dz;
+    }
+
     public bool IsNearlyZero(float epsilon = 0.001f) =>
         MathF.Abs(X) <= epsilon && MathF.Abs(Y) <= epsilon && MathF.Abs(Z) <= epsilon;
 

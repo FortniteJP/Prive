@@ -58,6 +58,67 @@ internal static class NativeRpcHandlers {
         int.TryParse(Environment.GetEnvironmentVariable("LOOT_SEED"), out var lootSeed) ? lootSeed : 20191001);
 
     /// <summary>
+    ///     One-shot guard for ServerUpdateCamera's decode sanity check - see that handler. Once, not
+    ///     every frame: the RPC arrives thousands of times a session and the answer cannot change.
+    /// </summary>
+    private static bool _reportedCameraSanity;
+
+    /// <summary>
+    ///     Same, for the camera's ROTATION - reported separately because the first sample is always
+    ///     zero (a freshly spawned player looks down +X) and zero proves nothing about the unpack.
+    /// </summary>
+    private static bool _reportedCameraRotation;
+
+    /// <summary>ServerUpdateCamera arrival statistics - see the handler for why they are measured.</summary>
+    private static int _cameraSampleCount;
+    private static float _cameraFirstSampleTime;
+    private static float _cameraLongestGap;
+
+    /// <summary>Same idea for the level-visibility decode - report the first one and then stay quiet.</summary>
+    private static bool _reportedLevelVisibilitySanity;
+
+    /// <summary>
+    ///     Records one level-visibility report on the connection, and CHECKS ITS OWN DECODE the first
+    ///     time through.
+    ///
+    ///     The check is worth having because this parameter is two FNames, which arrive as strings -
+    ///     so a framing error produces visible nonsense rather than a plausible wrong number. That is
+    ///     a luxury the neighbouring ServerUpdateCamera does not have (see its handler), and it is
+    ///     the reason this RPC was implemented first despite being the more complicated of the two.
+    ///
+    ///     After the first report the running total is logged rather than each name, because a client
+    ///     streams hundreds of sublevels and the individual names stop being news immediately.
+    /// </summary>
+    private static void ApplyLevelVisibility(APlayerController pc, FUpdateLevelVisibilityLevelInfo info,
+                                             string source) {
+        var connection = pc.GetWorld()?.NetDriver?.ClientConnections
+            .FirstOrDefault(candidate => candidate.PlayerController == pc);
+
+        if (connection == null) return;
+
+        if (!_reportedLevelVisibilitySanity) {
+            _reportedLevelVisibilitySanity = true;
+
+            Console.WriteLine($"NativeRpcHandlers: {source} first decode - PackageName='{info.PackageName}' " +
+                              $"Filename='{info.Filename}' bIsVisible={info.bIsVisible}: " +
+                              (info.LooksSane
+                                  ? "looks like a real package path, so the struct framing is right"
+                                  : "NOT a package path - the struct framing is WRONG, treat these names as garbage"));
+        }
+
+        if (!info.LooksSane) return;
+
+        var changed = info.bIsVisible
+            ? connection.ClientVisibleLevelNames.Add(info.PackageName)
+            : connection.ClientVisibleLevelNames.Remove(info.PackageName);
+
+        if (changed && NetDebugLog.VerboseEnabled) {
+            Console.WriteLine($"NativeRpcHandlers: {source} - {(info.bIsVisible ? "loaded" : "dropped")} " +
+                              $"'{info.PackageName}', client now has {connection.ClientVisibleLevelNames.Count} level(s)");
+        }
+    }
+
+    /// <summary>
     ///     Which loot tier group a container's PATH names, or null if this is not a container.
     ///
     ///     Name-matching, because the actor's name is all the client sends - the same approach, and the
@@ -281,7 +342,10 @@ internal static class NativeRpcHandlers {
                                   $"('{item.ItemDefinition.GetFName()}'), currently holding " +
                                   $"{(pawn.CurrentWeapon is { } held ? held.ItemEntryGuid.ToString() : "nothing")}");
 
-                pawn.EquipInventoryItem(item);
+                // clientInitiated: the client asked for this slot, so it must NOT be told about the
+                // result - echoing it back makes it re-assert its focused slot and the two oscillate.
+                // See APawn.bLastEquipWasClientInitiated.
+                pawn.EquipInventoryItem(item, clientInitiated: true);
             }
         ),
 
@@ -884,8 +948,221 @@ internal static class NativeRpcHandlers {
         ["ServerThankBusDriver"] = NoParams("ServerThankBusDriver"),
 
         ["ServerTouchActiveTime"] = NoParams("ServerTouchActiveTime"),
-        ["ServerLoadingScreenDropped"] = NoParams("ServerLoadingScreenDropped"),
+
+        // APlayerController::ServerUpdateLevelVisibility(const FUpdateLevelVisibilityLevelInfo&) -
+        // the client reporting a streaming level it has loaded or dropped. The most frequent RPC
+        // this server receives, and until now discarded entirely. See
+        // UNetConnection.ClientVisibleLevelNames for what it is worth here, and
+        // FUpdateLevelVisibilityLevelInfo for the wire format and why the 10.40 SDK is the authority
+        // for it rather than the 4.23 source.
+        // expectsFullDecode: TRUE. The declared layout is a hypothesis and is currently known to be
+        // wrong, so the leftover-bits check is exactly what should fire - and it is what triggers the
+        // automatic raw dump in UActorChannel.DumpRawRpcPayload. Without it the graceful null this
+        // reader now returns would be silent evidence, which is the worst kind.
+        ["ServerUpdateLevelVisibility"] = new FRpcDef(
+            "ServerUpdateLevelVisibility",
+            new[] { new FRpcParamDef("LevelVisibility", ERpcParamKind.LevelVisibility) },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+
+                if (values[0] is not FUpdateLevelVisibilityLevelInfo info) {
+                    if (_reportedLevelVisibilitySanity) return;
+                    _reportedLevelVisibilitySanity = true;
+
+                    Console.WriteLine("NativeRpcHandlers: ServerUpdateLevelVisibility - the declared parameter " +
+                                      "layout (two FNames and a bit) does not fit the wire; the decode ran out of " +
+                                      "room. See FUpdateLevelVisibilityLevelInfo, and run with " +
+                                      "RPC_DUMP=ServerUpdateLevelVisibility to get a raw sample.");
+                    return;
+                }
+
+                ApplyLevelVisibility(pc, info, "ServerUpdateLevelVisibility");
+            },
+            expectsFullDecode: true
+        ),
+
+        // APlayerController::ServerUpdateMultipleLevelsVisibility(const TArray<FUpdateLevelVisibilityLevelInfo>&)
+        // - the same report, batched. Sent when several levels change state at once, which is why it
+        // is rarer (195 calls against 7685) but far bigger: the samples are 7826 bits, about eight
+        // levels' worth.
+        //
+        // Same self-check as its single sibling, and the same automatic raw dump if the layout is
+        // wrong - which is why this could be written straight after the element format was derived
+        // rather than needing an investigation of its own.
+        ["ServerUpdateMultipleLevelsVisibility"] = new FRpcDef(
+            "ServerUpdateMultipleLevelsVisibility",
+            new[] { new FRpcParamDef("LevelVisibilities", ERpcParamKind.LevelVisibilityArray) },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+
+                if (values[0] is not List<FUpdateLevelVisibilityLevelInfo> levels) {
+                    if (_reportedLevelVisibilitySanity) return;
+                    _reportedLevelVisibilitySanity = true;
+
+                    Console.WriteLine("NativeRpcHandlers: ServerUpdateMultipleLevelsVisibility - the declared " +
+                                      "layout (uint16 count, then that many elements) does not fit the wire.");
+                    return;
+                }
+
+                foreach (var level in levels) {
+                    ApplyLevelVisibility(pc, level, "ServerUpdateMultipleLevelsVisibility");
+                }
+            },
+            expectsFullDecode: true
+        ),
+
+        // APlayerController::ServerUpdateCamera(const FVector_NetQuantize& CamLoc, int32
+        // CamPitchAndYaw) - THE most frequent RPC this server receives (3908 of them across the logs
+        // when the unhandled list was last counted) and it was being skipped entirely.
+        //
+        // THE DECODE CHECKS ITSELF. A quantized vector read at the wrong scale or bit width does not
+        // fail, it returns a plausible-looking wrong number - this project has been caught by exactly
+        // that before, with ReplicatedMovement arriving at one hundredth of its real size. So the
+        // handler compares the camera against the pawn it is supposed to be looking at and says so
+        // when they disagree by more than a camera boom could account for. If that warning appears,
+        // the scale is wrong, not the client.
+        ["ServerUpdateCamera"] = new FRpcDef(
+            "ServerUpdateCamera",
+            new[] {
+                new FRpcParamDef("CamLoc", ERpcParamKind.VectorQuantize),
+                new FRpcParamDef("CamPitchAndYaw", ERpcParamKind.Int32)
+            },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+                if (values[0] is not FVector camLoc) return;
+                if (pc.Pawn is not { } camPawn) return;
+
+                // THE VALUE IS ONLY KEPT IF IT IS PLAUSIBLE. A quantized vector read at the wrong
+                // scale does not fail, it returns a plausible-LOOKING wrong number, so the check has
+                // to be against something independent: the pawn this camera is supposed to be
+                // looking at. A third-person boom is a few metres; anything past 50 m means the
+                // framing is wrong, and storing a number known to be wrong is worse than storing
+                // none. This gate stays even though the decode is now confirmed - it is what would
+                // catch a regression.
+                var pawnLoc = camPawn.GetActorLocation();
+                var dx = camLoc.X - pawnLoc.X;
+                var dy = camLoc.Y - pawnLoc.Y;
+                var dz = camLoc.Z - pawnLoc.Z;
+                var distance = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+                var plausible = distance <= 5000f;
+
+                if (plausible) {
+                    // HOW OFTEN THIS ACTUALLY ARRIVES, measured rather than assumed - the first
+                    // staleness bound was set from an assumption ("several times a second") and made
+                    // the relevancy viewpoint flap. UPlayerCameraManager::UpdateCamera only sends
+                    // when the camera moved or turned, so a stationary player is legitimately quiet.
+                    var cameraNow = pc.GetWorld()?.TimeSeconds ?? 0f;
+                    // The gap is only meaningful from the SECOND sample on - LastClientCameraTime
+                    // starts at negative infinity, so measuring against it on the first would record
+                    // an infinite gap and poison the maximum for the rest of the session.
+                    if (_cameraSampleCount++ == 0) _cameraFirstSampleTime = cameraNow;
+                    else _cameraLongestGap = MathF.Max(_cameraLongestGap, cameraNow - pc.LastClientCameraTime);
+
+                    if (_cameraSampleCount % 500 == 0) {
+                        var elapsed = cameraNow - _cameraFirstSampleTime;
+                        Console.WriteLine($"NativeRpcHandlers: ServerUpdateCamera rate - {_cameraSampleCount} samples " +
+                                          $"in {elapsed:F1}s ({_cameraSampleCount / MathF.Max(elapsed, 0.001f):F1}/s), " +
+                                          $"longest gap {_cameraLongestGap:F2}s. Any server-side staleness bound has " +
+                                          "to be well above that longest gap - see UNetDriver.CameraViewpointTimeout.");
+                    }
+
+                    pc.LastClientCameraLocation = camLoc;
+                    pc.LastClientCameraTime = cameraNow;
+
+                    // APlayerController::ServerUpdateCamera_Implementation, verbatim: YAW is the
+                    // HIGH half and PITCH the low one, each a compressed short. The name says
+                    // "PitchAndYaw" and the packing is the other way round.
+                    var packed = (uint) (values[1] as int? ?? 0);
+                    pc.LastClientCameraRotation = new FRotator {
+                        Yaw = FRotator.DecompressAxisFromShort((packed >> 16) & 65535),
+                        Pitch = FRotator.DecompressAxisFromShort(packed & 65535)
+                    };
+
+                    // THE FIRST SAMPLE CANNOT CONFIRM AN ANGLE DECODE, because a player who has just
+                    // spawned is looking straight down +X and both halves read zero - which is what
+                    // the first live capture showed, and zero is exactly what a BROKEN unpack would
+                    // also produce. So report the first NON-zero one as well: a yaw that tracks
+                    // where the player actually turned is the check, and it costs one bool.
+                    if (!_reportedCameraRotation
+                        && (MathF.Abs(pc.LastClientCameraRotation.Yaw) > 1f
+                            || MathF.Abs(pc.LastClientCameraRotation.Pitch) > 1f)) {
+                        _reportedCameraRotation = true;
+                        Console.WriteLine("NativeRpcHandlers: ServerUpdateCamera first NON-ZERO rotation - " +
+                                          $"{pc.LastClientCameraRotation} (packed 0x{packed:X8}). Yaw is the HIGH " +
+                                          "half; if this does not match where the player was looking, that is the " +
+                                          "half to suspect.");
+                    }
+                }
+
+                if (_reportedCameraSanity) return;
+                _reportedCameraSanity = true;
+
+                // THE DECODE IS RIGHT, AND AN EARLIER NOTE HERE SAID IT COULD NOT BE. That note
+                // argued from a payload size of "exactly 83 bits on all 3908 calls", which no
+                // reading of (FVector_NetQuantize, int32) can produce - and concluded the framing
+                // must be wrong. A live client settled it the other way:
+                //
+                //     ServerUpdateCamera first decode - CamLoc=(-116873, -121234, 4010),
+                //     pawn=(-116631, -121265, 3941), 254uu apart
+                //
+                // 254 units is a third-person camera boom, to the centimetre. The 83 was a bad
+                // count, not a bad decode. The lesson is the cheaper one: a size that "cannot
+                // happen" is evidence about the MEASUREMENT as much as about the model, and one
+                // live value settled what an hour of arithmetic could not.
+                Console.WriteLine($"NativeRpcHandlers: ServerUpdateCamera first decode - CamLoc={camLoc}, " +
+                                  $"pawn={pawnLoc}, {distance:F0}uu apart, rotation={pc.LastClientCameraRotation}: " +
+                                  (plausible
+                                      ? "plausible - relevancy will be measured from here, as real UE does"
+                                      : "IMPLAUSIBLE - value NOT kept, relevancy falls back to the pawn"));
+            }
+        ),
+        // RECORDED, not just logged - see APlayerController's readiness block for why the values
+        // matter and what ignoring them cost.
+        ["ServerLoadingScreenDropped"] = new FRpcDef(
+            "ServerLoadingScreenDropped",
+            Array.Empty<FRpcParamDef>(),
+            (actor, _) => {
+                if (actor is not APlayerController pc || pc.bLoadingScreenDropped) return;
+
+                pc.bLoadingScreenDropped = true;
+                Console.WriteLine($"NativeRpcHandlers: ServerLoadingScreenDropped - {pc.GetFName()} can see the world");
+            }
+        ),
         ["ServerReturnToMainMenu"] = NoParams("ServerReturnToMainMenu"),
+
+        /// The other half of the ride, and the one that has to exist or a tester is STUCK on the
+        /// vehicle with no way off.
+        ///
+        /// AFortPlayerControllerAthena::ServerAttemptExitVehicle takes no parameters - field 284,
+        /// and the capture agrees. Detaching is just AttachParent = null, and
+        /// AActor::OnRep_AttachmentReplication's else branch does
+        /// `DetachFromActor(KeepWorldTransform)`, so the pawn is left exactly where the vehicle had
+        /// carried it rather than snapping anywhere.
+        ///
+        /// ONE KNOWN TRAP, not hit yet but worth naming: that same branch then runs
+        /// `if (bReplicateMovement) OnRep_ReplicatedMovement()`, and this server sends no
+        /// ReplicatedMovement, so the client would apply an all-zero transform. That is the exact
+        /// mechanism behind the spawn-time camera roll recorded in UActorChannel's pawn property
+        /// set. If exiting teleports the player to the origin, clearing bReplicateMovement on the
+        /// pawn just before the detach is the lever.
+        ["ServerAttemptExitVehicle"] = new FRpcDef(
+            "ServerAttemptExitVehicle",
+            Array.Empty<FRpcParamDef>(),
+            (actor, _) => {
+                if (actor is not APlayerController pc) return;
+                if (pc.Pawn is not { AttachParent: AFortAthenaVehicle vehicle } rider) return;
+
+                rider.AttachParent = null;
+                rider.AttachLocationOffset = new FVector();
+                rider.AttachRotationOffset = new FRotator();
+                rider.AttachRelativeScale3D = new FVector { X = 1f, Y = 1f, Z = 1f };
+
+                Console.WriteLine($"NativeRpcHandlers: ServerAttemptExitVehicle - {rider.GetFName()} left " +
+                                  $"{vehicle.GetFName()}. The detach goes out because AttachmentReplication " +
+                                  "stays in the pawn's replicated set once it has ever been attached " +
+                                  "(AActor.bAttachmentEverSet).");
+            }
+        ),
 
         // Same idea, but these carry a parameter, so they need a real decode to stay in sync with the
         // bunch rather than relying on the field's bit-count resync.
@@ -893,20 +1170,47 @@ internal static class NativeRpcHandlers {
             "ServerClientPawnLoaded",
             new[] { new FRpcParamDef("bIsPawnLoaded", ERpcParamKind.Bool) },
             (actor, values) => {
-                if (NetDebugLog.VerboseEnabled) {
-                    Console.WriteLine($"NativeRpcHandlers: ServerClientPawnLoaded on {actor.GetFName()} " +
-                                      $"bIsPawnLoaded={values[0] as bool? ?? false}");
-                }
+                if (actor is not APlayerController pc) return;
+
+                var loaded = values[0] as bool? ?? false;
+                if (pc.bClientPawnLoaded == loaded) return;
+
+                pc.bClientPawnLoaded = loaded;
+                Console.WriteLine($"NativeRpcHandlers: ServerClientPawnLoaded on {pc.GetFName()} " +
+                                  $"bIsPawnLoaded={loaded} - the client has its pawn");
             }
         ),
         ["ServerSetClientHasFinishedLoading"] = new FRpcDef(
             "ServerSetClientHasFinishedLoading",
             new[] { new FRpcParamDef("bInHasFinishedLoading", ERpcParamKind.Bool) },
             (actor, values) => {
-                if (NetDebugLog.VerboseEnabled) {
-                    Console.WriteLine($"NativeRpcHandlers: ServerSetClientHasFinishedLoading on {actor.GetFName()} " +
-                                      $"bInHasFinishedLoading={values[0] as bool? ?? false}");
+                if (actor is not APlayerController pc) return;
+
+                var finished = values[0] as bool? ?? false;
+                if (pc.bClientHasFinishedLoading == finished) return;
+
+                pc.bClientHasFinishedLoading = finished;
+
+                // And out again on APlayerState handle 29 - but ONLY UPWARDS, never back to false.
+                //
+                // That asymmetry is deliberate. This server asserts bHasFinishedLoading = true at
+                // login because it is half of the gate that dismisses Athena's loading screen, which
+                // took a long time to get right. Letting a client-sent `false` pull it back down
+                // would risk re-raising that screen for a reason nothing here understands yet. So the
+                // client's signal is allowed to CONFIRM the flag and is only logged when it
+                // disagrees - if that log ever appears, it is worth investigating rather than
+                // silently obeying.
+                if (pc.PlayerState is { } playerState) {
+                    if (finished) {
+                        playerState.bHasFinishedLoading = true;
+                    } else if (playerState.bHasFinishedLoading) {
+                        Console.WriteLine("NativeRpcHandlers: ServerSetClientHasFinishedLoading(false) while the " +
+                                          "server had it TRUE - not lowering it, see the comment here.");
+                    }
                 }
+
+                Console.WriteLine($"NativeRpcHandlers: ServerSetClientHasFinishedLoading on {pc.GetFName()} " +
+                                  $"bInHasFinishedLoading={finished}");
             }
         ),
 
@@ -1178,6 +1482,61 @@ internal static class NativeRpcHandlers {
 
                         Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - door {knownDoor.GetFName()} " +
                                           $"(by id, InteractType={values[2]}) is now {(byIdState ? "OPEN" : "CLOSED")}");
+                        return;
+
+                    // RIDING A VEHICLE - AN EXPERIMENT THAT HAS RUN, AND ITS ANSWER IS "NOT ENOUGH".
+                    // OFF BY DEFAULT NOW (VEHICLE_RIDE=1 to re-run it).
+                    //
+                    // The question was whether attaching the pawn - the mechanism the battle bus
+                    // work already proved - is enough to ride a vehicle without replicating
+                    // UFortVehicleSeatComponent::PlayerSlots, the TArray<FAthenaCarPlayerSlot> on a
+                    // SUB-OBJECT of the vehicle whose Player/Controller members tell a client it is
+                    // aboard. If it were, a whole sub-object channel would not have been needed.
+                    //
+                    // IT IS NOT. Live, 2026-09-04: the six handles went out (125 payload bits) and
+                    // the CLIENT APPLIED THEM - which is the useful part of the answer, because it
+                    // rules out "the attachment never arrived". What it did NOT do is enter vehicle
+                    // state: no seat, no vehicle input, no camera change. The pawn was simply
+                    // reparented to the vehicle at relative (0,0,0), which put its capsule at the
+                    // vehicle's origin - at ground level - so it sank through the floor and fell
+                    // into the sea.
+                    //
+                    // So the seat component IS the feature, and it is left on by nothing until it
+                    // exists. Kept rather than deleted because re-running it is how the next attempt
+                    // will confirm the seat data is what changed the outcome.
+                    //
+                    // (Offset zero, scale ONE: see AGameModeBase's bus attachment for why a zero
+                    // scale collapses the pawn's transform. No seat socket, because socket names
+                    // live in that same unreplicated slot struct.)
+                    case AFortAthenaVehicle vehicle when Environment.GetEnvironmentVariable("VEHICLE_RIDE") is "1":
+                        if (pc.Pawn is not { } rider) return;
+
+                        if (rider.AttachParent == vehicle) {
+                            Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} is " +
+                                              $"already riding {vehicle.GetFName()}, ignoring");
+                            return;
+                        }
+
+                        rider.AttachParent = vehicle;
+                        rider.AttachLocationOffset = new FVector();
+                        rider.AttachRotationOffset = new FRotator();
+                        rider.AttachRelativeScale3D = new FVector { X = 1f, Y = 1f, Z = 1f };
+
+                        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} is now " +
+                                          $"ATTACHED to {vehicle.GetFName()} ({vehicle.VehicleClassPath}). VEHICLE_RIDE=1 " +
+                                          "re-runs a KNOWN-INSUFFICIENT experiment: the client applies the attachment but " +
+                                          "does not enter vehicle state, and the pawn sinks through the floor. The seat " +
+                                          "component is what is missing - see this handler's comment.");
+                        return;
+
+                    // A LLAMA IS ALWAYS "BY ID", never by path: this server spawns it, so the
+                    // client only ever knows it as a NetGUID. Above the container arm because the
+                    // two are unrelated classes that happen to share a base - a llama is not an
+                    // ABuildingContainer and has no bAlreadySearched.
+                    case AFortAthenaSupplyDropLlama llama:
+                        if (!llama.Search()) return;
+
+                        DropContainerLoot(pc, FortLootTables.LlamaGroup, $"llama {llama.GetFName()}");
                         return;
 
                     case ABuildingContainer knownContainer:
@@ -1526,6 +1885,11 @@ internal static class NativeRpcHandlers {
                     Console.WriteLine($"NativeRpcHandlers: ServerTryActivateAbility for unknown spec handle {handle}, ignoring");
                     return;
                 }
+
+                // A HEALING CONSUMABLE IS JUST A WEAPON WHOSE FIRE ABILITY HEALS YOU, so it arrives
+                // here like any other shot - same grant at equip, same spec handle, same RPC. This
+                // is the one place that has to know the difference. See FortConsumableSystem.
+                FortConsumableSystem.TryUse(playerState, spec);
 
                 // Accept it. Real UE runs the ability's own CanActivate/cost/cooldown checks here and
                 // may answer ClientActivateAbilityFailed instead; this server has no ability
@@ -1941,6 +2305,19 @@ internal static class NativeRpcHandlers {
         // which is why "hit it, then hold to search" never worked. Registration is the ONLY thing a
         // hit on a container may do.
         if (levelActor is ABuildingContainer) return false;
+
+        // NOR IS A SUPPLY LLAMA, and the reason is the same one, one class over. A llama derives from
+        // ABuildingActor, so the `hit.Actor is ABuildingActor` branch above catches it the moment a
+        // player shoots one - and from here it would be marked as a level actor, given a weak spot,
+        // damaged and destroyed as though it were a rock. It is none of those things: it is a
+        // container that is opened by interacting with it, and everything this function would push at
+        // it (bDestroyed, the weak spot, MinimalReplicationProxy) belongs to ABuildingSMActor, which a
+        // llama is not a subclass of. See NativeRepLayouts.SupplyDropLlamaProps.
+        //
+        // Real Fortnite does let you shoot a llama open. Doing that here means routing the damage to
+        // AFortAthenaSupplyDropLlama.Search rather than to this scenery path, which is a separate
+        // piece of work; refusing outright is the correct behaviour until it exists.
+        if (levelActor is AFortAthenaSupplyDropLlama) return false;
 
         levelActor.MarkAsLevelActor();
         levelActorOut = levelActor;

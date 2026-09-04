@@ -105,11 +105,122 @@ public class AGameModeBase : AInfo {
                 GameState.FortTimeOfDayManager = timeOfDayManager;
             }
 
+            // MANAGEMENT_ACTORS=0 skips all of this - the five actors AND the GameState references
+            // that name them. It exists so one run can answer "did Round 139 cause this?" without a
+            // rebuild: these actors were added blind (nothing visible was expected to change), and an
+            // addition whose EFFECT is invisible is exactly the kind that has to stay revertible.
+            // The per-team AFortTeamPrivateInfo in Login reads the same switch.
+            //
+            // The five GameState-side management actors. Nearly empty on the wire - four of the six
+            // the real server spawns send Role and RemoteRole and nothing else - and the whole point
+            // of them is that the GameState's references at handles 32/38/105/106/185 stop being
+            // null. See Net/Actors/FortManagementActors.cs.
+            if (!ManagementActorsEnabled) {
+                Console.WriteLine("AGameModeBase: MANAGEMENT_ACTORS=0 - not spawning the five management " +
+                                  "actors, and the GameState's references to them stay null (as they were " +
+                                  "before Round 139).");
+            }
+
+            GameState.PoiManager = SpawnManagementActor<AFortPoiManager>(world);
+            GameState.AnnouncementManager = SpawnManagementActor<AFortClientAnnouncementManager>(world);
+            GameState.SpecialActorData = SpawnManagementActor<AFortSpecialActorReplicationInfo>(world);
+            GameState.ReplOverrideData = SpawnManagementActor<AFortPropertyOverrideReplShared>(world);
+            GameState.VolumeManager = SpawnManagementActor<AFortVolumeManager>(world);
+
+            // The playlist's gameplay mutators - see AFortGameplayMutator for where the list comes
+            // from and what each one does (and does not do) on this server.
+            foreach (var mutatorPath in AFortGameplayMutator.ForPlaylist(playlistPath)) {
+                var mutator = world.SpawnActor<AFortGameplayMutator>(
+                    GUClassArray.StaticClassForPath<AFortGameplayMutator>(mutatorPath),
+                    new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
+
+                if (mutator == null) continue;
+
+                mutator.SetRole(ENetRole.ROLE_Authority);
+                mutator.SetReplicates(true);
+                Mutators.Add(mutator);
+
+                Console.WriteLine($"AGameModeBase: spawned mutator '{mutatorPath}'");
+            }
+
             // The bus does NOT launch here any more. It used to, which meant GamePhase went
             // straight to Aircraft at match start - fine while everyone spawned on the main island
             // and the phase was cosmetic, wrong now that there is a warmup island to wait on.
             // See StartWarmupClock / TickPhases.
         }
+    }
+
+    /// <summary>
+    ///     Spawn one of the management actors and make it replicate. They differ only in class, so
+    ///     they are spawned the same way - and the same way AFortTimeOfDayManager already is, which
+    ///     is the pattern this follows rather than inventing one.
+    ///
+    ///     Not RF_Transient-free and not owned by anything: the capture shows two of the six with an
+    ///     Owner (handle 13) pointing at a GUID that never gets a channel, i.e. the real server's
+    ///     GameMode, which the client cannot resolve either. Ownership buys nothing here and would
+    ///     change relevancy, so it is left unset deliberately.
+    /// </summary>
+    /// <summary>See the MANAGEMENT_ACTORS note in InitGameState.</summary>
+    public static bool ManagementActorsEnabled =>
+        Environment.GetEnvironmentVariable("MANAGEMENT_ACTORS") is not "0";
+
+    private static T? SpawnManagementActor<T>(UWorld world) where T : AFortManagementActor, new() {
+        if (!ManagementActorsEnabled) return null;
+
+        var actor = world.SpawnActor<T>(GUClassArray.StaticClass<T>(),
+            new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
+
+        if (actor == null) {
+            Console.WriteLine($"AGameModeBase: failed to spawn {typeof(T).Name}");
+            return null;
+        }
+
+        actor.SetRole(ENetRole.ROLE_Authority);
+        actor.SetReplicates(true);
+
+        Console.WriteLine($"AGameModeBase: spawned {typeof(T).Name} '{actor.GetFName()}'");
+
+        return actor;
+    }
+
+    /// <summary>
+    ///     One AFortTeamPrivateInfo per team index, created on first use.
+    ///
+    ///     Per-TEAM and not per-player, which is the whole reason it is a lookup rather than another
+    ///     line in SpawnAndPossessPawn: teammates are supposed to share one, and two players on the
+    ///     same team pointing at different actors would be a subtly wrong model that solo play would
+    ///     never expose.
+    /// </summary>
+    private readonly Dictionary<byte, AFortTeamPrivateInfo> _teamPrivateInfos = new();
+
+    /// <summary>
+    ///     The playlist's mutator actors, in spawn order. Held so UWorld.SpawnPlayActor can open
+    ///     their channels in the login burst rather than leaving them to the next newly-relevant
+    ///     sweep - not because anything names them at a handle, but because that is where the real
+    ///     server opens them (capture packets #318-319, channels 8-10).
+    /// </summary>
+    public List<AFortGameplayMutator> Mutators { get; } = new();
+
+    private AFortTeamPrivateInfo? GetOrCreateTeamPrivateInfo(UWorld world, byte teamIndex) {
+        if (!ManagementActorsEnabled) return null;
+        if (_teamPrivateInfos.TryGetValue(teamIndex, out var existing)) return existing;
+
+        var actor = world.SpawnActor<AFortTeamPrivateInfo>(
+            GUClassArray.StaticClass<AFortTeamPrivateInfo>(),
+            new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
+
+        if (actor == null) {
+            Console.WriteLine($"AGameModeBase: failed to spawn AFortTeamPrivateInfo for team {teamIndex}");
+            return null;
+        }
+
+        actor.SetRole(ENetRole.ROLE_Authority);
+        actor.SetReplicates(true);
+        _teamPrivateInfos[teamIndex] = actor;
+
+        Console.WriteLine($"AGameModeBase: spawned AFortTeamPrivateInfo '{actor.GetFName()}' for team {teamIndex}");
+
+        return actor;
     }
 
     /// <summary>
@@ -326,6 +437,10 @@ public class AGameModeBase : AInfo {
     /// </summary>
     public void TickPhases(Runtime.UWorld world, float now) {
         TickBoarding(world);
+
+        // Slurp Juice is a 37.5-second drip, so it needs a clock. This is the only per-frame hook in
+        // the server that already has the world time in hand.
+        FortConsumableSystem.Tick(now);
 
         if (!_warmupStarted || _aircraftLaunched || GameState == null) return;
         if (now < _warmupEndTime) return;
@@ -708,6 +823,48 @@ public class AGameModeBase : AInfo {
                 });
             }
 
+            // Healing consumables, so the feature can be tested without hunting for floor loot
+            // first. Not authentic - a real Battle Royale player starts with a pickaxe and nothing
+            // else - which is why it is a knob and why the default is small: two minis is exactly
+            // what it takes to reach the Small Shield Potion's own 0.5 * MaxShield cap and see the
+            // THIRD one correctly refuse. Set STARTING_CONSUMABLES to a comma-separated
+            // name[:count] list, or to an empty string for none.
+            //
+            // The names are item definition names, i.e. the keys of FortConsumables.Generated.cs:
+            // Athena_ShieldSmall, Athena_Shields, Athena_Bandage, Athena_Medkit, Athena_SuperMedkit,
+            // Athena_PurpleStuff.
+            //
+            // "none" TURNS IT OFF, and an EMPTY STRING DOES NOT - which is not a preference, it is
+            // Windows. `$env:X = ''` in PowerShell DELETES the variable rather than setting it to
+            // empty, so GetEnvironmentVariable comes back null and the ?? default below applies. A
+            // bisect run as `run-beacon.ps1 STARTING_CONSUMABLES=` therefore still gets the full
+            // default list, silently, and answers the wrong question. Every knob in this project
+            // documented as "empty string to disable" has the same trap.
+            var consumablesEnv = Environment.GetEnvironmentVariable("STARTING_CONSUMABLES");
+            var consumables = consumablesEnv is null or "" ? "Athena_ShieldSmall:3,Athena_Bandage:5"
+                            : consumablesEnv is "none" ? ""
+                            : consumablesEnv;
+
+            if (consumablesEnv is null or "") {
+                Console.WriteLine("AGameModeBase: STARTING_CONSUMABLES is unset, using the default " +
+                                  $"'{consumables}'. Pass STARTING_CONSUMABLES=none to hand out none - " +
+                                  "an EMPTY value will not do it, PowerShell deletes the variable instead.");
+            }
+
+            foreach (var spec in consumables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+                var parts = spec.Split(':', 2);
+                if (FortConsumables.ItemPathFor(parts[0]) is not { } consumablePath) {
+                    Console.WriteLine($"AGameModeBase: STARTING_CONSUMABLES names '{parts[0]}', which is not in " +
+                                      "FortConsumables.Generated.cs - skipping");
+                    continue;
+                }
+
+                worldInventory.Inventory.Add(new FFortItemEntry {
+                    ItemDefinition = UAssetRegistry.GetOrCreate(consumablePath),
+                    Count = parts.Length > 1 && int.TryParse(parts[1], out var n) && n > 0 ? n : 1
+                });
+            }
+
             newPlayerController.WorldInventory = worldInventory;
         }
 
@@ -750,6 +907,12 @@ public class AGameModeBase : AInfo {
             playerState.TeamIndex = (byte) Math.Min(byte.MaxValue, FirstTeamIndex + _playersJoined);
             playerState.SquadId = (byte) _playersJoined;
             _playersJoined++;
+
+            // The team's private info actor - handle 69, and shared with anyone else on this team.
+            // See Net/Actors/FortManagementActors.cs.
+            playerState.PlayerTeamPrivate = GetOrCreateTeamPrivateInfo(world, playerState.TeamIndex);
+            if (playerState.PlayerTeamPrivate != null)
+                playerState.PlayerTeamPrivate.TeamIndex = playerState.TeamIndex;
 
             // THE PLAYER'S OWN NAME, which until now was the literal string "Player" for everybody.
             // AGameModeBase::InitNewPlayer's own shape: take `?Name=` from the join URL, cap it at 20
@@ -1095,14 +1258,36 @@ public class AGameModeBase : AInfo {
             abilitySystem.AvatarActor = pawn;
         }
 
-        // Spawn holding the pickaxe, the way a real match starts. The client will also ask for
-        // this itself the moment the player touches a quickbar slot
-        // (ServerExecuteInventoryItem -> APawn.EquipInventoryItem), and asking for what is
-        // already equipped is a no-op there - so doing it here only removes the window in which
-        // the pawn stands around empty-handed, it does not fight the client for control of the
-        // slot.
-        var firstItem = pc.WorldInventory?.Inventory.Items.FirstOrDefault();
-        if (firstItem != null) pawn.EquipInventoryItem(firstItem);
+        // NOTHING IS EQUIPPED HERE BY DEFAULT, BECAUSE THE REAL SERVER DOES NOT.
+        //
+        // This used to equip the inventory's first item ("spawn holding the pickaxe, the way a real
+        // match starts"), on the reasoning that it only closed the window where the pawn stands
+        // empty-handed and could not fight the client for the slot. The PR3.0 capture says otherwise
+        // - the real join is entirely CLIENT-DRIVEN:
+        //
+        //     #360 S->C  the inventory (6 items: pickaxe, wall, floor, stair, roof, edit)
+        //     #361 C->S  ServerAcknowledgePossession
+        //     #361 C->S  ServerExecuteInventoryItem          <- the client picks its own slot
+        //     #363 S->C  spawns B_Athena_Pickaxe_Generic_C   <- and only NOW does a weapon exist
+        //
+        // The first weapon actor in that whole session appears AFTER the client asks. So the real
+        // server never pre-empts the client's slot choice, and this one did.
+        //
+        // That matters because this client asks for BuildingItemData_Wall instead of the pickaxe on
+        // joining, which raises a build ghost the player never asked for. The real client, given the
+        // same six items in the same order (verified - the export order in #360 is identical), asks
+        // for the pickaxe. Pre-equipping is the clearest difference between the two flows, so it is
+        // the first thing to remove.
+        //
+        // SPAWN_EQUIP=1 restores the old behaviour for comparison. If the client turns out to ask
+        // for the wall either way, this was not the cause and the search moves to the quickbars.
+        if (Environment.GetEnvironmentVariable("SPAWN_EQUIP") is "1") {
+            var firstItem = pc.WorldInventory?.Inventory.Items.FirstOrDefault();
+            if (firstItem != null) pawn.EquipInventoryItem(firstItem);
+        } else {
+            Console.WriteLine("AGameModeBase: not pre-equipping - the real server lets the client's own " +
+                              "ServerExecuteInventoryItem choose the first weapon (SPAWN_EQUIP=1 to restore)");
+        }
 
         return pawn;
     }

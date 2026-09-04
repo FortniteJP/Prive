@@ -72,7 +72,33 @@ public class FBitWriter : FArchive {
     internal long Num { get; set; }
     private long Max { get; set; }
     private bool AllowResize { get; set; }
-    private bool AllowOverflow { get; }
+    private bool AllowOverflow { get; set; }
+
+    /// <summary>
+    ///     FBitWriter::SetAllowResize. FNetBitWriter - and so every FOutBunch - is created RESIZABLE,
+    ///     which is what real UE does too: an oversized content bunch is meant to grow and then be
+    ///     split into partial bunches by UChannel::SendBunch.
+    ///
+    ///     A GUID-EXPORT BUNCH IS THE EXCEPTION AND MUST TURN THIS OFF, because nothing ever splits
+    ///     one - UPackageMapClient::ExportNetGUID handles a full bunch itself, by closing it and
+    ///     starting another. Real UE calls SetAllowResize(false) on it explicitly for that reason;
+    ///     this port inherited the resizable default and not the two calls that override it, and the
+    ///     consequences were invisible until an export batch got big enough to matter:
+    ///
+    ///         ExportNetGUIDHeader: finished export bunch - 14 guid(s), 9297/7476 bits
+    ///
+    ///     A 9297-bit bunch never reports IsError(), so the overflow-and-spill path in ExportNetGUID
+    ///     could not fire. Worse, the bunch header's length is written as
+    ///     WriteIntWrapped(GetNumBits(), MaxPacket * 8) - THIRTEEN BITS, which cannot hold 9297 at
+    ///     all. The client therefore reads a length that stops well short of the data, treats the
+    ///     rest of the packet as more bunches, and every symptom after that is garbage: a nonsense
+    ///     NumGUIDsInBunch, a bunch claiming more bits than the packet holds, an impossible channel
+    ///     index. One cause, several unrelated-looking errors.
+    ///
+    ///     Turned off with <see cref="SetAllowResize"/>, which existed all along and which nothing
+    ///     had ever called.
+    /// </summary>
+    public void SetAllowOverflow(bool allow) => AllowOverflow = allow;
 
     public byte[] GetData() {
         if (IsError()) {

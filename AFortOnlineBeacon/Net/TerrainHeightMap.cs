@@ -68,6 +68,29 @@ public static class TerrainHeightMap {
     }
 
     /// <summary>
+    ///     The world-space rectangle the baked grid covers, or false when there is no heightmap.
+    ///
+    ///     Exists so callers that need "somewhere on the map" can ask the landscape rather than
+    ///     hard-coding a box. FortSupplyLlamas is the first: the alternatives were the aircraft's
+    ///     MapCenter/DropZoneExtent (which describe the BUS's flight, not the ground) and
+    ///     DefaultMapInfo's AircraftDropZone (same thing, and centred on the origin rather than on
+    ///     Athena's actual landscape). The baked extent is the one source that is literally the
+    ///     terrain.
+    /// </summary>
+    public static bool TryGetExtent(out float minX, out float minY, out float maxX, out float maxY) {
+        ReloadIfChanged();
+
+        minX = minY = maxX = maxY = 0f;
+        if (_heights == null) return false;
+
+        minX = _originX;
+        minY = _originY;
+        maxX = _originX + (_width - 1) * _cellSize;
+        maxY = _originY + (_height - 1) * _cellSize;
+        return true;
+    }
+
+    /// <summary>
     ///     The HIGHEST baked ground within `radius` of (x, y), or null where nothing is covered -
     ///     what "is this piece resting on the world" actually has to ask, because a piece rests on
     ///     the highest ground anywhere under its footprint, not on whatever the single cell nearest

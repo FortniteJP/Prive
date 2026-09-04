@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>One weighted row of a loot TIER group - what a container rolls first. See gen_loot.py.</summary>
 internal readonly record struct FLootTierRow(
@@ -45,6 +45,13 @@ internal static partial class FortLootTables {
 
     /// <summary>Floor loot.</summary>
     public const string FloorLootGroup = "Loot_AthenaFloorLoot";
+
+    /// <summary>
+    ///     A supply llama's tier group. Not a guess: AthenaSupplyDrop_Llama_C's CDO carries
+    ///     `LootTableName = Loot_AthenaLlama`. Its single row drops 49 items, which is what makes a
+    ///     llama worth crossing the map for.
+    /// </summary>
+    public const string LlamaGroup = "Loot_AthenaLlama";
 
     /// <summary>One item the roll produced.</summary>
     internal readonly record struct FLootDrop(string ItemPath, int Count);

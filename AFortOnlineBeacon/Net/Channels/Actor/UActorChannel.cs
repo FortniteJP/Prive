@@ -99,15 +99,59 @@ public class UActorChannel : UChannel {
     /// </summary>
     private static bool EnvAttachPawn => Environment.GetEnvironmentVariable("BUS_ATTACH_PAWN") is "1";
 
-    /// <summary>Adds the six AttachmentReplication handles only when BUS_ATTACH_PAWN=1.</summary>
-    private static HashSet<string> WithPawnAttachment(HashSet<string> names) {
-        if (!EnvAttachPawn) return names;
+    /// <summary>
+    ///     Adds the six AttachmentReplication handles when BUS_ATTACH_PAWN=1, or - and this is the
+    ///     case that matters now - once this pawn has actually been attached to something.
+    ///
+    ///     RIDING A VEHICLE IS AN ATTACHMENT, and unlike the battle bus (where attaching the pawn is
+    ///     the wrong model outright) it is the right one: a passenger really is parented to the
+    ///     vehicle. So the handles have to be available without BUS_ATTACH_PAWN - but only for a pawn
+    ///     that is actually using them, because sending AttachParent=null to everyone caused a
+    ///     spawn-time camera roll. AActor.bAttachmentEverSet is what keeps that narrow, and its being
+    ///     STICKY is what lets the detach go out when the rider steps off.
+    /// </summary>
+    private static HashSet<string> WithPawnAttachment(HashSet<string> names, AActor pawn) {
+        if (!EnvAttachPawn && !pawn.bAttachmentEverSet) return names;
 
         names.UnionWith(new[] {
             "AttachmentReplication.AttachParent", "AttachmentReplication.LocationOffset",
             "AttachmentReplication.RelativeScale3D", "AttachmentReplication.RotationOffset",
             "AttachmentReplication.AttachSocket", "AttachmentReplication.AttachComponent"
         });
+
+        return names;
+    }
+
+    /// <summary>
+    ///     Adds PlayerNamePrivate only when REPLICATE_PLAYER_NAME=1, and it is OFF because A REAL
+    ///     SERVER DOES NOT SEND IT.
+    ///
+    ///     That is measured, not assumed. Project-Reboot-3.0's source writes PlayerNamePrivate in
+    ///     exactly one place - FortServerBotManagerAthena.cpp:56, overriding a BOT's name - never for
+    ///     a human player. And a controlled scan of its capture agrees: the three bytes "dev" appear
+    ///     in the C-&gt;S join URL (the positive control, proving a 3-byte name IS findable) and zero
+    ///     times in 7230 S-&gt;C packets across all eight bit alignments. The client already knows its
+    ///     own name - it sent it, as `?Name=dev`.
+    ///
+    ///     This server sent it anyway, on a speculative reading of a client stall message ("waiting
+    ///     to finish restarting for " with an empty trailing format argument, which is name-shaped).
+    ///     That stall was later fixed by the ClientRestart/quickbars work instead, so the reason had
+    ///     already expired.
+    ///
+    ///     THE COST OF SENDING IT WAS A WHOLE INVESTIGATION. The client mangles a name it does not
+    ///     normally receive - the HUD shows it with delta_i = (3i + D) mod 8 added, D varying per
+    ///     session - and AGameModeBase.PreCompensateName exists purely to cancel that out, with a
+    ///     constant that has to be re-guessed every session. The wire was proven correct by
+    ///     hand-decoding this server's own payload, so none of it was ever a serialization bug: it
+    ///     was this server doing something the real one does not, which is the same shape as the
+    ///     three bugs Rounds 144-151 chased.
+    ///
+    ///     Kept switchable rather than deleted because it is the only lever for testing what a
+    ///     replicated name does to a client, and because a real MULTI-player server must somehow
+    ///     tell you the OTHER players' names - a question this solo setup cannot answer.
+    /// </summary>
+    private static HashSet<string> WithPlayerName(HashSet<string> names) {
+        if (Environment.GetEnvironmentVariable("REPLICATE_PLAYER_NAME") is "1") names.Add("PlayerNamePrivate");
 
         return names;
     }
@@ -137,8 +181,27 @@ public class UActorChannel : UChannel {
             "TeamCount", "Aircrafts", "bAircraftIsLocked",
             // The storm (112/149/157). SafeZoneIndicator is the reference the client's map hangs off,
             // and all three change during a match, so all three have to be named here.
-            "SafeZonesStartTime", "SafeZoneIndicator", "SafeZonePhase"
+            "SafeZonesStartTime", "SafeZoneIndicator", "SafeZonePhase",
+            // The five management-actor references (32, 38, 105, 106, 185). Initial state - the
+            // actors are spawned in InitGameState, before any client exists - but listed here
+            // because that is also the per-tick diff list, and an actor that had to be respawned
+            // would otherwise never be re-announced. See Net/Actors/FortManagementActors.cs.
+            "PoiManager", "AnnouncementManager", "SpecialActorData", "ReplOverrideData",
+            "VolumeManager"
         },
+        // The six management actors themselves. Role and RemoteRole only, which is not a
+        // simplification: it is byte-for-byte what the real server's 29-bit blocks for
+        // FortSpecialActorReplicationInfo and FortClientAnnouncementManager contain. What they are
+        // FOR is being pointed at, not what they carry.
+        AFortManagementActor => new HashSet<string> { "RemoteRole", "Role" },
+        // A playlist mutator. Role and RemoteRole only, and bMutatorActive (16) deliberately absent -
+        // its CDO already carries the right value, so sending it would be MORE than the real server
+        // does. See AFortGameplayMutator.
+        AFortGameplayMutator => new HashSet<string> { "RemoteRole", "Role" },
+        // A parked vehicle. Role and RemoteRole only - where it is and which way it faces travel in
+        // the spawn header, and it has no driver, so bHasDriver (22) already matches its CDO. See
+        // AFortAthenaVehicle for why this is not an APawn here.
+        AFortAthenaVehicle => new HashSet<string> { "RemoteRole", "Role" },
         // The storm circle. Every one of these changes at each phase - the client interpolates from
         // Last to Next between the two shrink times - so the per-tick diff has to be walking them.
         AFortSafeZoneIndicator => new HashSet<string> {
@@ -158,7 +221,7 @@ public class UActorChannel : UChannel {
             "FlightStartTime", "FlightEndTime", "DropStartTime", "DropEndTime",
             "ReplicatedFlightTimestamp", "AircraftIndex"
         },
-        APlayerState => new HashSet<string> { "RemoteRole", "Role", "UniqueId", "PlayerNamePrivate", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
+        APlayerState => WithPlayerName(new HashSet<string> { "RemoteRole", "Role", "UniqueId", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
             "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]",
             // The plain-float health mirror (216-219), the second of the two paths a client could be
             // drawing a health bar from - see NativeRepLayouts for why both are sent. These CHANGE
@@ -171,9 +234,11 @@ public class UActorChannel : UChannel {
             "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
             "DeathInfo.Distance", "DeathInfo.bInitialized",
             "TeamIndex", "SquadId",
+            // Handle 69 - this player's team-private actor. See FortManagementActors.cs.
+            "PlayerTeamPrivate",
             // Aboard the battle bus (252). Starts true only when the aircraft phase is on, and is
             // cleared by ServerAttemptAircraftJump, so it changes mid-match and has to be here.
-            "bInAircraft" },
+            "bInAircraft" }),
         // AFortInventory's own InventoryType (handle 16). Its other Net property, Inventory
         // (FFortItemList), is a FastArraySerializer / Custom Delta property and cannot go through
         // FRepLayout at all - see NativeRepLayouts.InventoryProps.
@@ -240,7 +305,7 @@ public class UActorChannel : UChannel {
         // attempt had wrongly placed this). See NativeRepLayouts.PlayerControllerProps.
         // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
         // with no controller and no player state.
-        APawn => WithPawnAttachment(new HashSet<string> {
+        APawn pawnActor => WithPawnAttachment(new HashSet<string> {
             "RemoteRole", "Role", "Owner", "PlayerState", "Controller",
             // Handles 2 and 6 - where everyone ELSE sees this pawn. Without them a remote player is
             // frozen at the position their actor-spawn header carried; see Core.Math.FRepMovement.
@@ -282,7 +347,7 @@ public class UActorChannel : UChannel {
             // listed here or the per-tick diff would never compare them. bIsInAnyStorm is the one
             // that actually lights up the screen effect - see APawn.bIsInAnyStorm.
             "bIsNearSafeZoneEdge", "bIsInAnyStorm", "bIsInsideSafeZone"
-        }),
+        }, pawnActor),
         APlayerController => new HashSet<string> {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
             "PlayerState", "Pawn", "WorldInventory",
@@ -318,6 +383,12 @@ public class UActorChannel : UChannel {
             "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced",
             "ReplicatedLootTier", "bAlreadySearched", "SearchBounceData.SearchAnimationCount"
         },
+        // A supply llama. MUST be above the ABuildingActor arm, and not only because a llama IS one:
+        // that arm names ReplicatedDrawScale3D, BuildingAnimation and MinimalReplicationProxy.*,
+        // which are ABuildingSMActor handles in the 45-67 range that a llama's class simply does not
+        // have. Sending one is the BunchIsError-then-silent-disconnect failure - see
+        // NativeRepLayouts.SupplyDropLlamaProps. Looted (39) is the whole opened-state visual.
+        AFortAthenaSupplyDropLlama => new HashSet<string> { "RemoteRole", "Role", "Looted" },
         ABuildingActor => new HashSet<string> {
             "RemoteRole", "Role", "ReplicatedBuildingAttributeSet", "HealthBarIndicatorDifficultyRating",
             // The component the attribute set has to be reachable through before its OnRep can
@@ -446,7 +517,7 @@ public class UActorChannel : UChannel {
 
         // Everything the burst just wrote is now the client's view of this actor, so record it -
         // otherwise the first ReplicateActorUpdate would resend all of it as "changed".
-        NativeRepLayouts.Get(Actor).SeedShadowState(Actor, ReplicatedProperties, _shadowState);
+        NativeRepLayouts.Get(Actor).SeedShadowState(Actor, AllReplicatedProperties, _shadowState);
     }
 
     /// <summary>
@@ -492,13 +563,197 @@ public class UActorChannel : UChannel {
         "bIsSkydiving", "bIsParachuteOpen"
     };
 
+    /// <summary>
+    ///     UE's replication CONDITIONS (ELifetimeCondition), reduced to the four distinctions a
+    ///     server with one connection per player can actually make.
+    /// </summary>
+    private enum ERepCondition {
+        /// <summary>COND_None - every connection, every update.</summary>
+        None,
+
+        /// <summary>COND_OwnerOnly / COND_AutonomousOnly - only the connection that owns the actor.</summary>
+        OwnerOnly,
+
+        /// <summary>COND_SkipOwner - everybody except the owner.</summary>
+        SkipOwner,
+
+        /// <summary>
+        ///     COND_SimulatedOnly, COND_SimulatedOrPhysics, COND_SimulatedOnlyNoReplay - only where
+        ///     the actor is a SIMULATED proxy, which for this server means "not the owner", since
+        ///     nothing here simulates physics and the owner's own pawn is an autonomous proxy.
+        /// </summary>
+        SimulatedOnly,
+
+        /// <summary>COND_InitialOnly - in the open bunch and never again.</summary>
+        InitialOnly,
+
+        /// <summary>COND_ReplayOnly - never, here. There are no replay connections.</summary>
+        ReplayOnly
+    }
+
+    /// <summary>
+    ///     Replication conditions, QUOTED FROM THE ENGINE rather than derived. Every entry below is
+    ///     a DOREPLIFETIME_CONDITION line in UE 4.23's own GetLifetimeReplicatedProps:
+    ///
+    ///         ActorReplication.cpp:400  AActor      ReplicatedMovement          COND_SimulatedOrPhysics
+    ///         Pawn.cpp                  APawn       RemoteViewPitch             COND_SkipOwner
+    ///         Character.cpp:1489+       ACharacter  RepRootMotion               COND_SimulatedOnly
+    ///                                               ReplicatedBasedMovement     COND_SimulatedOnly
+    ///                                               ReplicatedMovementMode      COND_SimulatedOnly
+    ///                                               bIsCrouched                 COND_SimulatedOnly
+    ///                                               bProxyIsJumpForceApplied    COND_SimulatedOnly
+    ///                                               AnimRootMotionTranslationScale COND_SimulatedOnly
+    ///                                               ReplicatedServerLastTransformUpdateTimeStamp COND_SimulatedOnlyNoReplay
+    ///                                               ReplayLastTransformUpdateTimeStamp COND_ReplayOnly
+    ///         PlayerController.cpp      APlayerController TargetViewRotation    COND_OwnerOnly
+    ///                                                     SpawnLocation         COND_OwnerOnly
+    ///         PlayerState.cpp           APlayerState Ping                       COND_SkipOwner
+    ///                                                PlayerId / bIsABot /
+    ///                                                bIsInactive / UniqueId     COND_InitialOnly
+    ///         GameStateBase.cpp         AGameStateBase GameModeClass            COND_InitialOnly
+    ///         GameState.cpp             AGameState     ElapsedTime              COND_InitialOnly
+    ///
+    ///     WHY THIS IS WORTH DOING AS A TABLE rather than one property at a time: getting a condition
+    ///     wrong does not under-replicate, it ACTIVELY BREAKS THE GAME, and this project has already
+    ///     paid for that twice. The glider bug was exactly this - the owner's own bIsParachuteOpen
+    ///     being echoed back at it a tick later and switching itself off, leaving the player standing
+    ///     upright and floating. That was found by playing; the engine had stated the rule all along.
+    ///
+    ///     A key matches a property and EVERYTHING UNDER IT: "RepRootMotion" covers
+    ///     RepRootMotion.Location and its eleven siblings, because a condition applies to the whole
+    ///     struct, not to the leaves FRepLayout flattens it into.
+    ///
+    ///     PlayerID, not PlayerId - that is this project's spelling (see NativeRepLayouts). The two
+    ///     Fortnite entries at the end are NOT quoted: their conditions cannot be read from anything
+    ///     available here, and the reasoning for them is in SimulatedOnlyProperties' own comment.
+    /// </summary>
+    private static readonly Dictionary<string, ERepCondition> LifetimeConditions = new() {
+        ["ReplicatedMovement"] = ERepCondition.SimulatedOnly,
+        ["RemoteViewPitch"] = ERepCondition.SkipOwner,
+        ["RepRootMotion"] = ERepCondition.SimulatedOnly,
+        ["ReplicatedBasedMovement"] = ERepCondition.SimulatedOnly,
+        ["ReplicatedMovementMode"] = ERepCondition.SimulatedOnly,
+        ["bIsCrouched"] = ERepCondition.SimulatedOnly,
+        ["bProxyIsJumpForceApplied"] = ERepCondition.SimulatedOnly,
+        ["AnimRootMotionTranslationScale"] = ERepCondition.SimulatedOnly,
+        ["ReplicatedServerLastTransformUpdateTimeStamp"] = ERepCondition.SimulatedOnly,
+        ["ReplayLastTransformUpdateTimeStamp"] = ERepCondition.ReplayOnly,
+        ["TargetViewRotation"] = ERepCondition.OwnerOnly,
+        ["SpawnLocation"] = ERepCondition.OwnerOnly,
+        ["Ping"] = ERepCondition.SkipOwner,
+        ["PlayerID"] = ERepCondition.InitialOnly,
+        ["bIsABot"] = ERepCondition.InitialOnly,
+        ["bIsInactive"] = ERepCondition.InitialOnly,
+        ["UniqueId"] = ERepCondition.InitialOnly,
+        ["GameModeClass"] = ERepCondition.InitialOnly,
+        ["ElapsedTime"] = ERepCondition.InitialOnly,
+
+        // Fortnite's own, derived rather than quoted - see SimulatedOnlyProperties.
+        ["bIsSkydiving"] = ERepCondition.SimulatedOnly,
+        ["bIsParachuteOpen"] = ERepCondition.SimulatedOnly
+    };
+
+    /// <summary>
+    ///     Checks every key in <see cref="LifetimeConditions"/> against the property names the
+    ///     layouts actually contain, and says so if one matches nothing.
+    ///
+    ///     A NAME-KEYED TABLE FAILS SILENTLY, which is the whole reason this exists: a misspelled or
+    ///     since-renamed key simply never matches, the condition is never applied, and the property
+    ///     goes to a connection that should not have it - which is not a missing feature but an
+    ///     actively broken one (the glider bug). `PlayerId` vs `PlayerID` was exactly one such
+    ///     near-miss, caught while writing the table only because it was checked by hand.
+    ///
+    ///     Same shape as NativeClassNetCache's FieldNetIndex check, and called from the same place.
+    /// </summary>
+    public static void VerifyLifetimeConditions() {
+        var known = NativeRepLayouts.AllPropertyNames.ToHashSet();
+
+        var unmatched = LifetimeConditions.Keys
+            .Where(key => !known.Contains(key) && !known.Any(name => name.StartsWith(key + ".", StringComparison.Ordinal)))
+            .ToArray();
+
+        if (unmatched.Length == 0) {
+            Console.WriteLine($"UActorChannel: all {LifetimeConditions.Count} replication conditions match a real property.");
+            return;
+        }
+
+        Console.WriteLine("UActorChannel: REPLICATION CONDITION KEYS MATCH NOTHING and are therefore doing " +
+                          "nothing - the properties they name will go to connections that should not get them: " +
+                          string.Join(", ", unmatched));
+    }
+
+    /// <summary>The condition on a property, following a dotted leaf back to the struct it belongs to.</summary>
+    private static ERepCondition ConditionFor(string propertyName) {
+        if (LifetimeConditions.TryGetValue(propertyName, out var exact)) return exact;
+
+        var dot = propertyName.IndexOf('.');
+        return dot > 0 && LifetimeConditions.TryGetValue(propertyName[..dot], out var onStruct)
+            ? onStruct
+            : ERepCondition.None;
+    }
+
+    /// <summary>Whether a property may go out in the per-tick DIFF to this connection.</summary>
+    private bool AllowedInUpdate(string propertyName) => ConditionFor(propertyName) switch {
+        ERepCondition.None => true,
+        ERepCondition.OwnerOnly => IsNetOwner,
+        ERepCondition.SkipOwner => !IsNetOwner,
+        ERepCondition.SimulatedOnly => !IsNetOwner,
+        // Sent once in the open bunch and never compared again - that is what "initial" means.
+        ERepCondition.InitialOnly => false,
+        ERepCondition.ReplayOnly => false,
+        _ => true
+    };
+
+    /// <summary>Whether a property may go out in the OPEN bunch to this connection.</summary>
+    private bool AllowedAtOpen(string propertyName) => ConditionFor(propertyName) switch {
+        ERepCondition.None => true,
+        ERepCondition.OwnerOnly => IsNetOwner,
+        ERepCondition.SkipOwner => !IsNetOwner,
+        ERepCondition.SimulatedOnly => !IsNetOwner,
+        ERepCondition.InitialOnly => true,
+        ERepCondition.ReplayOnly => false,
+        _ => true
+    };
+
+    /// <summary>
+    ///     The actor's <see cref="AActor.ReplicatedPropertySetRevision"/> when this cache was built.
+    ///
+    ///     THE CACHE HAD NO INVALIDATION AND THAT SILENTLY DEFEATED A FEATURE. The set is computed
+    ///     once, at channel open; the vehicle-riding work then made the pawn's set depend on
+    ///     AActor.bAttachmentEverSet, which by definition turns true LATER - so the six
+    ///     AttachmentReplication handles were still absent when the player got on, the diff never
+    ///     compared them, and nothing at all went out. The server logged a successful attach and the
+    ///     client heard nothing, which is exactly the failure mode that is hardest to read.
+    ///
+    ///     An actor bumps its revision when something that changes its property SET changes, and this
+    ///     rebuilds. Not a per-tick recompute: GetInitialReplicatedProperties has side effects (the
+    ///     REP_DISABLE report writes to the console and a file) and the diff pass runs every tick.
+    /// </summary>
+    private int _replicatedPropertiesRevision = -1;
+
     private HashSet<string> ReplicatedProperties {
         get {
-            _replicatedProperties ??= GetInitialReplicatedProperties(Actor!);
-            if (!IsNetOwner) return _replicatedProperties;
+            if (_replicatedProperties == null || _replicatedPropertiesRevision != Actor!.ReplicatedPropertySetRevision) {
+                _replicatedPropertiesRevision = Actor!.ReplicatedPropertySetRevision;
+                _replicatedProperties = GetInitialReplicatedProperties(Actor);
+                _replicatedPropertiesForOwner = null;
+                _initiallySentProperties = null;
+            }
 
             return _replicatedPropertiesForOwner ??=
-                _replicatedProperties.Where(name => !SimulatedOnlyProperties.Contains(name)).ToHashSet();
+                _replicatedProperties.Where(AllowedInUpdate).ToHashSet();
+        }
+    }
+
+    /// <summary>
+    ///     Everything this channel replicates at all, BEFORE conditions. The shadow is seeded from
+    ///     this rather than from the filtered set, so a property that is only ever sent at open (a
+    ///     COND_InitialOnly one) is still recorded as "the client has this".
+    /// </summary>
+    private HashSet<string> AllReplicatedProperties {
+        get {
+            _ = ReplicatedProperties;
+            return _replicatedProperties!;
         }
     }
 
@@ -517,7 +772,10 @@ public class UActorChannel : UChannel {
     ///     - which is true, because it is the value the client built the actor with.
     /// </summary>
     private HashSet<string> InitiallySentProperties =>
-        _initiallySentProperties ??= ReplicatedProperties.Except(NeverSentAtOpen).ToHashSet();
+        _initiallySentProperties ??= AllReplicatedProperties
+            .Where(AllowedAtOpen)
+            .Except(NeverSentAtOpen)
+            .ToHashSet();
 
     private HashSet<string>? _initiallySentProperties;
 
@@ -633,6 +891,7 @@ public class UActorChannel : UChannel {
         // Custom deltas go in their own bunch, so an actor with no changed RepLayout property can
         // still have a changed fast array. The same is true one level down, for a component's.
         var wroteSomething = ReplicateCustomDeltaUpdate();
+        wroteSomething |= ReplicateEquippedWeapon();
         wroteSomething |= ReplicateAbilitySystemComponent();
         wroteSomething |= ReplicateMovementSet();
         wroteSomething |= ReplicatePlayerAttrSet();
@@ -1325,7 +1584,205 @@ public class UActorChannel : UChannel {
         return true;
     }
 
+    /// <summary>Last weapon this CONNECTION was told the pawn is holding - see ReplicateEquippedWeapon.</summary>
+    private AFortWeapon? _equipNotifiedWeapon;
+
+    private bool _hasEquipNotified;
+
+    /// <summary>
+    ///     AFortPawn::ClientInternalEquipWeapon(AFortWeapon*), sent whenever this pawn's CurrentWeapon
+    ///     CHANGES - which is what it always should have been keyed on.
+    ///
+    ///     IT USED TO BE SENT FROM ONE PLACE ONLY: the moment that weapon's own actor channel opened
+    ///     (UNetDriver.OpenChannelsForNewlyRelevantActors). That works for a weapon being equipped for
+    ///     the first time and does nothing at all for a RE-equip, because the channel is already open
+    ///     and never opens again. So switching back to a weapon the client had already seen sent
+    ///     NOTHING - and the code's own note from 2026-08-29 says exactly what that costs:
+    ///
+    ///         "leaving a building tool for the pickaxe/a gun left the client stuck showing the ghost
+    ///          AND the build-mode arm pose forever ... skipping it for a normal weapon left the
+    ///          client with no signal to tear down the OLD equip's state, only to raise the new one."
+    ///
+    ///     That is the build ghost at spawn. The client picks a building tool by itself on joining,
+    ///     the server equips it, ClientActivateSlot then sends the client back to the pickaxe - and
+    ///     the pickaxe's channel had opened long before, so nothing told the client to tear the
+    ///     building tool's state down. Ghost on screen, pickaxe in hand.
+    ///
+    ///     Per CONNECTION, not per weapon, which the old flag could not be: a flag on the weapon is
+    ///     consumed by whichever connection reaches it first, so a second client would never be told.
+    ///
+    ///     Waits for the weapon's own channel: the parameter is an object reference, and sending it
+    ///     before that actor has a NetGUID makes the client log "Unable to resolve RPC parameter ...
+    ///     Parameter Weap" and drop the call. Returning without recording anything means the next
+    ///     tick simply tries again.
+    /// </summary>
+    private bool ReplicateEquippedWeapon() {
+        if (Actor is not APawn pawn || Connection == null) return false;
+
+        var weapon = pawn.CurrentWeapon;
+        if (_hasEquipNotified && ReferenceEquals(_equipNotifiedWeapon, weapon)) return false;
+
+        // Nothing held: there is no ClientInternalEquipWeapon(null) to send, so just remember it so
+        // the next real equip counts as a change.
+        if (weapon == null) {
+            _equipNotifiedWeapon = null;
+            _hasEquipNotified = true;
+            return false;
+        }
+
+        if (Connection.FindActorChannel(weapon) == null) return false;
+
+        _equipNotifiedWeapon = weapon;
+        _hasEquipNotified = true;
+
+        // SENT FOR EVERY EQUIP, INCLUDING ONES THE CLIENT ASKED FOR ITSELF.
+        //
+        // It was briefly suppressed for client-initiated equips, on a misreading of a log: a run of
+        // wall -> pickaxe -> wall -> pickaxe was taken for the server and client fighting over the
+        // focused quickbar slot, when the tail of that same log (assault rifle, then the edit tool)
+        // shows it was a person cycling their quickbar by hand. Suppressing it removed the join-time
+        // ghost and ALSO removed building entirely - because this RPC is what RAISES the build
+        // preview when a building tool is equipped, not just what tears it down when one is put
+        // away. Both directions need it.
+        SendObjectRpc("ClientInternalEquipWeapon", weapon);
+        Console.WriteLine($"UActorChannel.ReplicateEquippedWeapon: sent ClientInternalEquipWeapon({weapon.GetFName()}) " +
+                          $"on ChIndex={ChIndex}");
+
+        return true;
+    }
+
+    /// <summary>Which RPC names RPC_DUMP has already dumped - one sample each is the point.</summary>
+    private static readonly HashSet<string> DumpedRpcPayloads = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    ///     RPC_DUMP=&lt;Name&gt;[,&lt;Name&gt;...] - print one raw sample of a named incoming RPC's payload as
+    ///     hex, before any declared parameter layout touches it, and leave the read position exactly
+    ///     where it found it.
+    ///
+    ///     The point is to stop guessing. A parameter layout derived from an SDK header is a
+    ///     hypothesis, and a wrong one about a length-prefixed field does not produce a wrong value,
+    ///     it produces an overrun - which says "wrong" but not "wrong how". A hex sample says how.
+    ///
+    ///     Bits, not just bytes: the payload starts at an arbitrary bit offset inside the bunch, so
+    ///     the dump is taken by re-reading bits from fieldStart and packing them LSB-first, which is
+    ///     the order UE writes them in. A dump that has been byte-aligned by accident is a dump of
+    ///     something else - see [[afortonlinebeacon-status]] Round 141, where exactly that mistake
+    ///     made a whole packet scan come back empty.
+    /// </summary>
+    private void DumpRawRpcPayload(FInBunch bunch, string fieldName, long fieldStart, long fieldEnd,
+                                   string? reason = null) {
+        // Asked for by name, OR taken automatically because the declared layout just failed on it.
+        // The automatic case is the important one: a dump is never more wanted than at the moment a
+        // decode goes wrong, and making that cost a second run with an env var set is a wasted round
+        // trip - the evidence should be captured the first time the problem happens.
+        if (reason == null) {
+            if (Environment.GetEnvironmentVariable("RPC_DUMP") is not { Length: > 0 } wanted) return;
+            if (!wanted.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                       .Contains(fieldName, StringComparer.OrdinalIgnoreCase)) return;
+        }
+
+        if (!DumpedRpcPayloads.Add(fieldName)) return;
+
+        var numBits = (int) Math.Max(0, fieldEnd - fieldStart);
+        var resumeAt = bunch.Pos;
+
+        var bytes = new byte[(numBits + 7) / 8];
+        bunch.Pos = fieldStart;
+
+        for (var i = 0; i < numBits; i++) {
+            if (bunch.ReadBit()) bytes[i / 8] |= (byte) (1 << (i % 8));
+        }
+
+        bunch.Pos = resumeAt;
+
+        Console.WriteLine($"UActorChannel.DumpRawRpcPayload: {fieldName} on ChIndex={ChIndex} - {numBits} bits" +
+                          (reason == null ? "" : $" ({reason})") +
+                          $"{Environment.NewLine}    LSB-first hex={Convert.ToHexString(bytes)}");
+
+        foreach (var text in FindPrintableRuns(bytes, numBits)) Console.WriteLine($"    {text}");
+    }
+
+    /// <summary>
+    ///     Every readable ASCII run in a raw payload, WITH THE BIT OFFSET IT STARTS AT, searched at
+    ///     all eight bit alignments.
+    ///
+    ///     A plain byte-aligned ASCII column is close to useless on a bit-packed payload and this is
+    ///     not a hypothetical complaint: the first level-visibility dump rendered as
+    ///     "....BU...r..V..D.V..." and looked like noise, when in fact it contained two clean paths
+    ///     starting at bits 36 and 557 - neither a multiple of eight. Finding them by hand took a
+    ///     separate script. Doing the shift search here means the next payload gives up its strings
+    ///     in the log line itself.
+    ///
+    ///     The OFFSET is the valuable half of the output. Knowing a string starts at bit 36 is what
+    ///     lets you work out what the 36 bits in front of it are, which is the actual question.
+    /// </summary>
+    private static IEnumerable<string> FindPrintableRuns(byte[] bytes, int numBits, int minLength = 6) {
+        bool Bit(int i) => (bytes[i / 8] & (1 << (i % 8))) != 0;
+
+        int ByteAt(int bitPos) {
+            var value = 0;
+            for (var k = 0; k < 8; k++)
+                if (Bit(bitPos + k)) value |= 1 << k;
+            return value;
+        }
+
+        var run = new System.Text.StringBuilder();
+        var runStart = 0;
+
+        for (var start = 0; start + 8 <= numBits; start++) {
+            var c = ByteAt(start);
+
+            if (c is >= 0x20 and < 0x7F) {
+                if (run.Length == 0) runStart = start;
+                run.Append((char) c);
+                // A printable byte found at bit N is also findable at N+8, N+16 ... so only advance
+                // one byte at a time WITHIN a run; the outer loop still tries every alignment.
+                start += 7;
+                continue;
+            }
+
+            if (run.Length >= minLength) yield return $"bit {runStart,4}: \"{run}\"";
+            run.Clear();
+        }
+
+        if (run.Length >= minLength) yield return $"bit {runStart,4}: \"{run}\"";
+    }
+
     public void SendClientRestart(APawn pawn) => SendPawnRpc("ClientRestart", pawn);
+
+    /// <summary>
+    ///     AFortPlayerController::ClientActivateSlot(EFortQuickBars InQuickBar, int32 Slot,
+    ///     float ActivateDelay, bool bUpdatePreviousFocusedSlot, bool bForceExecution) - tells the
+    ///     client WHICH QUICKBAR SLOT to hold.
+    ///
+    ///     WHY IT IS NEEDED. Items go out with OrderIndex = -1 ("no opinion, place it yourself"),
+    ///     which is what a real server sends - so the client builds its own quickbars and then picks
+    ///     a slot to start on. Left to itself this client picks a BUILDING TOOL: the server log shows
+    ///     it asking, unprompted, moments after joining -
+    ///
+    ///         ServerExecuteInventoryItem ItemGuid=b347030d... ('BuildingItemData_Wall'),
+    ///                                    currently holding 69d18c0c... (the pickaxe)
+    ///
+    ///     - and the server duly equips it, which is why a building GHOST is on screen at spawn while
+    ///     the player is holding, and can swing, the pickaxe. The server was not doing anything
+    ///     wrong; nothing had ever told the client which slot to be on.
+    ///
+    ///     ALL FIVE PARAMETERS GO OUT AT THEIR DEFAULTS, and that is not laziness - it is what the
+    ///     real server sends. The PR3.0 capture's ClientActivateSlot (field 109 on the
+    ///     PlayerController, packet #8050) is FIVE BITS of payload, which is exactly one bit per
+    ///     parameter with every one of them zero. That encoding is the same one
+    ///     SendClientReportDamagedResourceBuilding uses and had verified: a presence bit before each
+    ///     non-bool parameter, and for a bool the single bit IS the value. Defaults mean
+    ///     EFortQuickBars 0 (Primary) and Slot 0 - the pickaxe.
+    /// </summary>
+    public void SendClientActivateSlot() =>
+        SendRpc("ClientActivateSlot", writer => {
+            writer.WriteBit(false); // InQuickBar absent -> EFortQuickBars::Primary
+            writer.WriteBit(false); // Slot absent -> 0
+            writer.WriteBit(false); // ActivateDelay absent -> 0.0f
+            writer.WriteBit(false); // bUpdatePreviousFocusedSlot
+            writer.WriteBit(false); // bForceExecution
+        });
 
     /// <summary>
     ///     APlayerController::ClientRetryClientRestart - the server's half of the possession retry
@@ -1622,6 +2079,45 @@ public class UActorChannel : UChannel {
             writer.WriteBit(true);
             rotation.NetSerializeWrite(writer);
             writer.WriteBit(bResetCamera);
+        });
+
+    /// <summary>
+    ///     AFortPlayerController::ClientSetSpectatorCamera(FVector CameraLocation,
+    ///     FRotator CameraRotation) - where the camera sits between joining and boarding the bus.
+    ///
+    ///     GROUND TRUTH from the PR3.0 capture (decoded_new.txt #215): the real server sends this at
+    ///     LOGIN, in the same bunch as ClientCapBandwidth and immediately BEFORE the first
+    ///     ClientGotoState. That ordering is the whole point - ClientGotoState(Spectating) puts the
+    ///     client in a spectator state, and this is what that state's camera is aimed at. This server
+    ///     sent the GotoState and never the camera.
+    ///
+    ///     The capture's 117 bits are the check on the encoding and they land exactly:
+    ///
+    ///         1  presence bit for CameraLocation (one per non-bool PARAMETER)
+    ///        96  the FVector's three floats - a PLAIN FVector has no NetSerialize in 4.23 (only the
+    ///            FVector_NetQuantize family does), so FRepLayout flattens it to three float leaves
+    ///            and leaves are NOT individually presence-bitted
+    ///         1  presence bit for CameraRotation
+    ///         3  FRotator::SerializeCompressedShort's per-axis presence bits
+    ///        16  the one non-zero axis
+    ///       ---
+    ///       117
+    ///
+    ///     - which also says the capture's rotation was yaw-only, i.e. level. This sends whatever it
+    ///     is given and lets FRotator.NetSerializeWrite decide how many axes are non-zero, so a
+    ///     pitched camera simply costs 16 bits more.
+    ///
+    ///     UNTESTED against a live client.
+    /// </summary>
+    public void SendClientSetSpectatorCamera(FVector cameraLocation, FRotator cameraRotation) =>
+        SendRpc("ClientSetSpectatorCamera", writer => {
+            writer.WriteBit(true);              // CameraLocation is present
+            writer.WriteFloat(cameraLocation.X);
+            writer.WriteFloat(cameraLocation.Y);
+            writer.WriteFloat(cameraLocation.Z);
+
+            writer.WriteBit(true);              // CameraRotation is present
+            cameraRotation.NetSerializeWrite(writer);
         });
 
     /// <summary>
@@ -2168,6 +2664,17 @@ public class UActorChannel : UChannel {
             var fieldEnd = Math.Min(fieldStart + (long) fieldNumBits, payloadEnd);
             var fieldName = classCache.GetFromIndex(repIndex)?.Name ?? "?";
 
+            // RPC_DUMP=<Name>[,<Name>...] - print the RAW payload of a named incoming RPC, once each,
+            // as hex, before anything tries to interpret it.
+            //
+            // The counterpart to REPLAYOUT_PROBE_HANDLE, and it exists for the same reason: when a
+            // parameter layout is a guess, the only way to stop guessing is to look at the bytes.
+            // ServerUpdateLevelVisibility is what prompted it - its declared layout (two FNames and
+            // a bit) read a string length of nonsense and walked off the end of the bunch, and no
+            // amount of re-reasoning about UPackageMap::StaticSerializeName was going to settle
+            // which of the several plausible framings 10.40 actually uses.
+            DumpRawRpcPayload(bunch, fieldName, fieldStart, fieldEnd);
+
             if (rpcTable != null && rpcTable.TryGetValue(fieldName, out var rpcDef)) {
                 try {
                     var values = FRpcReader.ReadParams(bunch, rpcDef.Params);
@@ -2182,12 +2689,15 @@ public class UActorChannel : UChannel {
                             Console.WriteLine($"UActorChannel.ReceivedBunch: {fieldName} decoded {bunch.Pos - fieldStart} " +
                                               $"of {fieldNumBits} bits - {leftover} left over. The declared parameter " +
                                               "layout does not match the wire; treat the decoded values as suspect.");
+                            DumpRawRpcPayload(bunch, fieldName, fieldStart, fieldEnd,
+                                              $"{leftover} bits left over after the declared layout");
                         }
                     }
 
                     rpcDef.Invoke(target as AActor ?? Actor!, values);
                 } catch (Exception ex) {
-                    Console.WriteLine($"UActorChannel.ReceivedBunch: RPC {fieldName} failed to decode on ChIndex={ChIndex} Actor={Actor?.GetFName()}: {ex}");
+                    Console.WriteLine($"UActorChannel.ReceivedBunch: RPC {fieldName} failed to decode on ChIndex={ChIndex} Actor={Actor?.GetFName()}: {ex.GetType().Name}: {ex.Message}");
+                    DumpRawRpcPayload(bunch, fieldName, fieldStart, fieldEnd, "the declared layout threw while reading it");
                 }
             } else if (subObject != null) {
                 // Not gated on verbose: a component field arrives only when the player actually does
@@ -2209,7 +2719,11 @@ public class UActorChannel : UChannel {
                 // did (ServerCreateBuildingActor, ServerSetPlayerBuildableClass, ...) - pure log
                 // volume with nothing left to learn from it. Everything else stays unconditional.
                 if (fieldName != "ServerUpdateCamera") {
-                    Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits) - no handler");
+                    // "no NativeRpcHandlers entry", NOT "nothing happens" - and the difference has
+                    // already misled a reading of this log once. HandlePossessionRpc runs for EVERY
+                    // field by name, whether or not the table knows it, which is how
+                    // ServerAcknowledgePossession is handled while still printing this line.
+                    Console.WriteLine($"UActorChannel.ReceivedBunch:   field[{repIndex}]={fieldName} on ChIndex={ChIndex} Actor={Actor?.GetFName()} ({fieldNumBits} payload bits) - no NativeRpcHandlers entry (may still be handled by name)");
                 }
             }
 

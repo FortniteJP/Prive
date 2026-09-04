@@ -187,4 +187,11 @@ public class APlayerState : AInfo {
     ///     waiting on parts nothing ever sent.
     /// </summary>
     public UObject?[] CharacterParts { get; } = new UObject?[6];
+
+    /// <summary>
+    ///     AFortPlayerState::PlayerTeamPrivate - wire handle 69, 0x0618. The actor holding the
+    ///     things only this player's TEAM may see. Shared between everyone on the team; handed out
+    ///     by AGameModeBase.GetOrCreateTeamPrivateInfo. See Net/Actors/FortManagementActors.cs.
+    /// </summary>
+    public AFortTeamPrivateInfo? PlayerTeamPrivate { get; set; }
 }

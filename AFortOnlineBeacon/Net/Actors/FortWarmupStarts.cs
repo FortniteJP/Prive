@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -20,6 +20,18 @@ internal static partial class FortWarmupStarts {
 
     /// <summary>How many starts there are - one per X,Y,Z triple.</summary>
     public static int Count => Starts.Length / 3;
+
+    /// <summary>
+    ///     The first start, used as the spawn island's anchor by the SPAWN_AT_WARMUP debug modes in
+    ///     FortSupplyLlamas and FortVehicleSpawns.
+    ///
+    ///     The FIRST rather than an average: these are real authored player starts, so any one of
+    ///     them is a place a player can actually stand, whereas the centroid of 121 of them is a
+    ///     point nothing vouches for - it could be off the island edge or inside a building.
+    /// </summary>
+    public static FVector Anchor => Count == 0
+        ? new FVector()
+        : new FVector { X = Starts[0], Y = Starts[1], Z = Starts[2] };
 
     /// <summary>
     ///     The next start to use, cycling. Deliberately not random: a fixed order makes a test run

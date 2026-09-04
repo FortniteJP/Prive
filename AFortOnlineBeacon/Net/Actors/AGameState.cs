@@ -186,6 +186,28 @@ public class AGameState : AInfo {
     ///     server did not.
     /// </summary>
     public FFastArraySerializer<FGameMemberInfo> GameMemberInfoArray { get; } = new();
+
+    // ------------------------------------------------------------------------------------------
+    // The five management-actor references. All ObjectRefs, all null on this server until now, and
+    // all filled in by AGameModeBase.InitGameState - see Net/Actors/FortManagementActors.cs for
+    // what each one is and why a null is worse than an empty one. Handles from
+    // `Tools/RepHandles/rep_handles.py AFortGameStateAthena`.
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>AFortGameState::PoiManager - handle 32, 0x02E0.</summary>
+    public AFortPoiManager? PoiManager { get; set; }
+
+    /// <summary>AFortGameState::AnnouncementManager - handle 38, 0x0378.</summary>
+    public AFortClientAnnouncementManager? AnnouncementManager { get; set; }
+
+    /// <summary>AFortGameStateAthena::SpecialActorData - handle 105, 0x1190.</summary>
+    public AFortSpecialActorReplicationInfo? SpecialActorData { get; set; }
+
+    /// <summary>AFortGameStateAthena::ReplOverrideData - handle 106, 0x1198.</summary>
+    public AFortPropertyOverrideReplShared? ReplOverrideData { get; set; }
+
+    /// <summary>AFortGameStateAthena::VolumeManager - handle 185, 0x1F88.</summary>
+    public AFortVolumeManager? VolumeManager { get; set; }
 }
 
 /// <summary>

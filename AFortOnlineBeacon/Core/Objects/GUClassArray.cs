@@ -112,7 +112,30 @@ public class GUClassArray {
         // exports `/Game/Athena/SafeZone/SafeZoneIndicator.Default__SafeZoneIndicator_C` as the
         // spawned actor's archetype. A Blueprint, so it relies on MustBeMappedGuids for the client's
         // async load, exactly as TODM_BR and the aircraft do.
-        [typeof(AFortSafeZoneIndicator)] = "/Game/Athena/SafeZone/SafeZoneIndicator.SafeZoneIndicator_C"
+        [typeof(AFortSafeZoneIndicator)] = "/Game/Athena/SafeZone/SafeZoneIndicator.SafeZoneIndicator_C",
+        // The six management actors - see Net/Actors/FortManagementActors.cs for what they are for.
+        // Every path here is copied out of the PR3.0 capture's own archetype exports rather than
+        // assembled from a class name, because the capture is the stronger evidence of the two: it
+        // is what the real server actually put on the wire, and it is what the client resolved.
+        //
+        //   #302 Default__FortPropertyOverrideReplShared   #318 Default__FortPoiManager
+        //   #320 Default__FortSpecialActorReplicationInfo
+        //   #321 /Game/Athena/BuildingActors/FortVolumeManager_BP.Default__FortVolumeManager_BP_C
+        //   #321 Default__FortClientAnnouncementManager  #328 Default__FortTeamPrivateInfo
+        //
+        // Five are native (always resident, nothing to stream); FortVolumeManager_BP is a Blueprint
+        // and relies on MustBeMappedGuids the same way TODM_BR and the aircraft above do.
+        [typeof(AFortPoiManager)] = "/Script/FortniteGame.FortPoiManager",
+        [typeof(AFortClientAnnouncementManager)] = "/Script/FortniteGame.FortClientAnnouncementManager",
+        [typeof(AFortSpecialActorReplicationInfo)] = "/Script/FortniteGame.FortSpecialActorReplicationInfo",
+        [typeof(AFortPropertyOverrideReplShared)] = "/Script/FortniteGame.FortPropertyOverrideReplShared",
+        [typeof(AFortTeamPrivateInfo)] = "/Script/FortniteGame.FortTeamPrivateInfo",
+        [typeof(AFortVolumeManager)] = "/Game/Athena/BuildingActors/FortVolumeManager_BP.FortVolumeManager_BP_C",
+        // A supply llama. Straight out of the PR3.0 capture's archetype export (packet #320,
+        // `/Game/Athena/SupplyDrops/Llama/AthenaSupplyDrop_Llama.Default__AthenaSupplyDrop_Llama_C`),
+        // and named again by DefaultMapInfo's LlamaClass. A Blueprint, so it rides MustBeMappedGuids
+        // like TODM_BR - see FortSupplyLlamas and AFortAthenaSupplyDropLlama.
+        [typeof(AFortAthenaSupplyDropLlama)] = "/Game/Athena/SupplyDrops/Llama/AthenaSupplyDrop_Llama.AthenaSupplyDrop_Llama_C"
     };
 
     public static UClass StaticClass<T>() => StaticClass(typeof(T));

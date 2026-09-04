@@ -84,6 +84,11 @@ public abstract class UNetDriver {
 
     public virtual bool Init(FNetworkNotify notify) {
         Notify = notify;
+        // Run the FieldNetIndex cross-check now, at startup, rather than whenever the first client
+        // happens to touch a class cache - a wrong index is a whole-protocol fault and belongs in
+        // the first few lines of the log, not buried after a join. See its doc comment.
+        NativeClassNetCache.EnsureVerified();
+        UActorChannel.VerifyLifetimeConditions();
         return true;
     }
     
@@ -234,12 +239,114 @@ public abstract class UNetDriver {
         var viewer = connection.PlayerController;
         if (viewer == null || connection.FindActorChannel(viewer) == null) return 0;
 
+        // POSSESSION COMES FIRST, AND NOTHING ELSE GOES OUT UNTIL IT IS DONE.
+        //
+        // This cost a long hunt (Rounds 144-147). Adding the supply llamas and the vehicles broke
+        // JUMPING - and also collision with every building and prop, and picking items up - and the
+        // cause was not the actors at all, it was WHEN their channels opened. Two console logs, one
+        // working and one broken, differ at exactly one place:
+        //
+        //   working:  pawn bunch -> ClientRestart -> ClientSetRotation -> (quiet, acks)
+        //   broken:   pawn bunch -> ClientRestart -> ClientSetRotation -> 7 vehicle channels, each
+        //                                                                carrying its own Blueprint
+        //                                                                must-be-mapped GUID
+        //
+        // The pawn's own bunch is HELD client-side while PlayerPawn_Athena_C and DefaultGlider async
+        // load (`AppendMustBeMappedGuids: ChIndex=17 count=2 guids=[123,127]`). Dropping seven more
+        // Blueprint class loads into that same window is what left the client with a pawn it had
+        // possessed but not finished: visible, moved by its own prediction, and with none of the
+        // state that collision and jumping need. Note the total channel count was almost the same in
+        // both runs (37 vs 30) - it is not volume, it is WHAT lands in the possession window.
+        //
+        // Real UE never has this problem because ServerReplicateActors PRIORITISES: FActorPriority
+        // sorts every relevant actor per connection and the owner's own actors sort to the front.
+        // This port has no priority sort at all, so this is the smallest faithful stand-in for one -
+        // hold everything that is not the viewer's own until the client says it is ready.
+        //
+        // TWO SIGNALS, AND THE CLIENT'S OWN IS THE BETTER ONE. ServerAcknowledgePossession means
+        // "I have taken the pawn"; ServerClientPawnLoaded(true) means "I have finished LOADING and
+        // spawning it", which is precisely the window that was being trampled - the pawn's bunch sits
+        // queued client-side while its Blueprint async loads, and possession can be acknowledged
+        // before that finishes. Either one satisfies the gate, because a client that never sends
+        // ServerClientPawnLoaded must not be able to stall this forever.
+        var possessionComplete = viewer.Pawn == null
+                                 || viewer.bClientPawnLoaded
+                                 || viewer.AcknowledgedPawn == viewer.Pawn;
+
+        // And a per-tick cap even after that, so a burst of newly relevant actors can never again
+        // arrive as one indivisible wall of channel opens. Real UE bounds this by bandwidth; this
+        // bounds it by count, which is the same idea with the information available here.
+        var budget = int.TryParse(Environment.GetEnvironmentVariable("NEWLY_RELEVANT_PER_TICK"), out var cap)
+            ? cap
+            : 4;
+
         var opened = 0;
+
+        // FNetViewer's ViewLocation (UNetDriver.cpp) - what distance culling measures from.
+        //
+        // THE CAMERA, NOT THE PAWN, and that is not an approximation of the engine, it IS the engine:
+        // FNetViewer takes ViewLocation from APlayerController::GetPlayerViewPoint, which returns
+        // PlayerCameraManager->GetCameraLocation(), which is the camera cache that
+        // APlayerController::ServerUpdateCamera_Implementation fills from the client's own report.
+        // That RPC is the most frequent one this connection sends, and its whole purpose on a real
+        // server is to answer this question.
+        //
+        // It used to use the pawn, because ServerUpdateCamera's decode was believed wrong. It is not
+        // - a live client put the reported camera 254uu from its pawn, which is a third-person boom
+        // to the centimetre (see NativeRpcHandlers' ServerUpdateCamera handler).
+        //
+        // THE PAWN IS STILL THE FALLBACK, for two cases that are not hypothetical: a client whose
+        // PlayerCameraManager has bUseClientSideCameraUpdates off never sends the RPC at all, and one
+        // that stops sending must not leave relevancy anchored to wherever it was last looking. The
+        // staleness bound is generous - the client sends these several times a second, so a whole
+        // second of silence already means something has stopped.
+        //
+        // Null when the connection has neither - between pawns, on the bus, mid-jump - and null means
+        // "do not cull", which is why that window is safe rather than empty. See AActor.IsNetRelevantFor.
+        var now = World?.TimeSeconds ?? 0f;
+        var cameraIsFresh = viewer.LastClientCameraLocation != null
+                            && CameraViewpointTimeout >= 0f
+                            && now - viewer.LastClientCameraTime <= CameraViewpointTimeout;
+
+        var viewLocation = cameraIsFresh ? viewer.LastClientCameraLocation : viewer.Pawn?.GetActorLocation();
+
+        var considered = 0;
+        var culled = 0;
 
         foreach (var actor in NetworkObjectList.ToArray()) {
             if (!actor.bReplicates || actor.IsPendingKillPending()) continue;
             if (connection.FindActorChannel(actor) != null) continue;
-            if (!actor.IsNetRelevantFor(viewer)) continue;
+            considered++;
+
+            if (!actor.IsNetRelevantFor(viewer, viewLocation)) {
+                culled++;
+
+                // NAME EVERY CLASS THE CULL EVER REFUSES, ONCE. Culling fails SILENTLY - the actor
+                // simply never appears, and the symptom shows up somewhere else entirely: the first
+                // live test of this feature lost the battle bus (the aircraft is off-map and was
+                // being culled) and lost ALL destructible scenery (level actors registered by path
+                // have no Location, so they measured from (0,0,0)). Neither pointed at relevancy in
+                // any log. One line per class turns the next case of that into something a log
+                // search finds in seconds instead of a bisect.
+                if (_LoggedCulledClasses.Add(actor.GetType().Name)) {
+                    Console.WriteLine($"ServerReplicateActors: distance culling is REFUSING " +
+                                      $"{actor.GetType().Name} (first one: '{actor.GetFName()}' at " +
+                                      $"{(actor.bHasKnownLocation ? actor.GetActorLocation().ToString() : "NO KNOWN LOCATION")}, " +
+                                      $"viewer at {viewLocation}). If that class should always reach " +
+                                      "the client, it wants bAlwaysRelevant, not a bigger radius.");
+                }
+
+                continue;
+            }
+
+            // The viewer's own things still go out during the possession window - the pawn itself,
+            // its weapons (owned by the pawn), the inventory - because those ARE the possession.
+            if (!possessionComplete && !actor.IsOwnedBy(viewer) && actor != viewer.Pawn
+                && !(viewer.Pawn is { } ownPawn && actor.IsOwnedBy(ownPawn))) {
+                continue;
+            }
+
+            if (budget-- <= 0) break;
 
             var channel = (UActorChannel) connection.CreateChannelByName(
                 EName.Actor, EChannelCreateFlags.OpenedLocally, UnrealConstants.IndexNone);
@@ -252,29 +359,71 @@ public abstract class UNetDriver {
             channel.ReplicateActor();
             opened++;
 
-            // AFortPawn::ClientInternalEquipWeapon(AFortWeapon*) - experimental, 2026-08-29. Sent
-            // HERE, once this weapon's OWN channel has actually opened (ReplicateActor above just
-            // gave it a resolvable NetGUID), rather than at the moment it's equipped: sending it
-            // earlier left the client logging "Unable to resolve RPC parameter ... Parameter Weap"
-            // and dropping the call outright, since the weapon had no NetGUID yet. Must go out on
-            // the PAWN's own channel (ClientInternalEquipWeapon is a FortPawnOwnFields entry, so its
-            // field index only resolves against the pawn's ClassNetCache), found the same way
-            // OpenChannelsForNewlyRelevantActors always does.
-            if (actor is AFortWeapon { bNeedsClientInternalEquipWeaponRpc: true } weapon
-                && weapon.Owner is APawn pawn) {
-                weapon.bNeedsClientInternalEquipWeaponRpc = false;
+            // ClientInternalEquipWeapon USED TO BE SENT HERE, keyed on a weapon's channel opening.
+            // It now lives in UActorChannel.ReplicateEquippedWeapon, keyed on the pawn's CurrentWeapon
+            // CHANGING, which is the thing it was always about. Keying it on the channel meant a
+            // RE-equip sent nothing at all (the channel is already open and never opens twice), and
+            // that is what left a build ghost on screen after the client switched off a building
+            // tool - see that method for the whole chain.
+        }
 
-                if (connection.FindActorChannel(pawn) is { } pawnChannel) {
-                    pawnChannel.SendObjectRpc("ClientInternalEquipWeapon", weapon);
-                    Console.WriteLine($"UNetDriver.OpenChannelsForNewlyRelevantActors: sent ClientInternalEquipWeapon({weapon.GetFName()})");
-                } else {
-                    Console.WriteLine("UNetDriver.OpenChannelsForNewlyRelevantActors: pawn has no channel yet, ClientInternalEquipWeapon not sent");
-                }
+        // One line, once per connection, the first time culling actually had a location to work
+        // from - so the very first live test measures the effect instead of guessing at it. Anything
+        // per-tick here would drown the log; this is the number that says whether culling is doing
+        // what it was added for.
+        // REPORTED WHEN THE VIEWPOINT SOURCE CHANGES, not once per connection.
+        //
+        // The first version fired on the first tick that had any viewpoint at all, which is the one
+        // moment it could not answer the question it was asked: a pawn exists several hundred log
+        // lines before the client's first ServerUpdateCamera arrives, so it always said "the pawn"
+        // and then never spoke again. Keying it on the SOURCE means it says "pawn" once at spawn,
+        // "camera" once when the client starts reporting, and nothing at all while that holds - and
+        // it says "pawn" again if the camera ever goes stale, which is the case actually worth
+        // hearing about.
+        if (viewLocation != null) {
+            var source = cameraIsFresh ? "the CLIENT'S CAMERA, as real UE measures from"
+                                       : "the pawn - no fresh camera report";
+
+            if (!_LastViewpointSource.TryGetValue(connection, out var previous) || previous != source) {
+                _LastViewpointSource[connection] = source;
+                Console.WriteLine($"ServerReplicateActors: distance culling measuring from {viewLocation} " +
+                                  $"({source}) - {culled} of {considered} channel-less actors out of range " +
+                                  $"this tick ({considered - culled} relevant). NET_CULL=0 disables it.");
             }
         }
 
         return opened;
     }
+
+    /// <summary>Which viewpoint each connection's culling last measured from, so a CHANGE can be reported.</summary>
+    private readonly Dictionary<UNetConnection, string> _LastViewpointSource = new();
+
+    /// <summary>Actor classes distance culling has already been reported as refusing at least once.</summary>
+    private readonly HashSet<string> _LoggedCulledClasses = new();
+
+    /// <summary>
+    ///     How stale a client-reported camera may be before relevancy stops trusting it, in seconds.
+    ///
+    ///     THE DEFAULT IS "NEVER", WHICH IS THE ENGINE'S BEHAVIOUR - and the first attempt at one
+    ///     second was measurably wrong. `GetPlayerViewPoint` reads
+    ///     `PlayerCameraManager->GetCameraLocation()`, a CACHE: it holds the last reported value
+    ///     indefinitely and real UE has no staleness concept here at all. A one-second bound made
+    ///     the viewpoint FLAP between camera and pawn about every 50 log lines, because the client
+    ///     does not send on a fixed clock - UPlayerCameraManager::UpdateCamera only sends when the
+    ///     camera actually moved or turned (or after ServerUpdateCameraTimeout), so a player
+    ///     standing still legitimately says nothing for a long time.
+    ///
+    ///     The null check is the guard that was actually needed: a client whose camera manager has
+    ///     bUseClientSideCameraUpdates off never sends the RPC, so LastClientCameraLocation stays
+    ///     null and the pawn is used. That case needs no timer.
+    ///
+    ///     CAMERA_VIEWPOINT_TIMEOUT sets a bound in seconds if one is ever wanted; -1 turns the
+    ///     camera viewpoint off entirely and pins relevancy to the pawn.
+    /// </summary>
+    private static readonly float CameraViewpointTimeout =
+        float.TryParse(Environment.GetEnvironmentVariable("CAMERA_VIEWPOINT_TIMEOUT"), out var timeout)
+            ? timeout
+            : float.PositiveInfinity;
 
     /// <summary>
     ///     PostTick actions

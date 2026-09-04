@@ -19,7 +19,11 @@ public class FRotator {
 
     private static float ReadAxis(FArchive ar) => ar.ReadBit() ? ar.ReadUInt16() * 360f / 65536f : 0f;
 
-    private static float DecompressAxisFromShort(uint compressed) => compressed * 360f / 65536f;
+    /// <summary>
+    ///     FRotator::DecompressAxisFromShort - one 16-bit compressed angle back to degrees. Public
+    ///     because ServerUpdateCamera packs TWO of them into one int32 and has to undo it by hand.
+    /// </summary>
+    public static float DecompressAxisFromShort(uint compressed) => compressed * 360f / 65536f;
 
     /// <summary>
     ///     Send half of <see cref="NetSerializeRead"/> - FRotator::SerializeCompressedShort's saving

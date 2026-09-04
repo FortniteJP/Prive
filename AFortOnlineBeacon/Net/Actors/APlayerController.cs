@@ -42,6 +42,42 @@ public class APlayerController : AController {
 
     /// <summary>Last location/rotation reported by ServerSetSpectatorLocation, mirroring the real fields of the same name.</summary>
     public FVector? LastSpectatorSyncLocation { get; set; }
+
+    /// <summary>
+    ///     Where the client says its CAMERA is, from APlayerController::ServerUpdateCamera - the
+    ///     single most frequent RPC this server receives and, until now, one it dropped on the floor.
+    ///
+    ///     Not the same thing as the pawn's location, and that is the point: real
+    ///     ServerReplicateActors builds its relevancy and priority from the connection's VIEWER
+    ///     position, which is the camera, not the actor. A third-person camera sits several metres
+    ///     behind and above the pawn, and a spectator's is not attached to a pawn at all.
+    ///
+    ///     THIS IS WHAT DISTANCE CULLING MEASURES FROM (UNetDriver.OpenChannelsForNewlyRelevantActors),
+    ///     and that is not an approximation of what the engine does, it IS what the engine does:
+    ///     FNetViewer's ViewLocation comes from APlayerController::GetPlayerViewPoint, which returns
+    ///     PlayerCameraManager->GetCameraLocation(), which is the camera cache that
+    ///     ServerUpdateCamera_Implementation fills (PlayerController.cpp) - this very value.
+    /// </summary>
+    public FVector? LastClientCameraLocation { get; set; }
+
+    /// <summary>
+    ///     When <see cref="LastClientCameraLocation"/> was last set, in world seconds. A client that
+    ///     stops reporting - or one whose camera manager never had bUseClientSideCameraUpdates on -
+    ///     must not leave relevancy anchored to a stale point forever, so this is what lets the
+    ///     driver fall back to the pawn.
+    /// </summary>
+    public float LastClientCameraTime { get; set; } = float.NegativeInfinity;
+
+    /// <summary>
+    ///     ServerUpdateCamera's second parameter, unpacked the way
+    ///     APlayerController::ServerUpdateCamera_Implementation unpacks it:
+    ///
+    ///         Yaw   = FRotator::DecompressAxisFromShort( (CamPitchAndYaw &gt;&gt; 16) &amp; 65535 )
+    ///         Pitch = FRotator::DecompressAxisFromShort(  CamPitchAndYaw        &amp; 65535 )
+    ///
+    ///     Note the order - YAW is the HIGH half - which is the opposite of what the name suggests.
+    /// </summary>
+    public FRotator? LastClientCameraRotation { get; set; }
     public FRotator? LastSpectatorSyncRotation { get; set; }
 
     /// <summary>
@@ -55,6 +91,39 @@ public class APlayerController : AController {
 
     /// <summary>AFortPlayerController's own property - see NativeRepLayouts.PlayerControllerProps for why this matters.</summary>
     public bool bHasServerFinishedLoading { get; set; }
+
+    // ------------------------------------------------------------------------------------------
+    // WHAT THE CLIENT HAS TOLD US ABOUT ITS OWN READINESS.
+    //
+    // The client sends three separate "I am ready" signals and this server decoded all three and
+    // threw the values away, logging them only under NET_VERBOSE. That was expensive: Round 148's
+    // bug was opening actor channels while the client was still resolving its own pawn, and the
+    // client had been SAYING when it finished the whole time. The gate there had to be inferred
+    // from ServerAcknowledgePossession instead, which is a proxy for this.
+    //
+    // Set only, never replicated - these are the client's statements about itself.
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     AFortPlayerController::ServerClientPawnLoaded(bool) - the client has finished loading and
+    ///     spawning the pawn it was told to possess. The most precise "safe to talk to me about
+    ///     other actors now" signal there is.
+    /// </summary>
+    public bool bClientPawnLoaded { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerController::ServerSetClientHasFinishedLoading(bool) - the client's own copy of
+    ///     the flag this server replicates back out as APlayerState.bHasFinishedLoading (handle 29).
+    ///     Until now that property was set true by the server on a timer of its own reasoning; this
+    ///     is the client actually saying so.
+    /// </summary>
+    public bool bClientHasFinishedLoading { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerController::ServerLoadingScreenDropped() - the loading screen is gone and the
+    ///     player can see the world. Later than the two above.
+    /// </summary>
+    public bool bLoadingScreenDropped { get; set; }
 
     /// <summary>
     ///     AFortPlayerControllerAthena::bMarkedAlive - wire handle 75.

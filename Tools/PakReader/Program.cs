@@ -66,6 +66,7 @@ public static class Program {
                 case "tileinfo": return TileInfo(provider, args);
                 case "foundations": return Foundations(provider, args);
                 case "spawnpoints": return SpawnPoints(provider, args);
+                case "placements": return SpawnPoints(provider, args, verbose: true);
                 case "raw": return Raw(provider, args);
                 case "buildinghealth": return BuildingHealth(provider, args);
                 case "walls": return Walls(provider, args);
@@ -327,8 +328,8 @@ public static class Program {
         return 0;
     }
 
-    private static int SpawnPoints(DefaultFileProvider provider, string[] args) {
-        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader spawnpoints <classSubstring>"); return 2; }
+    private static int SpawnPoints(DefaultFileProvider provider, string[] args, bool verbose = false) {
+        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader spawnpoints|placements <classSubstring>"); return 2; }
         var needle = args[1];
 
         string[] foundationMaps = {
@@ -340,7 +341,7 @@ public static class Program {
         var onStack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var map in foundationMaps) {
             found += WalkLevel(provider, map, new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0), 0f,
-                               needle, onStack, 0);
+                               needle, onStack, 0, verbose);
         }
 
         Console.Error.WriteLine($"pakreader: {found} '{needle}' spawn point(s) in world space");
@@ -374,7 +375,8 @@ public static class Program {
     /// </summary>
     private static int WalkLevel(DefaultFileProvider provider, string packagePath,
                                  CUE4Parse.UE4.Objects.Core.Math.FVector origin, float yaw,
-                                 string needle, HashSet<string> onStack, int depth) {
+                                 string needle, HashSet<string> onStack, int depth,
+                                 bool verbose = false) {
         if (depth > MaxFoundationDepth) return 0;
 
         // A level that places itself, directly or through a chain, would otherwise recurse forever.
@@ -396,10 +398,22 @@ public static class Program {
 
                 if (export.ExportType.Contains(needle, StringComparison.OrdinalIgnoreCase) && component != null) {
                     var local = component.GetOrDefault("RelativeLocation", new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0));
-                    Console.WriteLine(
-                        $"{origin.X + (local.X * cos - local.Y * sin):F0}," +
-                        $"{origin.Y + (local.X * sin + local.Y * cos):F0}," +
-                        $"{origin.Z + local.Z:F0}");
+                    var worldX = origin.X + (local.X * cos - local.Y * sin);
+                    var worldY = origin.Y + (local.X * sin + local.Y * cos);
+                    var worldZ = origin.Z + local.Z;
+
+                    if (verbose) {
+                        // The actor's OWN yaw composes with the accumulated foundation yaw the same
+                        // way its location does. Anything that has to face the way it was placed -
+                        // a vehicle, a door - needs this and `spawnpoints` does not carry it.
+                        var localYaw = component.GetOrDefault("RelativeRotation",
+                            new CUE4Parse.UE4.Objects.Core.Math.FRotator(0, 0, 0)).Yaw;
+
+                        Console.WriteLine($"{export.ExportType}	{worldX:F0},{worldY:F0},{worldZ:F0}	{yaw + localYaw:F1}");
+                    } else {
+                        Console.WriteLine($"{worldX:F0},{worldY:F0},{worldZ:F0}");
+                    }
+
                     found++;
                 }
 
@@ -419,7 +433,7 @@ public static class Program {
                     // "/Game/..." is the mount point; the provider indexes it as "FortniteGame/Content/...".
                     var sub = world.AssetPathName.Text.Split('.')[0]
                         .Replace("/Game/", "FortniteGame/Content/") + ".umap";
-                    found += WalkLevel(provider, sub, childOrigin, yaw + childYaw, needle, onStack, depth + 1);
+                    found += WalkLevel(provider, sub, childOrigin, yaw + childYaw, needle, onStack, depth + 1, verbose);
                 }
             }
 

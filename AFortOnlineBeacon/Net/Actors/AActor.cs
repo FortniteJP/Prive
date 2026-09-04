@@ -30,7 +30,30 @@ public class AActor : UObject {
     public FVector Scale3D { get; private set; } = new() { X = 1f, Y = 1f, Z = 1f };
 
     public FVector GetActorLocation() => Location;
-    public void SetActorLocation(FVector newLocation) => Location = newLocation;
+
+    public void SetActorLocation(FVector newLocation) {
+        Location = newLocation;
+        bHasKnownLocation = true;
+    }
+
+    /// <summary>
+    ///     Whether anything has ever told this actor WHERE IT IS. False means Location is still its
+    ///     zero-initialised default, which is the origin only by accident.
+    ///
+    ///     THIS FLAG EXISTS BECAUSE ITS ABSENCE BROKE DESTRUCTIBLE SCENERY (2026-09-04, live). Level
+    ///     actors - world props, chests, ammo boxes - are registered by PATH the first time a player
+    ///     hits one (NativeRpcHandlers.DamageLevelActor -&gt;
+    ///     UAssetRegistry.GetOrCreateSubObject&lt;ABuildingActor&gt;), and nothing ever gives them a
+    ///     Location: the server knows the actor exists and what class it is, never where it stands.
+    ///     Distance culling then measured every one of them from (0,0,0), found them ~170000 units
+    ///     from a player on the warmup island, and refused to open their channels - so nothing broke
+    ///     any more, anywhere, and NET_CULL=0 "fixed" it.
+    ///
+    ///     The lesson is not "special-case scenery". It is that (0,0,0) here means UNKNOWN, not the
+    ///     origin, and an unknown position cannot be culled against - the same rule that already
+    ///     makes a null viewer location mean "relevant".
+    /// </summary>
+    public bool bHasKnownLocation { get; private set; }
 
     /// <summary>
     ///     AActor::bReplicateMovement - wire handle 2. The client's own gate: OnRep_AttachmentReplication
@@ -122,17 +145,51 @@ public class AActor : UObject {
     }
 
     /// <summary>
-    ///     Reduced AActor::IsNetRelevantFor (ActorReplication.cpp:291). The distance-culling tail of
-    ///     the real function is deliberately absent: nothing here simulates or tracks positions well
-    ///     enough to cull on them, and culling an actor the client should have is far worse than
-    ///     replicating one it does not strictly need. So this answers only the ownership questions,
-    ///     which are the ones that would otherwise leak one player's private actors to another.
+    ///     AActor::NetCullDistanceSquared (Actor.cpp:121) - beyond this distance from the viewer an
+    ///     actor is not relevant. The engine default is 225000000, i.e. 15000 units / 150 m, and UE
+    ///     4.23 leaves it there for everything in this project's login path.
     /// </summary>
-    public virtual bool IsNetRelevantFor(AActor? realViewer) {
-        if (bAlwaysRelevant || IsOwnedBy(realViewer) || this == realViewer) return true;
+    public float NetCullDistanceSquared { get; protected init; } = 225000000f;
 
-        return !bOnlyRelevantToOwner;
+    /// <summary>
+    ///     AActor::IsNetRelevantFor (ActorReplication.cpp:291), now WITH its distance tail.
+    ///
+    ///     The tail used to be deliberately absent, on the grounds that nothing here tracked
+    ///     positions well enough to cull on them. That reason expired: pawns move, and buildings,
+    ///     vehicles, llamas and 2895 floor-loot spawners all have real world locations now. What
+    ///     replaced it is the real rule -
+    ///
+    ///         FVector::DistSquared(SrcLocation, GetActorLocation()) &lt; NetCullDistanceSquared
+    ///
+    ///     - gated on <see cref="UNetDriver"/> having a viewer location to measure from at all.
+    ///
+    ///     TWO DELIBERATE DEPARTURES FROM THE REAL FUNCTION, both in the safe direction:
+    ///
+    ///       * NO LOCATION MEANS RELEVANT. Real UE always has a view target; this server can be
+    ///         between pawns (the warmup pawn is destroyed on boarding the bus and a new one is
+    ///         spawned on jump), and culling the whole world during that window would be a far worse
+    ///         failure than replicating too much. srcLocation null therefore short-circuits to true.
+    ///       * CULLING ONLY EVER DECIDES WHETHER TO **OPEN** A CHANNEL. Nothing closes a channel
+    ///         because its actor drifted out of range - so a client accumulates the world as it
+    ///         moves through it and never loses anything it has already been told about. Real UE
+    ///         closes an irrelevant channel after AActor::NetUpdateFrequency-driven RelevantTimeout,
+    ///         and closing is destructive here (a close IS the client-side destroy - see
+    ///         UNetDriver.TickFlush), so that half is left out until there is a reason for it.
+    ///
+    ///     The engine's own escape hatch is kept too: AGameNetworkManager::bUseDistanceBasedRelevancy
+    ///     (true by default) becomes NET_CULL=0, which restores the pre-culling behaviour exactly.
+    /// </summary>
+    public virtual bool IsNetRelevantFor(AActor? realViewer, FVector? srcLocation = null) {
+        if (bAlwaysRelevant || IsOwnedBy(realViewer) || this == realViewer) return true;
+        if (bOnlyRelevantToOwner) return false;
+        if (srcLocation == null || !bHasKnownLocation || !bUseDistanceBasedRelevancy) return true;
+
+        return FVector.DistSquared(srcLocation, GetActorLocation()) < NetCullDistanceSquared;
     }
+
+    /// <summary>AGameNetworkManager::bUseDistanceBasedRelevancy (GameNetworkManager.cpp:51) - true in real UE.</summary>
+    private static readonly bool bUseDistanceBasedRelevancy =
+        Environment.GetEnvironmentVariable("NET_CULL") is not "0";
 
     /// <summary>
     ///     AActor::NetUpdateFrequency (Actor.cpp:106) - how many times a second this actor is
@@ -243,7 +300,50 @@ public class AActor : UObject {
     ///     non-nullptr". This server does not send ReplicatedMovement at all, so nothing to suppress
     ///     - but a future one must not fight the attachment.
     /// </summary>
-    public AActor? AttachParent { get; set; }
+    public AActor? AttachParent {
+        get => _attachParent;
+        set {
+            _attachParent = value;
+
+            if (value == null || bAttachmentEverSet) return;
+
+            bAttachmentEverSet = true;
+            ReplicatedPropertySetRevision++;
+        }
+    }
+
+    private AActor? _attachParent;
+
+    /// <summary>
+    ///     Bumped whenever something changes WHICH PROPERTIES this actor replicates - as opposed to
+    ///     their values. UActorChannel caches that set per channel and rebuilds when this moves.
+    ///
+    ///     It exists because the first version of vehicle riding did not work and left no trace: the
+    ///     pawn's property set gained the six AttachmentReplication handles only once
+    ///     <see cref="bAttachmentEverSet"/> turned true, which happens long AFTER the channel opened
+    ///     and cached the set. The server logged a successful attach, the diff never looked at those
+    ///     handles, and nothing went out. A cached set needs an invalidation the moment it can depend
+    ///     on mutable state.
+    /// </summary>
+    public int ReplicatedPropertySetRevision { get; private set; }
+
+    /// <summary>
+    ///     Whether this actor has EVER been attached to anything, and therefore whether the six
+    ///     AttachmentReplication handles belong in its replicated set. Sticky on purpose.
+    ///
+    ///     Sticky because DETACHING has to be sent too. If the handles were included only while
+    ///     AttachParent is non-null, the moment a rider stepped off the vehicle they would vanish
+    ///     from the diff set and the client would never hear about it - it would keep the pawn glued
+    ///     to a vehicle the server thinks it left.
+    ///
+    ///     And it starts FALSE rather than being on for everyone, because sending these
+    ///     unconditionally was measurably harmful: with AttachParent null,
+    ///     AActor::OnRep_AttachmentReplication's else branch runs DetachFromActor and then
+    ///     OnRep_ReplicatedMovement, and this server sends no ReplicatedMovement, so the client
+    ///     applied an all-zero transform. The live symptom was a 90-degree camera roll at spawn.
+    ///     See UActorChannel's pawn property set.
+    /// </summary>
+    public bool bAttachmentEverSet { get; private set; }
 
     /// <summary>FRepAttachment::LocationOffset - where on the parent this actor sits.</summary>
     public FVector AttachLocationOffset { get; set; } = new();
