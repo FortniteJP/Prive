@@ -442,6 +442,10 @@ public class AGameModeBase : AInfo {
         // the server that already has the world time in hand.
         FortConsumableSystem.Tick(now);
 
+        // Thrown projectiles need reaping for the same reason: the client owns the fuse and the
+        // explosion, so nothing else would ever destroy the server-side actor.
+        FortProjectileSystem.Tick(world);
+
         if (!_warmupStarted || _aircraftLaunched || GameState == null) return;
         if (now < _warmupEndTime) return;
 
@@ -830,9 +834,12 @@ public class AGameModeBase : AInfo {
             // THIRD one correctly refuse. Set STARTING_CONSUMABLES to a comma-separated
             // name[:count] list, or to an empty string for none.
             //
-            // The names are item definition names, i.e. the keys of FortConsumables.Generated.cs:
-            // Athena_ShieldSmall, Athena_Shields, Athena_Bandage, Athena_Medkit, Athena_SuperMedkit,
-            // Athena_PurpleStuff.
+            // The names are item definition names, i.e. the keys of FortConsumables.Generated.cs -
+            // every consumable in the paks, not just the healing ones: Athena_ShieldSmall,
+            // Athena_Bandage, ... and also Athena_Grenade, Athena_TNT, Athena_ShockGrenade,
+            // Athena_Bush. An item outside the six healing ones can be held and its ability
+            // activated; what happens next depends on whether that ability is modelled (see
+            // FortConsumables' two scopes, and FortProjectiles for the thrown ones).
             //
             // "none" TURNS IT OFF, and an EMPTY STRING DOES NOT - which is not a preference, it is
             // Windows. `$env:X = ''` in PowerShell DELETES the variable rather than setting it to

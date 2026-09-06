@@ -314,8 +314,258 @@ public static class BuildingStructuralSupportSystem {
         if (unsupported.Count == 0) return;
 
         Console.WriteLine($"BuildingStructuralSupportSystem: cascade - {unsupported.Count} piece(s) lost support");
+
+        // WHY, for the first few. A player who suddenly falls through their own build reports "the
+        // building went see-through", and the count above cannot distinguish the three things that
+        // produce it: the piece was genuinely floating, the world-support test refused ground that is
+        // really there, or the flood never reached the piece from a ground-seeded one. The world
+        // sample IS the discriminator - a piece one storey above the sample is unsupported by the
+        // rule, a piece BELOW it means the rule was handed the wrong surface - and it costs one line.
+        var explained = 0;
+        foreach (var b in unsupported) {
+            if (explained++ >= 4) break;
+
+            var loc = b.GetActorLocation();
+            var landscape = TerrainHeightMap.GetGroundHeightUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset);
+            var surface = TerrainHeightMap.GetSurfaceUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset, loc.Z);
+            var walked = TerrainGroundTruth.GetGroundHeightUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset, loc.Z);
+
+            Console.WriteLine($"BuildingStructuralSupportSystem:   {b.GetFName()} at {loc} - " +
+                              $"landscape {(landscape is { } l ? $"{l:F0} (gap {loc.Z - l:F0})" : "none")}, " +
+                              $"surface {(surface is { } sf ? $"{sf:F0} (gap {loc.Z - sf:F0})" : "none")}, " +
+                              $"walked {(walked is { } wk ? $"{wk:F0} (gap {loc.Z - wk:F0})" : "none")}, " +
+                              $"neighbours {NeighborsOf(b).Count()}, storey {FBuildingSupportCellIndex.StoreyHeight:F0}");
+        }
+
         foreach (var b in unsupported) BeginDestroy(b);
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // COLLISION AGAINST PLAYER-BUILT PIECES
+    //
+    // NOT built on the ConnectivityCube, and the reason is worth stating: that data is RELATIVE ONLY.
+    // The structural cascade never asks where a piece's voxels are in the world - only how two pieces'
+    // voxels line up, by cell delta - so a shape sitting one whole cell away from the piece it belongs
+    // to passes every connectivity test. Collision is the first thing here that needs an ABSOLUTE
+    // answer, and it exposed exactly that: floors collided (their shape fills the cell, so an offset
+    // still covers it) while walls never did (a wall is one face, so the same offset put it a cell
+    // away). Grenades flew through every wall while the startup self-check reported the geometry fine,
+    // because that check was testing the SHAPE and the error was in the PLACE.
+    //
+    // CentroidOf IS absolute, and is read from the real CDOs: "where a piece's BODY actually sits" -
+    // the centre of the cell for a floor, roof or stair, the middle of the spanned cell edge for a
+    // wall. A box around that is a coarser shape than the voxels (a half wall is a full wall here) but
+    // it is in the right PLACE, which is the property that matters and the one the voxels lack.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     Half-thickness of a wall, and of a floor slab. CHOSEN: the real meshes are not in any table
+    ///     this server reads. Everything else about the box comes from CentroidOf and the 512/384 grid.
+    ///     Generous is the safe direction for a wall - too thin and a blast leaks past it.
+    /// </summary>
+    private const float WallHalfThickness = 32f;
+
+    private const float SlabHalfThickness = 24f;
+
+    /// <summary>
+    ///     A piece's world-space bounding box. Axis-aligned because every placement yaw the client
+    ///     sends is a multiple of 90, so a rotation only ever SWAPS the X and Y extents.
+    /// </summary>
+    private static (FVector Min, FVector Max) BoxOf(ABuildingActor piece) =>
+        BoxOf(piece.GetActorLocation(), piece.GetActorRotation().Yaw, piece.BuildingType);
+
+    /// <summary>The same box from a bare placement, so the startup check can build one without an actor.</summary>
+    private static (FVector Min, FVector Max) BoxOf(FVector pivot, float yaw, EFortBuildingType type) {
+        var centre = FBuildingSupportCellIndex.CentroidOf(pivot, yaw, type);
+
+        var half = type switch {
+            // Spans the cell edge: 512 along the edge, a storey tall, thin across.
+            EFortBuildingType.Wall => (X: WallHalfThickness,
+                                       Y: FBuildingSupportCellIndex.TileSize / 2f,
+                                       Z: FBuildingSupportCellIndex.StoreyHeight / 2f),
+            // Fills the cell in plan, thin in Z.
+            EFortBuildingType.Floor or EFortBuildingType.Roof => (X: FBuildingSupportCellIndex.TileSize / 2f,
+                                                                  Y: FBuildingSupportCellIndex.TileSize / 2f,
+                                                                  Z: SlabHalfThickness),
+            // Stairs and anything else: the whole cell.
+            _ => (X: FBuildingSupportCellIndex.TileSize / 2f,
+                  Y: FBuildingSupportCellIndex.TileSize / 2f,
+                  Z: FBuildingSupportCellIndex.StoreyHeight / 2f)
+        };
+
+        var quadrant = ((int) MathF.Round(yaw / 90f) % 4 + 4) % 4;
+        if (quadrant % 2 == 1) half = (half.Y, half.X, half.Z);
+
+        return (new FVector { X = centre.X - half.X, Y = centre.Y - half.Y, Z = centre.Z - half.Z },
+                new FVector { X = centre.X + half.X, Y = centre.Y + half.Y, Z = centre.Z + half.Z });
+    }
+
+    /// <summary>
+    ///     Proves the collision geometry is in the right PLACE at startup, beside NativeClassNetCache's
+    ///     field-index check and UActorChannel's condition check.
+    ///
+    ///     The first version of this checked the SHAPE and passed happily while every wall's collision
+    ///     sat a full cell away from the wall - so grenades flew through walls with a green line in the
+    ///     log. A geometry bug reports nothing on its own; the assertion has to be about the thing that
+    ///     can actually be wrong, which is placement.
+    ///
+    ///     A wall placed at pivot (0, 256, 0) facing yaw 0 spans the cell edge at X = 0: its body must
+    ///     contain that edge at mid-height, and must NOT contain the middle of either cell beside it.
+    /// </summary>
+    public static void VerifyCollisionGeometry() {
+        var pivot = new FVector { X = 0f, Y = 256f, Z = 0f };
+        var (min, max) = BoxOf(pivot, 0f, EFortBuildingType.Wall);
+
+        bool Contains(FVector p) =>
+            p.X >= min.X && p.X <= max.X && p.Y >= min.Y && p.Y <= max.Y && p.Z >= min.Z && p.Z <= max.Z;
+
+        var problems = new List<string>();
+
+        if (!Contains(new FVector { X = 0f, Y = 256f, Z = 192f }))
+            problems.Add("a wall does not contain the cell edge it stands on");
+        if (Contains(new FVector { X = 256f, Y = 256f, Z = 192f }))
+            problems.Add("a wall reaches the middle of the cell in front of it");
+        if (Contains(new FVector { X = -256f, Y = 256f, Z = 192f }))
+            problems.Add("a wall reaches the middle of the cell behind it");
+        if (!Contains(new FVector { X = 0f, Y = 256f, Z = 20f }) || !Contains(new FVector { X = 0f, Y = 256f, Z = 360f }))
+            problems.Add("a wall is not solid over the full height of its storey");
+
+        if (problems.Count == 0) {
+            Console.WriteLine("BuildingStructuralSupportSystem: player-build collision sits on the piece it belongs " +
+                              "to (wall box " +
+                              $"X {min.X:F0}..{max.X:F0}, Y {min.Y:F0}..{max.Y:F0}, Z {min.Z:F0}..{max.Z:F0}).");
+            return;
+        }
+
+        Console.WriteLine("BuildingStructuralSupportSystem: COLLISION IS IN THE WRONG PLACE - projectiles will pass " +
+                          "through player builds and blasts will not be blocked by them:");
+        foreach (var problem in problems) Console.WriteLine($"    - {problem}");
+    }
+
+    /// <summary>Every piece whose box could matter near a point - the broad phase.</summary>
+    private static IEnumerable<ABuildingActor> Nearby(FVector point, ABuildingActor? ignore) {
+        foreach (var neighbour in FBuildingSupportCellIndex.FromLocation(point).WithNeighbors()) {
+            if (!Cells.TryGetValue(neighbour, out var pieces)) continue;
+
+            foreach (var piece in pieces)
+                if (piece != ignore && !piece.bDestroyed) yield return piece;
+        }
+    }
+
+    /// <summary>Whether a placed building piece occupies this world point.</summary>
+    public static bool IsSolid(FVector point, ABuildingActor? ignore = null) {
+        foreach (var piece in Nearby(point, ignore)) {
+            var (min, max) = BoxOf(piece);
+
+            if (point.X >= min.X && point.X <= max.X &&
+                point.Y >= min.Y && point.Y <= max.Y &&
+                point.Z >= min.Z && point.Z <= max.Z) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>How many pieces are registered within a radius - a diagnostic, so "nothing was hit" can be told from "nothing was there".</summary>
+    public static int PiecesWithin(FVector point, float radius) {
+        var radiusSquared = radius * radius;
+        var count = 0;
+
+        foreach (var piece in Buildings) {
+            if (piece.bDestroyed) continue;
+            if (FVector.DistSquared(point, piece.GetActorLocation()) <= radiusSquared) count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    ///     Where a segment first enters a player build, and on which axis - a slab test, EXACT rather
+    ///     than sampled.
+    ///
+    ///     Sampling was the previous approach and it is the wrong tool here: a wall is thinner than a
+    ///     grenade's per-tick step, so any sample spacing cheap enough to run is coarse enough to step
+    ///     straight over it. A slab test cannot miss a box however thin it is or however fast the
+    ///     projectile is moving.
+    /// </summary>
+    private static (FVector Point, int Axis)? FirstHit(FVector from, FVector to, ABuildingActor? ignore) {
+        var d = new[] { to.X - from.X, to.Y - from.Y, to.Z - from.Z };
+        var o = new[] { from.X, from.Y, from.Z };
+
+        var bestT = float.MaxValue;
+        var bestAxis = -1;
+
+        foreach (var piece in Nearby(from, ignore)) {
+            var (min, max) = BoxOf(piece);
+            var lo = new[] { min.X, min.Y, min.Z };
+            var hi = new[] { max.X, max.Y, max.Z };
+
+            float tEnter = 0f, tExit = 1f;
+            var axis = -1;
+            var miss = false;
+
+            for (var i = 0; i < 3 && !miss; i++) {
+                if (MathF.Abs(d[i]) < 1e-6f) {
+                    if (o[i] < lo[i] || o[i] > hi[i]) miss = true;
+                    continue;
+                }
+
+                var t1 = (lo[i] - o[i]) / d[i];
+                var t2 = (hi[i] - o[i]) / d[i];
+                if (t1 > t2) (t1, t2) = (t2, t1);
+
+                if (t1 > tEnter) { tEnter = t1; axis = i; }
+                if (t2 < tExit) tExit = t2;
+                if (tEnter > tExit) miss = true;
+            }
+
+            if (miss || axis < 0 || tEnter < 0f || tEnter > 1f || tEnter >= bestT) continue;
+
+            bestT = tEnter;
+            bestAxis = axis;
+        }
+
+        if (bestAxis < 0) return null;
+
+        return (new FVector { X = from.X + d[0] * bestT, Y = from.Y + d[1] * bestT, Z = from.Z + d[2] * bestT },
+                bestAxis);
+    }
+
+    /// <summary>The first point along a step that is inside a player build, and the axis it entered on.</summary>
+    public static (FVector Point, int Axis)? SweepToBuild(FVector from, FVector to) => FirstHit(from, to, null);
+
+    /// <summary>
+    ///     Which piece a step would hit, named - for the bounce diagnostic. The reflection maths was
+    ///     verified correct from live data (0.3 perpendicular, 0.6 tangential, exactly); what could
+    ///     not be told from that log was WHICH SURFACE it had chosen, and a coarse box (a stair is a
+    ///     whole cell here) makes the server bounce off geometry the client does not have.
+    /// </summary>
+    public static string DescribeHit(FVector from, FVector to) {
+        foreach (var piece in Nearby(from, null)) {
+            var (min, max) = BoxOf(piece);
+            var single = FirstHit(from, to, null);
+            if (single == null) return "?";
+
+            var p = single.Value.Point;
+            if (p.X >= min.X - 1f && p.X <= max.X + 1f &&
+                p.Y >= min.Y - 1f && p.Y <= max.Y + 1f &&
+                p.Z >= min.Z - 1f && p.Z <= max.Z + 1f)
+                return $"{piece.ClassName} yaw {piece.GetActorRotation().Yaw:F0} " +
+                       $"box X {min.X:F0}..{max.X:F0} Y {min.Y:F0}..{max.Y:F0} Z {min.Z:F0}..{max.Z:F0}";
+        }
+
+        return "?";
+    }
+
+    /// <summary>
+    ///     Whether a player-built piece stands between two points - the line-of-sight test an explosion
+    ///     needs, and what the real ability expresses as bExcludeObstructedByWorld plus its choice
+    ///     between GE_Damage_Explosive_LineOfSight and _NoLineOfSight.
+    ///
+    ///     <paramref name="ignore"/> is for tracing TO a piece: a building is solid, so a blast right
+    ///     against a wall would otherwise be judged as blocked from damaging that very wall.
+    /// </summary>
+    public static bool IsLineBlocked(FVector from, FVector to, ABuildingActor? ignore = null) =>
+        FirstHit(from, to, ignore) != null;
 
     /// <summary>Which side of its own cell the model believes this piece sits on - see FortBuildingConnectivity.Occupancy.</summary>
     private static string OccupancyOf(ABuildingActor b) =>
@@ -537,9 +787,10 @@ public static class BuildingStructuralSupportSystem {
      && MathF.Abs(a.Z - b.Z) <= VerticalReach;
 
     /// <summary>
-    ///     Whether `building` rests on real ground - the flood's entry condition. Prefers
-    ///     TerrainHeightMap's baked height where one covers this point; where none does (no baked
-    ///     file, or a point outside its extent), falls back to "this piece is the lowest thing in its
+    ///     Whether `building` rests on real ground - the flood's entry condition. Asks the surfaces
+    ///     players have actually walked on first (TerrainGroundTruth), then TerrainHeightMap's baked
+    ///     height where one covers this point; where neither does (nothing measured, no baked file,
+    ///     or a point outside its extent), falls back to "this piece is the lowest thing in its
     ///     own XY column", which alone reproduces "destroy the base, everything above falls" without
     ///     any terrain data - it is just wrong wherever a structure floats with nothing under it at
     ///     all (a bridge off a cliff reads as self-supporting), which real ground heights fix. No
@@ -548,17 +799,50 @@ public static class BuildingStructuralSupportSystem {
     private static bool IsSupportedByWorld(ABuildingActor building) {
         var loc = building.GetActorLocation();
 
-        // Highest ground anywhere under the piece's own tile, not the single cell nearest its pivot
-        // - see TerrainHeightMap.GetGroundHeightUnder for the measurements, and for the live bug
-        // that nearest-cell sampling caused (ground-level stairs reading as a storey and a half up,
-        // then cascading away as soon as a neighbour went).
-        if (TerrainHeightMap.GetGroundHeightUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset) is { } ground) {
-            // Strictly less than one storey: if the gap down to the ground is smaller than a whole
-            // storey, nothing could fit underneath, so this piece must be resting on the world. The
-            // real placement data agrees exactly - ground-level pieces top out at +352 above this
-            // sample and the storey above starts at +385, with 384 sitting in the gap between them.
-            return loc.Z - ground < FBuildingSupportCellIndex.StoreyHeight;
-        }
+        // A SURFACE SOMEONE HAS WALKED ON COUNTS AS WORLD, and it is asked first. This closes a
+        // known-open bug rather than adding a feature: the bake covers the LANDSCAPE, so a stair
+        // standing on a POI roof, a bridge or a rock read as unsupported and the cascade deleted it.
+        // TerrainGroundTruth knows those surfaces exactly wherever a player has stood on them, and it
+        // knows them as LEVELS, so the roof is offered to a piece sitting on the roof while the
+        // terrain far below is offered to one sitting on the terrain.
+        //
+        // EITHER SOURCE MAY SAY YES; neither may say no. A wrong "unsupported" DELETES the tester's
+        // structures, so where the two disagree the permissive answer is the safe one - and both are
+        // still bounded by the same one-storey rule, so neither can hold up a piece that is really
+        // floating.
+        if (TerrainGroundTruth.GetGroundHeightUnder(
+                loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset, loc.Z) is { } walked &&
+            loc.Z - walked < FBuildingSupportCellIndex.StoreyHeight) return true;
+
+        // Highest baked surface anywhere under the piece's own tile that is not ABOVE the piece -
+        // see TerrainHeightMap.GetGroundHeightUnder for the measurements, and for the live bug that
+        // nearest-cell sampling caused (ground-level stairs reading as a storey and a half up, then
+        // cascading away as soon as a neighbour went). Taking the placed-mesh grid into account is
+        // the other half of the POI-roof fix: a stair on a roof now has something under it even
+        // where nobody has walked, and the "not above the piece" rule is what stops the same roof
+        // from being handed to a piece standing on the ground beside the building.
+        // Strictly less than one storey below the piece: if the gap down to the ground is smaller
+        // than a whole storey, nothing could fit underneath, so the piece must be resting on the
+        // world. The real placement data agrees exactly - ground-level pieces top out at +352 above
+        // this sample and the storey above starts at +385, with 384 sitting in the gap between them.
+        static bool Rests(float pieceZ, float ground) => pieceZ - ground < FBuildingSupportCellIndex.StoreyHeight;
+
+        // THE LANDSCAPE IS ASKED WITHOUT A CEILING, and that is a REGRESSION FIX, not belt and braces.
+        // Switching this to the "highest surface at or below the piece" query quietly made the test
+        // STRICTER: a piece standing on ground that slopes up within its own tile has its support
+        // sample ABOVE its pivot, the ceiling threw that sample away, and the piece then read as
+        // unsupported and was CASCADED AWAY - which is a player falling through their own build, and
+        // is the exact bug ("ground-level stairs reading as a storey and a half up") this code was
+        // written to fix in the first place.
+        if (TerrainHeightMap.GetGroundHeightUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset)
+            is { } landscape && Rests(loc.Z, landscape)) return true;
+
+        // The ceiling-filtered query on top of that, which is what brings the PLACED MESH grid in: a
+        // stair on a POI roof has something under it even where nobody has walked, and the ceiling is
+        // what stops that same roof being offered to a piece standing on the ground beside it.
+        if (TerrainHeightMap.GetSurfaceUnder(loc.X, loc.Y, FBuildingSupportCellIndex.PivotEdgeOffset,
+                                            loc.Z) is { } ground)
+            return Rests(loc.Z, ground);
 
         var lowest = float.MaxValue;
         for (var dx = -1; dx <= 1; dx++)

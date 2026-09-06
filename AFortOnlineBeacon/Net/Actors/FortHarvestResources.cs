@@ -140,36 +140,17 @@ internal static partial class FortHarvestResources {
         if (controller.WorldInventory is not { } inventory) return;
 
         var definition = UAssetRegistry.GetOrCreate(itemPath);
-        var existing = inventory.Inventory.Items.FirstOrDefault(item => item.ItemDefinition == definition);
 
-        if (existing == null) {
-            var granted = Math.Min(amount, MaxResourceStack);
-            inventory.Inventory.Add(new FFortItemEntry {
-                ItemDefinition = definition,
-                Count = granted
-            });
+        // THE SAME FILLING RULE EVERY OTHER ITEM GETS. This used to be its own copy of stacking with
+        // 999 hardcoded, which was right for wood, stone and metal and for nothing else - and it was
+        // the only place in the server that stacked at all, so pickups did not. FortItemStacks reads
+        // the cap from the item definition itself (999 for all three resources, as it happens).
+        var leftOver = FortItemStacks.Give(inventory, new FFortItemEntry { ItemDefinition = definition }, amount);
 
-            Console.WriteLine($"FortHarvestResources: granted {granted} x {definition.GetFName()} (new stack), " +
-                              $"ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
-
-            DropOverflow(controller, definition, amount - granted);
-            return;
-        }
-
-        var room = MaxResourceStack - existing.Count;
-        if (room <= 0) {
-            DropOverflow(controller, definition, amount);
-            return;
-        }
-
-        var toGrant = Math.Min(amount, room);
-        existing.Count += toGrant;
-        inventory.Inventory.MarkItemDirty(existing);
-
-        Console.WriteLine($"FortHarvestResources: granted {toGrant} x {definition.GetFName()} -> {existing.Count}, " +
+        Console.WriteLine($"FortHarvestResources: granted {amount - leftOver} x {definition.GetFName()}, " +
                           $"ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
 
-        DropOverflow(controller, definition, amount - toGrant);
+        DropOverflow(controller, definition, leftOver);
     }
 
     /// <summary>

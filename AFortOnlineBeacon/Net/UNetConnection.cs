@@ -152,6 +152,17 @@ public abstract class UNetConnection : UPlayer {
     ///     streaming its own pawn). The moment anything here spawns an actor INTO a sublevel, or
     ///     wants to pace work against the client's streaming, this is the input it needs.
     /// </summary>
+    /// <summary>
+    ///     Actors whose channel was closed on this connection with EChannelCloseReason::Dormancy -
+    ///     the client still HAS them, it has just been told nothing more is coming.
+    ///
+    ///     Per connection, not per actor, because dormancy is per connection in real UE too
+    ///     (UNetDriver's NetworkObjectList tracks DormantConnections the same way). The newly-relevant
+    ///     sweep must skip everything in here or it would immediately reopen the channel it just
+    ///     closed; AActor.FlushNetDormancy is the only way out, and UNetDriver clears the entry.
+    /// </summary>
+    public HashSet<AActor> DormantActors { get; } = new();
+
     public HashSet<string> ClientVisibleLevelNames { get; } = new(StringComparer.OrdinalIgnoreCase);
     
     /// <summary>

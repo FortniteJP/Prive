@@ -46,6 +46,20 @@ public class AFortPickup : AActor {
     public AFortPickup() {
         if (float.TryParse(Environment.GetEnvironmentVariable("PICKUP_CULL_DISTANCE"), out var units) && units > 0)
             NetCullDistanceSquared = units * units;
+
+        // DORMANT ONCE SENT - and pickups are the reason dormancy was worth building. The floor-loot
+        // generator finds 2895 spawners; a pickup that has settled never changes again, and every
+        // tick spent diffing one is spent for the rest of the match.
+        //
+        // Only safe now that a destroy can reach a client WITHOUT a channel: a pickup IS destroyed
+        // when it is taken, and before UActorChannel.SendDestructionInfo existed that would have left
+        // it standing on every client forever. See UNetDriver.NotifyActorDestroyed.
+        //
+        // NativeRpcHandlers flushes dormancy before setting bPickedUp, though in practice the
+        // destroy on the very next line wins the race and the removal travels as a destruction info
+        // instead - see the comment there. The flush is kept for the property change that is not
+        // followed by a destroy.
+        SetNetDormancy(ENetDormancy.DormantAll);
     }
 
     /// <summary>AFortPickup::PrimaryPickupItemEntry (0x0270, Net + RepNotify) - handles 17-36.</summary>

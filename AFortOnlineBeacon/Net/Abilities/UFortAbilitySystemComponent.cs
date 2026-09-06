@@ -127,13 +127,74 @@ public class UFortAbilitySystemComponent : UObject {
     /// </summary>
     private static int _nextHandle = 1;
 
-    public FGameplayAbilitySpec GrantAbility(UObject abilityClass, UObject? sourceObject = null, int inputId = -1) {
+    /// <summary>
+    ///     UAbilitySystemComponent::AllReplicatedInstancedAbilities - every instanced ability that
+    ///     has to reach the client as a sub-object, in grant order.
+    ///
+    ///     Real UE walks this in ReplicateSubobjects (AbilitySystemComponent.cpp:1490). Here it is
+    ///     the channel's to-send list; UActorChannel.ReplicateAbilityInstances emits one content
+    ///     block per entry and then leaves it alone, since none of them ever changes.
+    /// </summary>
+    public List<UObject> AllReplicatedInstancedAbilities { get; } = new();
+
+    /// <summary>
+    ///     Grants an ability. <paramref name="replicateInstance"/> mirrors the ability's own
+    ///     EGameplayAbilityReplicationPolicy, which this server cannot read at runtime (it lives in
+    ///     the Blueprint) and so is baked - see FortConsumables.NeedsReplicatedAbilityInstance.
+    ///
+    ///     GETTING IT WRONG IS NOT SYMMETRIC. Missing an instance for a ReplicateYes ability makes
+    ///     that ability silently inert (the client activates on the CDO and its Server_* RPCs are
+    ///     dropped locally); supplying one for a ReplicateNo ability instead REPLACES what the
+    ///     client would have built for itself, and every CanActivateAbility check then runs against
+    ///     an object this server invented. So the default is false, and only a positive, read-from-
+    ///     the-pak answer turns it on.
+    /// </summary>
+    public FGameplayAbilitySpec GrantAbility(UObject abilityClass, UObject? sourceObject = null, int inputId = -1,
+                                             bool replicateInstance = false) {
         var spec = new FGameplayAbilitySpec {
             Handle = _nextHandle++,
             Ability = abilityClass,
             InputID = inputId,
             SourceObject = sourceObject
         };
+
+        // Real UE creates the instance inside GiveAbility, before OnGiveAbility and before the spec
+        // is ever marked dirty (AbilitySystemComponent_Abilities.cpp:244-249) - i.e. the spec is
+        // never replicated in a state where ReplicatedInstances is empty but should not be. Doing it
+        // here, before Add(), keeps that ordering: this project's standing hazard is an ObjectRef
+        // written before its target exists, which arrives null and is never reconsidered.
+        if (replicateInstance && OwnerActor != null) {
+            // "/Game/X/GA_Y.Default__GA_Y_C" is the CDO this spec's Ability points at; the INSTANCE
+            // is of the class beside it, "/Game/X/GA_Y.GA_Y_C". Rebuilt from the CDO's own name
+            // rather than passed in separately so the two can never disagree.
+            var cdoName = abilityClass.GetFName().ToString();
+            var package = abilityClass.GetOuter()?.GetFName().ToString();
+
+            if (package != null && cdoName.StartsWith("Default__", StringComparison.Ordinal)) {
+                var classPath = $"{package}.{cdoName["Default__".Length..]}";
+                var instanceClass = GUClassArray.StaticClassForPath<UGameplayAbilityInstance>(classPath);
+
+                // A path-built UClass has no FName until CreateDefaultObject gives it one, and
+                // MakeUniqueObjectName names the instance after its class - so without this the
+                // first instance of each class is called "None" in every log line that mentions it,
+                // and the second (by which time WriteContentBlockHeader has forced the same call)
+                // is not. Cosmetic, but it makes two identical objects look like two different bugs.
+                instanceClass.GetDefaultObject();
+
+                var instance = UObjectGlobals.NewObject<UGameplayAbilityInstance>(OwnerActor, instanceClass);
+
+                if (instance != null) {
+                    spec.ReplicatedInstances.Add(instance);
+                    AllReplicatedInstancedAbilities.Add(instance);
+                    Console.WriteLine($"UFortAbilitySystemComponent.GrantAbility: created a replicated ability " +
+                                      $"instance of {classPath} for spec handle {spec.Handle} - without one the " +
+                                      "client would activate this ability on its CDO and drop every Server_ RPC it sends");
+                }
+            } else {
+                Console.WriteLine($"UFortAbilitySystemComponent.GrantAbility: '{cdoName}' does not look like a " +
+                                  "Default__ CDO, so no instance class could be derived - this ability will be inert");
+            }
+        }
 
         // Add() runs MarkItemDirty, which assigns the ReplicationID and moves the array key - never
         // set either by hand, or the next item collides with this one.
@@ -148,6 +209,13 @@ public class UFortAbilitySystemComponent : UObject {
     public void ClearAbility(int handle) {
         var spec = ActivatableAbilities.Items.FirstOrDefault(item => item.Handle == handle);
         if (spec == null) return;
+
+        // UAbilitySystemComponent::OnRemoveAbility does the same (AbilitySystemComponent_Abilities.cpp:478):
+        // the instance goes out of AllReplicatedInstancedAbilities with the spec that owned it.
+        // Without this the list only ever grows - and it grows on every re-EQUIP, because each equip
+        // grants a fresh spec. One test session re-equipped a grenade a dozen times and left a dozen
+        // live ability instances replicating for the rest of the match.
+        foreach (var instance in spec.ReplicatedInstances) AllReplicatedInstancedAbilities.Remove(instance);
 
         ActivatableAbilities.Remove(spec);
         Console.WriteLine($"UFortAbilitySystemComponent.ClearAbility: removed spec handle {handle}, " +

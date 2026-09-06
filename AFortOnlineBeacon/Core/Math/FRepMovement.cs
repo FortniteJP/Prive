@@ -48,7 +48,7 @@ public sealed class FRepMovement {
     public FVector LinearVelocity { get; set; } = new();
 
     /// <summary>EVectorQuantization - 1/24 is RoundWholeNumber, 10/27 RoundOneDecimal, 100/30 RoundTwoDecimals.</summary>
-    private static readonly (uint Scale, uint Bits) LocationQuantization =
+    private static readonly (uint Scale, uint Bits) DefaultLocationQuantization =
         Environment.GetEnvironmentVariable("REP_MOVEMENT_SCALE") switch {
             "1" => (1u, 24u),
             "10" => (10u, 27u),
@@ -57,6 +57,21 @@ public sealed class FRepMovement {
 
     /// <summary>RoundWholeNumber, and NOT the same as the location's - see the class comment.</summary>
     private static readonly (uint Scale, uint Bits) VelocityQuantization = (1u, 24u);
+
+    /// <summary>
+    ///     FRepMovement::LocationQuantizationLevel - PER ACTOR CLASS, and NOT ON THE WIRE. Both ends
+    ///     read it from their own copy of the struct, so a mismatch is not an error anywhere: the
+    ///     client simply decodes the bits with the wrong scale and puts the actor somewhere absurd.
+    ///
+    ///     The 100/30 above is RoundTwoDecimals, confirmed against AFortPlayerPawn - and every actor
+    ///     here inherited it. UE's own default is RoundWholeNumber, and a projectile does not override
+    ///     it, so a grenade sent at the pawn's scale vanished the instant it was thrown while the
+    ///     server went on simulating and damaging correctly.
+    /// </summary>
+    public (uint Scale, uint Bits) LocationQuantization { get; set; } = DefaultLocationQuantization;
+
+    /// <summary>EVectorQuantization::RoundWholeNumber - the engine default, and what a projectile uses.</summary>
+    public static readonly (uint Scale, uint Bits) RoundWholeNumber = (1u, 24u);
 
     public void NetSerializeWrite(FBitWriter ar) {
         // The two physics flags, always both clear here: this server has no physics simulation, so

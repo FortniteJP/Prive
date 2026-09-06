@@ -56,6 +56,9 @@ public class UActorChannel : UChannel {
     ///     A colon is used rather than a dot because property names themselves contain dots
     ///     (CharacterData.Parts[0]).
     /// </summary>
+    /// <summary>One "skipping vehicle blocks" line per vehicle class, not per bunch.</summary>
+    private static readonly HashSet<string> _warnedVehicleBlock = new();
+
     private static readonly HashSet<string> DisabledProperties =
         (Environment.GetEnvironmentVariable("REP_DISABLE") ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -110,6 +113,39 @@ public class UActorChannel : UChannel {
     ///     spawn-time camera roll. AActor.bAttachmentEverSet is what keeps that narrow, and its being
     ///     STICKY is what lets the detach go out when the rider steps off.
     /// </summary>
+    /// <summary>
+    ///     Adds the seven ReplicatedBasedMovement handles (19-25) once this pawn is actually ON
+    ///     something - riding a vehicle.
+    ///
+    ///     CONDITIONAL FOR THE SAME REASON THE ATTACHMENT SET IS: a property in this set is diffed and
+    ///     sent for every pawn on every tick, and a walking player is based on nothing. Adding them
+    ///     unconditionally would put seven more handles on the wire for every player for the whole
+    ///     match to say "still null" - and, worse, would send handle 19 as a null object reference
+    ///     from the very first bunch, which is exactly the kind of change that has killed connections
+    ///     here before. They appear when there is something to say.
+    /// </summary>
+    private static HashSet<string> WithBasedMovement(HashSet<string> names, APawn pawn) {
+        if (pawn.bMovementBaseEverSet)
+            names.UnionWith(new[] {
+                "ReplicatedBasedMovement.MovementBase", "ReplicatedBasedMovement.BoneName",
+                "ReplicatedBasedMovement.Location", "ReplicatedBasedMovement.Rotation",
+                "ReplicatedBasedMovement.bServerHasBaseComponent",
+                "ReplicatedBasedMovement.bRelativeRotation", "ReplicatedBasedMovement.bServerHasVelocity"
+            });
+
+        // VehicleStateRep, 134-140 - and this is the half that reaches the DRIVER. The base above is
+        // COND_SimulatedOnly, so it goes to everyone except the person sitting in the seat; this
+        // carries no condition. SeatTransitionVector (139) is deliberately absent - see the layout.
+        if (pawn.bVehicleStateEverSet)
+            names.UnionWith(new[] {
+                "VehicleStateRep.Vehicle", "VehicleStateRep.VehicleApexZ", "VehicleStateRep.SeatIndex",
+                "VehicleStateRep.ExitSocketIndex", "VehicleStateRep.bOverrideVehicleExit",
+                "VehicleStateRep.EntryTime"
+            });
+
+        return names;
+    }
+
     private static HashSet<string> WithPawnAttachment(HashSet<string> names, AActor pawn) {
         if (!EnvAttachPawn && !pawn.bAttachmentEverSet) return names;
 
@@ -123,35 +159,30 @@ public class UActorChannel : UChannel {
     }
 
     /// <summary>
-    ///     Adds PlayerNamePrivate only when REPLICATE_PLAYER_NAME=1, and it is OFF because A REAL
-    ///     SERVER DOES NOT SEND IT.
+    ///     PlayerNamePrivate, ON by default. REPLICATE_PLAYER_NAME=0 turns it off.
     ///
-    ///     That is measured, not assumed. Project-Reboot-3.0's source writes PlayerNamePrivate in
-    ///     exactly one place - FortServerBotManagerAthena.cpp:56, overriding a BOT's name - never for
-    ///     a human player. And a controlled scan of its capture agrees: the three bytes "dev" appear
-    ///     in the C-&gt;S join URL (the positive control, proving a 3-byte name IS findable) and zero
-    ///     times in 7230 S-&gt;C packets across all eight bit alignments. The client already knows its
-    ///     own name - it sent it, as `?Name=dev`.
+    ///     IT WAS BRIEFLY TURNED OFF AND A LIVE TEST PUT IT BACK - the squad list went BLANK. That
+    ///     settles something worth writing down: **the client reads its own name for the squad list
+    ///     out of this replicated property**, and does NOT fall back to the name it sent itself in
+    ///     the join URL. Sending it is correct.
     ///
-    ///     This server sent it anyway, on a speculative reading of a client stall message ("waiting
-    ///     to finish restarting for " with an empty trailing format argument, which is name-shaped).
-    ///     That stall was later fixed by the ClientRestart/quickbars work instead, so the reason had
-    ///     already expired.
+    ///     The argument for switching it off was that a real server does not send it, and the
+    ///     evidence for THAT is real but does not say what it seemed to: Project-Reboot-3.0's source
+    ///     writes PlayerNamePrivate only in FortServerBotManagerAthena.cpp:56 (a BOT name override),
+    ///     and a controlled scan of its capture finds "dev" in the C-&gt;S join URL but zero times in
+    ///     7230 S-&gt;C packets at all eight bit alignments. What that rules out is PLAINTEXT and the
+    ///     sixteen shifted variants of the (C - 3j) mod 8 model. It does not rule out the name being
+    ///     sent in some other encoded form - and now that we know the client needs the property,
+    ///     that is the likelier reading. PR3.0's own squad list may simply have been blank too;
+    ///     nobody ever checked it.
     ///
-    ///     THE COST OF SENDING IT WAS A WHOLE INVESTIGATION. The client mangles a name it does not
-    ///     normally receive - the HUD shows it with delta_i = (3i + D) mod 8 added, D varying per
-    ///     session - and AGameModeBase.PreCompensateName exists purely to cancel that out, with a
-    ///     constant that has to be re-guessed every session. The wire was proven correct by
-    ///     hand-decoding this server's own payload, so none of it was ever a serialization bug: it
-    ///     was this server doing something the real one does not, which is the same shape as the
-    ///     three bugs Rounds 144-151 chased.
-    ///
-    ///     Kept switchable rather than deleted because it is the only lever for testing what a
-    ///     replicated name does to a client, and because a real MULTI-player server must somehow
-    ///     tell you the OTHER players' names - a question this solo setup cannot answer.
+    ///     So the mangling stands unexplained and AGameModeBase.PreCompensateName stays. What IS
+    ///     settled: the wire is correct (this server's own payload was hand-decoded at the logged
+    ///     bit offsets - 20 chars plus NUL, length 21, with HeroId following cleanly), so the
+    ///     transform is applied inside the client, to a value that arrives intact.
     /// </summary>
     private static HashSet<string> WithPlayerName(HashSet<string> names) {
-        if (Environment.GetEnvironmentVariable("REPLICATE_PLAYER_NAME") is "1") names.Add("PlayerNamePrivate");
+        if (Environment.GetEnvironmentVariable("REPLICATE_PLAYER_NAME") is not "0") names.Add("PlayerNamePrivate");
 
         return names;
     }
@@ -161,6 +192,14 @@ public class UActorChannel : UChannel {
 
         return properties;
     }
+
+    /// <summary>What a thrown projectile replicates - see the AFortProjectileBase arm below.</summary>
+    private static readonly HashSet<string> ProjectileProperties =
+        Environment.GetEnvironmentVariable("PROJECTILE_REPLICATE_MOVEMENT") is "1"
+            ? new HashSet<string> { "RemoteRole", "Role", "Owner", "Instigator", "bHasExploded",
+                                    "bIsBeingKilled", "bReplicateMovement", "ReplicatedMovement" }
+            : new HashSet<string> { "RemoteRole", "Role", "Owner", "Instigator", "bHasExploded",
+                                    "bIsBeingKilled" };
 
     private static HashSet<string> GetInitialReplicatedPropertiesCore(AActor actor) => actor switch {
         // The Athena block (WarmupCountdown*/AircraftStartTime/TotalPlayers/PlayersLeft/
@@ -201,7 +240,33 @@ public class UActorChannel : UChannel {
         // A parked vehicle. Role and RemoteRole only - where it is and which way it faces travel in
         // the spawn header, and it has no driver, so bHasDriver (22) already matches its CDO. See
         // AFortAthenaVehicle for why this is not an APawn here.
-        AFortAthenaVehicle => new HashSet<string> { "RemoteRole", "Role" },
+        // A vehicle sends OWNER as well, and it is not cosmetic: the client resolves an actor's
+        // "owning connection" by walking Owner up to a PlayerController, and refuses to send that
+        // actor's server RPCs without one -
+        //
+        //     LogNet: Warning: UNetDriver::ProcessRemoteFunction: No owning connection for actor
+        //     ShoppingCartVehicleSK_C_2147478650. Function ServerStartFire will not be processed.
+        //
+        // which is the client saying, out loud, that boarding half-worked: it seated the player and
+        // then dropped everything they tried to do from the seat. The server sets the owner on
+        // boarding; without the property here that assignment never left the machine.
+        AFortAthenaVehicle => new HashSet<string> { "RemoteRole", "Role", "Owner", "bHasDriver" },
+        // A thrown projectile. bHasExploded (16) is the ONLY property that ever changes, and it has
+        // to be listed here or it never goes out: this set is not just the OPEN bunch, it also gates
+        // the per-tick diff, so a property missing from it is invisible to CompareProperties forever.
+        //
+        // That is exactly how "the fuse fires and nothing explodes" happened - the server set
+        // bHasExploded, said so in the log, and the channel then filtered it out with no complaint.
+        // A property added to a layout is not replicated until it is added HERE too.
+        //
+        // Where the projectile IS never appears: the client flies it itself from the spawn header's
+        // velocity, and the server does not simulate the arc, so sending ReplicatedMovement would
+        // snap the grenade back to the muzzle every tick.
+        // ReplicatedMovement (6) and its gate bReplicateMovement (2) are added only when
+        // PROJECTILE_REPLICATE_MOVEMENT is set - see FortProjectileSystem.ReplicateMovement for what
+        // that switch actually decides. Listing them unconditionally would send a Location that the
+        // server only updates when the simulation runs, which is worse than sending none.
+        AFortProjectileBase => ProjectileProperties,
         // The storm circle. Every one of these changes at each phase - the client interpolates from
         // Last to Next between the two shrink times - so the per-tick diff has to be walking them.
         AFortSafeZoneIndicator => new HashSet<string> {
@@ -305,7 +370,7 @@ public class UActorChannel : UChannel {
         // attempt had wrongly placed this). See NativeRepLayouts.PlayerControllerProps.
         // APawn: everything APawn::PossessedBy sets - without these the client sees an unowned pawn
         // with no controller and no player state.
-        APawn pawnActor => WithPawnAttachment(new HashSet<string> {
+        APawn pawnActor => WithBasedMovement(WithPawnAttachment(new HashSet<string> {
             "RemoteRole", "Role", "Owner", "PlayerState", "Controller",
             // Handles 2 and 6 - where everyone ELSE sees this pawn. Without them a remote player is
             // frozen at the position their actor-spawn header carried; see Core.Math.FRepMovement.
@@ -346,8 +411,12 @@ public class UActorChannel : UChannel {
             // Handles 95, 126 and 127 - the storm. All three CHANGE mid-match, so they have to be
             // listed here or the per-tick diff would never compare them. bIsInAnyStorm is the one
             // that actually lights up the screen effect - see APawn.bIsInAnyStorm.
-            "bIsNearSafeZoneEdge", "bIsInAnyStorm", "bIsInsideSafeZone"
-        }, pawnActor),
+            "bIsNearSafeZoneEdge", "bIsInAnyStorm", "bIsInsideSafeZone",
+            // Handles 52, 53 and 71 - whether a dance MOVES. Listed here because they change
+            // mid-match (they are set when an emote starts and cleared when it ends), so the
+            // per-tick diff has to compare them. See FortEmoteAssets.Generated.cs.
+            "bMovingEmote", "bMovingEmoteForwardOnly", "EmoteWalkSpeed"
+        }, pawnActor), pawnActor),
         APlayerController => new HashSet<string> {
             "RemoteRole", "Role", "bHasInitiallySpawned", "bHasServerFinishedLoading",
             "PlayerState", "Pawn", "WorldInventory",
@@ -450,6 +519,60 @@ public class UActorChannel : UChannel {
     ///     "BunchIsError - Property=<real name>, Parent=<idx>, Cmd=<idx>" - the only condition under
     ///     which the client will name a handle at all. See HandleProbe.cs for how to read the result.
     /// </summary>
+    /// <summary>
+    ///     UActorChannel::SetChannelActorForDestroy (DataChannel.cpp:2194) - tell a client to destroy
+    ///     an actor WITHOUT having a channel for it.
+    ///
+    ///     THIS IS THE PIECE DORMANCY WAS MISSING. Closing a channel is how this server removes an
+    ///     actor from a client, and a dormant actor has no channel to close - so a dormant actor that
+    ///     gets destroyed would live on the client forever. It is also the general hole: distance
+    ///     culling means a client may never have had a channel for an actor at all, yet may still
+    ///     know its NetGUID from an object reference somewhere else.
+    ///
+    ///     The wire form is deliberately tiny and is what the client is written to recognise: open a
+    ///     fresh actor channel, and make its FIRST bunch a CLOSE bunch whose entire payload is the
+    ///     destroyed actor's object reference. UPackageMapClient::SerializeNewActor
+    ///     (PackageMapClient.cpp:339) reads the guid, sees `Ar.AtEnd() &amp;&amp; NetGUID.IsDynamic()`
+    ///     on a closing channel, and returns "no actor spawned" with the comment
+    ///     "This can happen when dormant actors that don't have channels get destroyed" - i.e. it is
+    ///     documented as exactly this case. If the channel is NOT closing it logs an error and sets
+    ///     the archive error instead, which is why the close flag matters as much as the payload.
+    ///
+    ///     Only DYNAMIC guids qualify. A static, path-named actor is destroyed by a different
+    ///     mechanism in UE (the startup-actor list), and sending one here would fail that IsDynamic
+    ///     test on the client and error the bunch rather than doing nothing.
+    /// </summary>
+    public void SendDestructionInfo(AActor destroyed) {
+        if (Connection == null || Closing) return;
+
+        var packageMap = (UPackageMapClient) Connection.PackageMap!;
+        var netGuid = packageMap.GuidCache!.GetOrAssignNetGUID(destroyed);
+
+        if (!netGuid.IsValid() || netGuid.IsDefault()) {
+            Console.WriteLine($"UActorChannel.SendDestructionInfo: {destroyed.GetType().Name} " +
+                              $"'{destroyed.GetFName()}' has no usable NetGUID - the client was never told " +
+                              "about it, so there is nothing to destroy.");
+            return;
+        }
+
+        using var closeBunch = new FOutBunch(this, true) {
+            bReliable = true,
+            CloseReason = EChannelCloseReason.Destroyed
+        };
+
+        if (closeBunch.IsError()) return;
+
+        // The whole payload. Anything after it and the client's AtEnd() test fails, and it would try
+        // to read a full actor spawn out of a bunch that does not contain one.
+        packageMap.SerializeObject(closeBunch, destroyed);
+
+        Console.WriteLine($"UActorChannel.SendDestructionInfo: ChIndex={ChIndex} destroys " +
+                          $"{destroyed.GetType().Name} '{destroyed.GetFName()}' by guid {netGuid} " +
+                          $"({closeBunch.GetNumBits()} bits, no channel was open for it)");
+
+        SendBunch(closeBunch, false);
+    }
+
     public unsafe void ReplicateActor() {
         if (Actor == null || Connection == null) return;
 
@@ -697,7 +820,17 @@ public class UActorChannel : UChannel {
         ERepCondition.None => true,
         ERepCondition.OwnerOnly => IsNetOwner,
         ERepCondition.SkipOwner => !IsNetOwner,
-        ERepCondition.SimulatedOnly => !IsNetOwner,
+        // COND_SimulatedOnly is about the ROLE THIS CONNECTION SEES, not about ownership. UE sets
+        // FReplicationFlags::bNetSimulated from the remote role, and the only actors whose remote role
+        // is AutonomousProxy for their owner are that player's own pawn and controller - everything
+        // else is a simulated proxy to EVERYONE, including whoever owns it.
+        //
+        // Reading it as plain !IsNetOwner cost a live round: a thrown projectile is owned by the
+        // thrower, so its ReplicatedMovement was withheld from the one player watching it, and the
+        // server's simulated flight was invisible to exactly the person who asked to see it. For a
+        // pawn the two readings agree, which is why nothing noticed until an owned SIMULATED actor
+        // existed.
+        ERepCondition.SimulatedOnly => !(IsNetOwner && Actor?.RemoteRole == ENetRole.ROLE_AutonomousProxy),
         // Sent once in the open bunch and never compared again - that is what "initial" means.
         ERepCondition.InitialOnly => false,
         ERepCondition.ReplayOnly => false,
@@ -1174,6 +1307,13 @@ public class UActorChannel : UChannel {
 
         if (asc == null) return false;
 
+        // BEFORE the spec that names them. A spec's ReplicatedInstances is an ObjectRef array, and
+        // this project's standing hazard is an ObjectRef whose target the client has not built yet:
+        // it resolves to null on arrival and a property matching the shadow is never reconsidered.
+        // Sending the instance's own content block first means the client has constructed the object
+        // by the time the spec points at it.
+        ReplicateAbilityInstances(asc);
+
         using var payload = new FNetBitWriter(Connection.PackageMap, 256);
 
         // The component's own properties come first, in the same handle stream an actor uses - the
@@ -1239,6 +1379,46 @@ public class UActorChannel : UChannel {
     }
 
     private bool _sentBuildingAbilitySystem;
+
+    /// <summary>
+    ///     Sends one sub-object content block per replicated ability instance - the port of
+    ///     UAbilitySystemComponent::ReplicateSubobjects' AllReplicatedInstancedAbilities loop
+    ///     (AbilitySystemComponent.cpp:1490).
+    ///
+    ///     The block carries NO PAYLOAD, and that is the whole point: everything the client needs is
+    ///     in the header, because the object's name is not stable and WriteContentBlockHeader
+    ///     therefore writes its CLASS alongside its NetGUID, which is exactly enough for the client
+    ///     to construct a GA_*_C of the right type. The ability's own state is GAS's to rebuild.
+    ///
+    ///     ONCE EACH. An ability instance is created at grant time and never changes afterwards, so
+    ///     there is nothing to diff and re-sending would be pure noise. _sentAbilityInstances is per
+    ///     CHANNEL rather than per component for the same reason every other send here is: a second
+    ///     connection has its own channel and its own copy of this bookkeeping.
+    /// </summary>
+    private unsafe void ReplicateAbilityInstances(UFortAbilitySystemComponent asc) {
+        if (Connection == null) return;
+
+        foreach (var instance in asc.AllReplicatedInstancedAbilities) {
+            if (!_sentAbilityInstances.Add(instance)) continue;
+
+            using var bunch = new FOutBunch(this, false);
+            bunch.bReliable = true;
+
+            WriteContentBlockHeader(instance, bunch, hasRepLayout: false);
+
+            uint numPayloadBits = 0;
+            bunch.SerializeIntPacked(&numPayloadBits);
+
+            var guid = ((UPackageMapClient) Connection.PackageMap!).GuidCache!.GetNetGUID(instance);
+            Console.WriteLine($"ReplicateAbilityInstances: ChIndex={ChIndex} Actor={Actor?.GetFName()} " +
+                              $"sent ability instance {instance.GetFName()} of {instance.GetClass().NativePackagePath} " +
+                              $"as guid {guid} (header only, no payload)");
+
+            SendBunch(bunch, false);
+        }
+    }
+
+    private readonly HashSet<UObject> _sentAbilityInstances = new();
 
     /// <summary>
     ///     Runs the ability-system push out of band, outside the per-tick replication pass. The one
@@ -1654,6 +1834,9 @@ public class UActorChannel : UChannel {
     /// <summary>Which RPC names RPC_DUMP has already dumped - one sample each is the point.</summary>
     private static readonly HashSet<string> DumpedRpcPayloads = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>How many raw dumps each RPC has already produced - see DumpRawRpcPayload's cap.</summary>
+    private static readonly Dictionary<string, int> _rpcDumpCounts = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     ///     RPC_DUMP=&lt;Name&gt;[,&lt;Name&gt;...] - print one raw sample of a named incoming RPC's payload as
     ///     hex, before any declared parameter layout touches it, and leave the read position exactly
@@ -1681,7 +1864,14 @@ public class UActorChannel : UChannel {
                        .Contains(fieldName, StringComparer.OrdinalIgnoreCase)) return;
         }
 
-        if (!DumpedRpcPayloads.Add(fieldName)) return;
+        // Normally once each - a second identical dump teaches nothing. The exception is an RPC
+        // whose layout is still unknown: one sample cannot distinguish a FIXED-width encoding from a
+        // packed one that happened to land on the same size, and it is the second sample, taken
+        // somewhere else, that tells them apart. Four is enough for that and still bounded.
+        _rpcDumpCounts.TryGetValue(fieldName, out var already);
+        if (already >= (reason == null ? 1 : 4)) return;
+        _rpcDumpCounts[fieldName] = already + 1;
+        DumpedRpcPayloads.Add(fieldName);
 
         var numBits = (int) Math.Max(0, fieldEnd - fieldStart);
         var resumeAt = bunch.Pos;
@@ -2434,6 +2624,42 @@ public class UActorChannel : UChannel {
                 FPredictionKey.Write(writer, predictionKey);
             });
 
+    /// <summary>
+    ///     UAbilitySystemComponent::ClientEndAbility - the server telling a client that an ability it
+    ///     is running has finished. THE OTHER HALF of the activation handshake, and the one this
+    ///     project was missing entirely.
+    ///
+    ///     Why a server has to send it at all: an ability's own graph runs on both sides, but the
+    ///     parts that need authority do not. A throw's SpawnProjectileAndWait is a SpawnActor-style
+    ///     task, and those only spawn under IsNetAuthority() - so on the client the task's Created
+    ///     delegate never fires, the WaitDelay(PostThrowEndDelay) after it never starts, and
+    ///     K2_AbilityCompleted is never reached. The client's ability therefore CANNOT end by itself,
+    ///     and until it does, Spec->IsActive() stays true and every further activation is refused
+    ///     with "Can't activate instanced per actor ability ... already a currently active instance".
+    ///     A real server ends its own copy and sends this; ReplicateEndOrCancelAbility's authority
+    ///     branch is exactly that call.
+    ///
+    ///     The PREDICTION KEY MUST MATCH the one the client activated with. RemoteEndOrCancelAbility
+    ///     walks the spec's instances and ends only the instance whose activation key equals the one
+    ///     in this ActivationInfo; a fresh key ends nothing and fails silently.
+    ///
+    ///     FGameplayAbilityActivationInfo is an ordinary struct with no NetSerialize, so RepLayout
+    ///     flattens it into its three replicated members in declaration order: ActivationMode (a
+    ///     byte), the bCanBeEndedByOtherInstance bit, and PredictionKeyWhenActivated. Confirmed = 3
+    ///     is the mode a client-predicted, server-acknowledged activation is in by this point.
+    /// </summary>
+    public void SendClientEndAbility(UObject abilitySystem, int abilityHandle, FPredictionKey predictionKey) =>
+        SendSubObjectRpc(abilitySystem, NativeClassNetCache.FortAbilitySystemComponentCache,
+            "ClientEndAbility", writer => {
+                writer.WriteBit(true);              // AbilityToEnd present
+                writer.WriteInt32(abilityHandle);
+
+                writer.WriteBit(true);              // ActivationInfo present
+                writer.WriteByte(3);                // EGameplayAbilityActivationMode::Confirmed
+                writer.WriteBit(false);             // bCanBeEndedByOtherInstance
+                FPredictionKey.Write(writer, predictionKey);
+            });
+
     /// <param name="reliable">
     ///     Must match the UFUNCTION's own declaration. Getting this wrong is not cosmetic: an
     ///     unreliable-in-UE RPC sent reliably at gameplay frequency (ClientAckGoodMove fires at the
@@ -2581,6 +2807,7 @@ public class UActorChannel : UChannel {
                 var subObjectCache = subObject switch {
                     UFortAbilitySystemComponent => NativeClassNetCache.FortAbilitySystemComponentCache,
                     UFortControllerComponent_Interaction => NativeClassNetCache.FortControllerComponentInteractionCache,
+                    UGameplayAbilityInstance => NativeClassNetCache.ThrownAbilityCache,
                     _ => null
                 };
 
@@ -2590,10 +2817,53 @@ public class UActorChannel : UChannel {
                     } catch (Exception ex) {
                         Console.WriteLine($"UActorChannel.ReceivedBunch: sub-object field decode threw on ChIndex={ChIndex}: {ex}");
                     }
+                } else if (subObject != null) {
+                    // RESOLVED, but this server has no ClassNetCache for its class, so the field
+                    // index (a bounded int whose width is GetMaxIndex()+1) cannot even be read - let
+                    // alone named. Kept distinct from the unresolved case below because they call
+                    // for opposite fixes and the old message claimed "unresolved" for both.
+                    //
+                    // This is the line to watch when a new ability starts talking back: a
+                    // UGameplayAbilityInstance turning up here means the ReplicateYes chain worked
+                    // and the client is now sending that ability's own Server_* RPCs (for a grenade,
+                    // Server_SpawnProjectile). The bit count is the first real evidence about its
+                    // parameter layout - a lone Location+Direction pair should be two FVectors.
+                    Console.WriteLine($"UActorChannel.ReceivedBunch: skipping {numPayloadBits} bits on sub-object " +
+                                      $"'{subObject.GetFName()}' of class '{subObject.GetClass().NativePackagePath ?? subObject.GetClass().GetFName().ToString()}' " +
+                                      "- it RESOLVED, but there is no ClassNetCache for that class so the field index " +
+                                      "cannot be decoded. The rest of the bunch is still read.");
                 } else {
                     Console.WriteLine($"UActorChannel.ReceivedBunch: skipping {numPayloadBits} bits from unresolved " +
                                       $"sub-object '{subObjectPath}' - the rest of the bunch is still read");
                 }
+            } else if (Actor is AFortAthenaVehicle vehicleActor && !FortVehicleNetCaches.DecodeEnabled) {
+                // LEFT ALONE ON PURPOSE. A vehicle's field numbering is derived rather than verified
+                // (see FortVehicleNetCaches.DecodeEnabled), and a wrong numbering does not mislabel a
+                // field - it reads the index at the wrong width and turns the rest of the block into
+                // noise. Nothing needs these RPCs yet, and the block carries its own size, so skipping
+                // it costs nothing and keeps the bunch intact.
+                if (_warnedVehicleBlock.Add(vehicleActor.GetType().Name)) {
+                    Console.WriteLine($"UActorChannel.ReceivedBunch: skipping content blocks on " +
+                                      $"{vehicleActor.GetFName()} - vehicle field numbering is unverified, " +
+                                      "VEHICLE_RPC_DECODE=1 to attempt it anyway.");
+
+                    // ...but measure it on the way past. One block is usually enough to pin the number
+                    // the client used, which is the one piece of information the SDK headers cannot
+                    // supply.
+                    CalibrateFieldIndexBound(bunch, bunch.Pos, payloadEnd, vehicleActor.GetFName().ToString());
+
+                    // AND KEEP THE BYTES. The calibration came back with nine candidate bounds
+                    // (18-26), which is not nine possibilities - it is one: every bound in (16, 32]
+                    // reads the index with the same five bits, so the client's cache has between 17
+                    // and 32 net fields. That is FAR smaller than the vehicle chain this server
+                    // derived, and a number that small says the block may not belong to the vehicle
+                    // class at all. Only the raw bits can settle which, so they are kept rather than
+                    // reasoned about.
+                    DumpRawRpcPayload(bunch, $"{vehicleActor.GetFName()}#block", bunch.Pos, payloadEnd,
+                                      "vehicle content block, field numbering unverified");
+                }
+
+                bunch.Pos = payloadEnd;
             } else if (Actor != null) {
                 try {
                     ReadContentBlockFields(bunch, NativeClassNetCache.Get(Actor), payloadEnd);
@@ -2625,6 +2895,71 @@ public class UActorChannel : UChannel {
     ///     own declared bit count always resyncs bunch.Pos at the end of the loop body regardless of
     ///     what a handler actually consumed, so a handler bug can't desync the rest of the bunch.
     /// </summary>
+    /// <summary>
+    ///     Works out, FROM THE WIRE, what field-index bound a content block was written with - and so
+    ///     how many net fields the client's copy of this class really has.
+    ///
+    ///     WHY MEASURE INSTEAD OF DERIVE. A field index is a BOUNDED int: its width depends on the
+    ///     class's total net field count, so a server whose count is off by one decodes the index at
+    ///     the wrong width and turns the rest of the block into noise. Deriving that count from the
+    ///     Dumper-7 SDK headers works for properties and cannot work for functions - the headers carry
+    ///     no FUNC_Net flag, so "is this an RPC" ends up inferred from the name. That guess produced
+    ///     field sizes of three billion bits.
+    ///
+    ///     The wire settles it. A correctly-read block consumes EXACTLY its payload: index, packed
+    ///     size, that many bits, repeat, ending on the last bit. Wrong bounds almost never do. So try
+    ///     the plausible ones and keep those that parse cleanly - one survivor is the answer, several
+    ///     means the block was too short to distinguish them and nothing is claimed.
+    ///
+    ///     This is a DIAGNOSTIC, not a decoder: it reports the number so the generated table can be
+    ///     corrected. Guessing a field's identity from a calibrated index would be the same mistake
+    ///     one level down.
+    /// </summary>
+    private unsafe void CalibrateFieldIndexBound(FInBunch bunch, long blockStart, long payloadEnd, string what) {
+        var survivors = new List<int>();
+
+        // Around the derived count, generously: a handful of missed or invented RPCs is exactly the
+        // error being hunted, and the cost of a wider sweep is a few hundred arithmetic operations.
+        for (var candidate = 2; candidate <= 512; candidate++) {
+            bunch.Pos = blockStart;
+            if (!ParsesCleanly(bunch, (uint) candidate, payloadEnd)) continue;
+
+            survivors.Add(candidate);
+            if (survivors.Count > 8) break;
+        }
+
+        bunch.Pos = blockStart;
+
+        Console.WriteLine(survivors.Count switch {
+            0 => $"UActorChannel.Calibrate: no field-index bound between 2 and 512 parses this {what} block " +
+                 "cleanly - it may not be a content block at all.",
+            1 => $"UActorChannel.Calibrate: {what} was written with a field-index bound of {survivors[0]} " +
+                 $"(this server's cache says {NativeClassNetCache.Get(Actor!).GetMaxIndex() + 1}). " +
+                 "Correct the generated field list to that many net fields.",
+            _ => $"UActorChannel.Calibrate: {what} block is consistent with bounds " +
+                 $"[{string.Join(", ", survivors)}] - too short to tell them apart."
+        });
+    }
+
+    /// <summary>Whether a block parses to exactly its end when field indices are read with this bound.</summary>
+    private static unsafe bool ParsesCleanly(FInBunch bunch, uint bound, long payloadEnd) {
+        while (bunch.Pos < payloadEnd) {
+            var index = bunch.ReadInt(bound);
+            if (bunch.IsError() || index >= bound) return false;
+
+            uint size = 0;
+            bunch.SerializeIntPacked(&size);
+            if (bunch.IsError()) return false;
+
+            var end = bunch.Pos + (long) size;
+            if (end > payloadEnd) return false;
+
+            bunch.Pos = end;
+        }
+
+        return bunch.Pos == payloadEnd && !bunch.IsError();
+    }
+
     private unsafe void ReadContentBlockFields(FInBunch bunch, FClassNetCache classCache, long payloadEnd,
                                                UObject? subObject = null) {
         var maxIndex = classCache.GetMaxIndex();
@@ -2661,6 +2996,28 @@ public class UActorChannel : UChannel {
             }
 
             var fieldStart = bunch.Pos;
+
+            // A FIELD CANNOT BE BIGGER THAN THE BLOCK IT IS IN, and when it claims to be, the field
+            // INDEX was read at the wrong bit width - which means everything after it is noise. The
+            // vehicle work produced exactly this, three lines in a row:
+            //
+            //     field[49]=bWeaponActivated ... (1826968 payload bits)
+            //     field[49]=bWeaponActivated ... (173695128 payload bits)
+            //     field[49]=bWeaponActivated ... (3489014768 payload bits)
+            //
+            // Clamping quietly (which is what Math.Min alone did) hides that: the numbers scroll past
+            // as a curiosity while the block is silently abandoned anyway. Saying it outright turns an
+            // impossible size into what it actually is - proof that this class's ClassNetCache does
+            // not match the client's.
+            if (fieldNumBits > (ulong) (payloadEnd - fieldStart)) {
+                Console.WriteLine($"UActorChannel.ReadContentBlockFields: field[{repIndex}] on " +
+                                  $"{target?.GetFName()} claims {fieldNumBits} bits but only " +
+                                  $"{payloadEnd - fieldStart} remain in the block - this class's field " +
+                                  $"numbering does not match the client's (maxIndex={maxIndex}). " +
+                                  "Abandoning the block.");
+                break;
+            }
+
             var fieldEnd = Math.Min(fieldStart + (long) fieldNumBits, payloadEnd);
             var fieldName = classCache.GetFromIndex(repIndex)?.Name ?? "?";
 
@@ -2676,6 +3033,13 @@ public class UActorChannel : UChannel {
             DumpRawRpcPayload(bunch, fieldName, fieldStart, fieldEnd);
 
             if (rpcTable != null && rpcTable.TryGetValue(fieldName, out var rpcDef)) {
+                // An RPC with no declared layout yet - see FRpcDef.DumpRawAlways. Passing a reason
+                // bypasses the RPC_DUMP gate, which is the point: this is the one case where the
+                // bytes are the entire content of the message as far as this server is concerned.
+                if (rpcDef.DumpRawAlways)
+                    DumpRawRpcPayload(bunch, fieldName, fieldStart, fieldEnd,
+                                      "its parameter layout is still being derived");
+
                 try {
                     var values = FRpcReader.ReadParams(bunch, rpcDef.Params);
 

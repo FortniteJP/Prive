@@ -67,6 +67,10 @@ public class GUClassArray {
         // component is never replicated OUTWARDS, it exists so the client's own sub-object reference
         // resolves to something this server can dispatch ServerAttemptInteract on.
         [typeof(UFortControllerComponent_Interaction)] = "/Script/FortniteGame.FortControllerComponent_Interaction",
+        // A vehicle's SkeletalMeshComponent. Registered for the same reason and used the other way
+        // round: this server never receives anything on it, it hands it OUT as the driver's movement
+        // base. See UFortVehicleSkelMeshComponent.
+        [typeof(UFortVehicleSkelMeshComponent)] = "/Script/FortniteGame.FortVehicleSkelMeshComponent",
         // A placed building's health attribute set. Native, and it MUST be: unlike the PlayerState's
         // stably-named sets, this one is created at runtime and so travels as a sub-object content
         // block carrying its class, which the client has to be able to resolve to construct it - the

@@ -251,6 +251,19 @@ internal static class FFastArraySerializerWriter {
         payload.SerializeBits(&num, 16);
     }
 
+    /// <summary>
+    ///     The same uint16-count-then-elements shape as WriteEmptyArray, for an array whose element
+    ///     is a single object reference. An empty list writes byte-for-byte what WriteEmptyArray
+    ///     does, so this is a safe drop-in wherever a slot used to be hardcoded empty.
+    /// </summary>
+    private static unsafe void WriteObjectArray(FNetBitWriter payload, IReadOnlyList<UObject> items) {
+        var num = (ushort) items.Count;
+        payload.SerializeBits(&num, 16);
+
+        var packageMap = (UPackageMapClient) payload.PackageMap!;
+        foreach (var item in items) packageMap.SerializeObject(payload, item);
+    }
+
     /// <summary>FGuid's wire form is its four int32 members A,B,C,D in declaration order.</summary>
     private static int[] GuidToAbcd(Guid guid) {
         var b = guid.ToByteArray();
@@ -278,7 +291,13 @@ internal static class FFastArraySerializerWriter {
         WriteInt32(payload, spec.Level);
         WriteInt32(payload, spec.InputID);
         packageMap.SerializeObject(payload, spec.SourceObject);
-        WriteEmptyArray(payload);                   // ReplicatedInstances - none; the client instances abilities itself
+
+        // ReplicatedInstances. Empty for every ReplicateNo ability, which is nearly all of them -
+        // those the CLIENT instances itself, in OnGiveAbility. A ReplicateYes ability is the exact
+        // opposite: the client deliberately makes none and waits for this, and until it arrives the
+        // ability activates on its CDO and can send no Server_* RPC at all. See
+        // UGameplayAbilityInstance.
+        WriteObjectArray(payload, spec.ReplicatedInstances);
     }
 
     /// <summary>

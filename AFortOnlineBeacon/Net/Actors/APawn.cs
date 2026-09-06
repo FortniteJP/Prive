@@ -162,9 +162,18 @@ public class APawn : AActor {
         // the pawn.
         if (Controller?.PlayerState?.AbilitySystemComponent is { } abilitySystem
             && FortWeaponActorClasses.FireAbilityFor(item.ItemDefinition) is { } fireAbility) {
-            var spec = abilitySystem.GrantAbility(fireAbility, weapon);
+            // A ReplicateYes ability needs a server-created instance or it is inert - the client
+            // makes none of its own for those and ends up activating on the CDO, where every
+            // Server_* RPC it sends is executed locally and thrown away. Grenades are the whole
+            // affected set today; every healing consumable is ReplicateNo, which is why those have
+            // always worked. See UGameplayAbilityInstance.
+            var needsInstance = FortConsumables.NeedsReplicatedAbilityInstance(
+                item.ItemDefinition?.GetFName().ToString() ?? string.Empty);
+
+            var spec = abilitySystem.GrantAbility(fireAbility, weapon, replicateInstance: needsInstance);
             weapon.GrantedAbilitySpecHandle = spec.Handle;
-            Console.WriteLine($"APawn.EquipInventoryItem: granted {fireAbility.GetFName()} as spec handle {spec.Handle}");
+            Console.WriteLine($"APawn.EquipInventoryItem: granted {fireAbility.GetFName()} as spec handle {spec.Handle}" +
+                              (needsInstance ? " (with a replicated ability instance)" : ""));
 
             // A magazine the player can empty needs a way to refill it. The reload ability is
             // native (UFortGameplayAbility_Reload), so its CDO resolves by path with no asset to
@@ -328,12 +337,164 @@ public class APawn : AActor {
     public bool bIsParachuteOpen { get; set; }
 
     /// <summary>
+    ///     AFortPawn::bMovingEmote (52), bMovingEmoteForwardOnly (53) and EmoteWalkSpeed (71) - the
+    ///     three properties that decide whether a dance MOVES.
+    ///
+    ///     They were Reserved for one reason: the values live on the emote asset
+    ///     (UAthenaDanceItemDefinition::bMovingEmote / bMoveForwardOnly / WalkForwardSpeed) and an
+    ///     out-of-process server could not read a .uasset. They are baked now - see
+    ///     FortEmoteAssets.Generated.cs - and only 22 of 263 dances set them at all, so the default
+    ///     (dancing on the spot) is right for nearly everything.
+    ///
+    ///     Set when an emote starts and cleared when it ends; see FortEmoteSystem.
+    /// </summary>
+    public bool bMovingEmote { get; set; }
+
+    /// <summary>See <see cref="bMovingEmote"/>. Handle 53.</summary>
+    public bool bMovingEmoteForwardOnly { get; set; }
+
+    /// <summary>See <see cref="bMovingEmote"/>. Handle 71, in unreal units per second.</summary>
+    public float EmoteWalkSpeed { get; set; }
+
+    /// <summary>
     ///     AFortPlayerPawn::bIsSkydivingFromBus - handle 106, OnRep_IsSkydivingFromBus. Not derivable
     ///     from the movement mode: skydiving from the battle bus and skydiving off a launch pad are
     ///     the same custom mode. The SERVER is the only one that knows which, so it is set in
     ///     NativeRpcHandlers.LeaveAircraft and cleared here when the descent ends.
     /// </summary>
     public bool bIsSkydivingFromBus { get; set; }
+
+    /// <summary>
+    ///     ACharacter::ReplicatedBasedMovement - what a player standing on a moving thing is BASED on,
+    ///     and how a driver rides a vehicle.
+    ///
+    ///     NOT AN ATTACHMENT, and that distinction cost this project a round: an earlier attempt at
+    ///     vehicles attached the pawn to the vehicle actor, and the client applied the attachment
+    ///     without ever entering vehicle state - the pawn sank through the floor. The PR3.0 capture
+    ///     shows what the real server does instead, `LogCharacter: Setting base on Server for
+    ///     'PlayerPawn_Athena_C_...' to 'FortVehicleSkelMeshComponent ...SkeletalMeshComponent'`. A
+    ///     base is a relationship the client's own movement code understands; an attachment is a
+    ///     transform it applies to a pawn that is still trying to walk. See [[vehicle-wire-flow]].
+    ///
+    ///     Handles 19-25, seven of them, because FBasedMovementInfo is not STRUCT_NetSerializeNative
+    ///     and FRepLayout recurses into every member - see NativeRepLayouts.PawnProps.
+    /// </summary>
+    public UObject? MovementBase { get; private set; }
+
+    /// <summary>The bone within the base, "None" for a whole component.</summary>
+    public FName MovementBaseBoneName { get; private set; } = new("None");
+
+    /// <summary>Where the pawn sits RELATIVE to its base.</summary>
+    public FVector BasedRelativeLocation { get; private set; }
+
+    /// <summary>How the pawn is turned relative to its base.</summary>
+    public FRotator BasedRelativeRotation { get; private set; }
+
+    /// <summary>
+    ///     `bServerHasBaseComponent` - the client uses it to tell "no base" from "a base it has not
+    ///     resolved yet". True exactly when a base is set.
+    /// </summary>
+    public bool bServerHasBaseComponent => MovementBase != null;
+
+    /// <summary>`bRelativeRotation` - whether the rotation above is relative to the base or absolute.</summary>
+    public bool bBasedRelativeRotation { get; private set; }
+
+    /// <summary>`bServerHasVelocity` - nothing here integrates a base's velocity, so this stays false.</summary>
+    public bool bServerHasVelocity => false;
+
+    /// <summary>
+    ///     Whether this pawn has EVER been in a vehicle or on a base, and therefore whether those
+    ///     handle groups stay in its replicated set.
+    ///
+    ///     ONCE TRUE, NEVER FALSE - the same rule AActor.bAttachmentEverSet follows, and for a reason
+    ///     that only shows up when someone gets OUT: the client learns it has left by receiving
+    ///     `VehicleStateRep.Vehicle = null`, so dropping the handles from the set the moment the
+    ///     vehicle is cleared would remove them before the clearing could be sent. The player would
+    ///     be stuck in a seat the server believes is empty.
+    /// </summary>
+    public bool bVehicleStateEverSet { get; private set; }
+
+    /// <summary>See <see cref="bVehicleStateEverSet"/> - same rule, for the movement base.</summary>
+    public bool bMovementBaseEverSet { get; private set; }
+
+    /// <summary>
+    ///     AFortPlayerPawn::VehicleStateRep (handles 134-140) - "this pawn is in THAT vehicle, in THIS
+    ///     seat", and the thing that actually puts the local player in the seat.
+    ///
+    ///     WHY THIS AND NOT THE MOVEMENT BASE. The base (19-25) is `COND_SimulatedOnly`
+    ///     (Character.cpp:1497), so it can never reach the driver's own connection - it is how
+    ///     ONLOOKERS see someone ride along, and a first attempt at vehicles spent a live test
+    ///     discovering that. VehicleStateRep carries no condition, is RepNotify, and is on the pawn
+    ///     this server already replicates.
+    ///
+    ///     WHY NOT THE SEAT COMPONENT, which the capture also shows replicating: `PlayerSlots` is a
+    ///     `TArray&lt;FAthenaCarPlayerSlot&gt;` and that struct has ~30 members including FText and
+    ///     nested arrays, every one of which would have to be written correctly for the array not to
+    ///     desync. VehicleStateRep is seven leaves. If the client turns out to need the seat array as
+    ///     well, that is the next step and not a cheaper one.
+    /// </summary>
+    public AActor? VehicleStateVehicle { get; private set; }
+
+    /// <summary>Which seat, 0 being the driver's.</summary>
+    public byte VehicleStateSeatIndex { get; private set; }
+
+    /// <summary>The rest of FVehiclePawnState, kept at the values a fresh entry has.</summary>
+    public float VehicleStateApexZ { get; private set; }
+
+    public byte VehicleStateExitSocketIndex { get; private set; }
+
+    public bool VehicleStateOverrideExit { get; private set; }
+
+    public FVector VehicleStateSeatTransitionVector { get; private set; }
+
+    public float VehicleStateEntryTime { get; private set; }
+
+    /// <summary>
+    ///     Puts this pawn in a vehicle seat, or takes it out with null. Bumps the replicated-property
+    ///     set for the same reason SetMovementBase does - the handles are conditional on being in a
+    ///     vehicle at all, and a cached set that is never invalidated sends nothing while the server
+    ///     logs success.
+    /// </summary>
+    public void SetVehicleState(AActor? vehicle, byte seatIndex, float entryTime) {
+        // The set gains these handles the FIRST time this pawn is ever seated, and keeps them - so
+        // the invalidation belongs on that transition and nowhere else. Getting out changes values,
+        // not which properties exist.
+        var firstTime = vehicle != null && !bVehicleStateEverSet;
+        if (vehicle != null) bVehicleStateEverSet = true;
+
+        VehicleStateVehicle = vehicle;
+        VehicleStateSeatIndex = seatIndex;
+        VehicleStateEntryTime = entryTime;
+        VehicleStateApexZ = 0f;
+        VehicleStateExitSocketIndex = 0;
+        VehicleStateOverrideExit = false;
+        VehicleStateSeatTransitionVector = new FVector();
+
+        if (firstTime) MarkReplicatedPropertySetChanged();
+    }
+
+    /// <summary>
+    ///     Puts this pawn on a base, or takes it off one with null. The relative transform is the
+    ///     caller's business: a vehicle seat is an offset in the vehicle's space, and this class has
+    ///     no idea where the seats are.
+    /// </summary>
+    public void SetMovementBase(UObject? newBase, FVector relativeLocation = default,
+                                FRotator? relativeRotation = null) {
+        var firstBase = newBase != null && !bMovementBaseEverSet;
+        if (newBase != null) bMovementBaseEverSet = true;
+
+        MovementBase = newBase;
+        BasedRelativeLocation = relativeLocation;
+        BasedRelativeRotation = relativeRotation ?? new FRotator();
+        bBasedRelativeRotation = relativeRotation != null;
+
+        // WHICH PROPERTIES THIS PAWN REPLICATES JUST CHANGED, and the channel caches that set. Without
+        // this the server logs a successful boarding and sends NOTHING - the live log showed the pawn
+        // still sending only [ReplicatedMovement] while the player stood beside the vehicle. The
+        // attachment group above hit exactly this and its comment says so; the comment did not stop it
+        // happening a second time, so the invalidation now lives in the setter itself.
+        if (firstBase) MarkReplicatedPropertySetChanged();
+    }
 
     public void TrackMoveFlags(byte compressedMoveFlags, byte clientMovementMode) {
         // The two the OTHER clients need, taken straight from the owning client's own move.

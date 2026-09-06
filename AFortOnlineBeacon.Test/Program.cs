@@ -16,6 +16,11 @@ class Program {
         // than watching one. SERVER_LOG=0 turns it off.
         if (Environment.GetEnvironmentVariable("SERVER_LOG") != "0") StartConsoleLog();
 
+        // A check that needs no client, no map and no paks - see TerrainGroundTruth.RunSelfTest for
+        // why the level logic specifically is worth checking that way.
+        if (args.Contains("--groundtruth-selftest")) return TerrainGroundTruth.RunSelfTest() ? 0 : 1;
+        if (args.Contains("--worldcollision-selftest")) return WorldCollision.RunSelfTest() ? 0 : 1;
+
         var worldUrl = new FUrl {
             Map = "/Game/Athena/Maps/Athena_Terrain",
             Port = 20000

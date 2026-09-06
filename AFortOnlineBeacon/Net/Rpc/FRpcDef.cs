@@ -8,7 +8,7 @@
 /// </summary>
 public class FRpcDef {
     public FRpcDef(string name, FRpcParamDef[] paramDefs, Action<AActor, object?[]> invoke,
-                   bool expectsFullDecode = false) {
+                   bool expectsFullDecode = false, bool dumpRawAlways = false) {
         // These tables are static readonly dictionaries built from other static readonly fields, and
         // C# runs static field initializers in DECLARATION order - so a shared parameter array
         // declared BELOW the dictionary that uses it is still null when the dictionary is built.
@@ -21,7 +21,19 @@ public class FRpcDef {
         Name = name;
         Invoke = invoke;
         ExpectsFullDecode = expectsFullDecode;
+        DumpRawAlways = dumpRawAlways;
     }
+
+    /// <summary>
+    ///     Capture this RPC's raw bytes on every arrival, without RPC_DUMP being set.
+    ///
+    ///     For an RPC that is KNOWN to arrive but whose parameter layout has not been pinned down
+    ///     yet. RPC_DUMP already covers "I suspect this one", and a failed decode already dumps
+    ///     itself - this covers the case in between, where there is nothing to fail because no
+    ///     layout has been declared, and the bytes are the only thing that can settle it. Remove the
+    ///     flag once the layout is real: from then on the leftover check is the better signal.
+    /// </summary>
+    public bool DumpRawAlways { get; }
 
     public string Name { get; }
     public FRpcParamDef[] Params { get; }

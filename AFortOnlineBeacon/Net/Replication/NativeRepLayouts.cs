@@ -537,13 +537,47 @@ internal static class NativeRepLayouts {
             GetObjectValue = obj => ((APawn) obj).Controller
         },
         // ---------------------------------- ACharacter ----------------------------------
-        Reserved("ReplicatedBasedMovement.MovementBase"), // 19, 0x02C0 - class UPrimitiveComponent*
-        Reserved("ReplicatedBasedMovement.BoneName"), // 20, 0x02C0 - class FName
-        Reserved("ReplicatedBasedMovement.Location"), // 21, 0x02C0 - atomic struct FVector_NetQuantize100
-        Reserved("ReplicatedBasedMovement.Rotation"), // 22, 0x02C0 - atomic struct FRotator
-        Reserved("ReplicatedBasedMovement.bServerHasBaseComponent"), // 23, 0x02C0 - bool
-        Reserved("ReplicatedBasedMovement.bRelativeRotation"), // 24, 0x02C0 - bool
-        Reserved("ReplicatedBasedMovement.bServerHasVelocity"), // 25, 0x02C0 - bool
+        // ---- ReplicatedBasedMovement, 19-25 - what a driver rides a vehicle by ----
+        //
+        // Seven handles for one struct, because FBasedMovementInfo is not STRUCT_NetSerializeNative
+        // and FRepLayout recurses into every member. They were Reserved (numbered, never sent) until
+        // vehicles needed them; see APawn.MovementBase for why a BASE and not an attachment, and
+        // [[vehicle-wire-flow]] for the capture that settled it.
+        new() {
+            Name = "ReplicatedBasedMovement.MovementBase", // 19 - class UPrimitiveComponent*
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).MovementBase
+        },
+        new() {
+            Name = "ReplicatedBasedMovement.BoneName", // 20 - class FName
+            Kind = ERepPropertyKind.Name,
+            GetNameValue = obj => ((APawn) obj).MovementBaseBoneName
+        },
+        new() {
+            Name = "ReplicatedBasedMovement.Location", // 21 - FVector_NetQuantize100
+            Kind = ERepPropertyKind.VectorQuantize100,
+            GetVectorValue = obj => ((APawn) obj).BasedRelativeLocation
+        },
+        new() {
+            Name = "ReplicatedBasedMovement.Rotation", // 22 - FRotator
+            Kind = ERepPropertyKind.Rotator,
+            GetRotatorValue = obj => ((APawn) obj).BasedRelativeRotation
+        },
+        new() {
+            Name = "ReplicatedBasedMovement.bServerHasBaseComponent", // 23 - bool
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => ((APawn) obj).bServerHasBaseComponent ? (byte) 1 : (byte) 0
+        },
+        new() {
+            Name = "ReplicatedBasedMovement.bRelativeRotation", // 24 - bool
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => ((APawn) obj).bBasedRelativeRotation ? (byte) 1 : (byte) 0
+        },
+        new() {
+            Name = "ReplicatedBasedMovement.bServerHasVelocity", // 25 - bool
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => ((APawn) obj).bServerHasVelocity ? (byte) 1 : (byte) 0
+        },
         Reserved("AnimRootMotionTranslationScale"), // 26, 0x02F0 - float
         Reserved("ReplicatedServerLastTransformUpdateTimeStamp"), // 27, 0x0310 - float
         Reserved("ReplayLastTransformUpdateTimeStamp"), // 28, 0x0314 - float
@@ -590,8 +624,16 @@ internal static class NativeRepLayouts {
         Reserved("bIsKnockedback"), // 49, 0x06A8 - uint8
         Reserved("bIsStaggered"), // 50, 0x06A8 - uint8
         Reserved("bIsInvulnerable"), // 51, 0x06A9 - uint8
-        Reserved("bMovingEmote"), // 52, 0x06A9 - uint8
-        Reserved("bMovingEmoteForwardOnly"), // 53, 0x06A9 - uint8
+        // 52/53, 0x06A9 - uint8. Real now: the asset values they need are baked into
+        // FortEmoteAssets.Generated.cs. See APawn.bMovingEmote.
+        new FRepPropertyDef {
+            Name = "bMovingEmote", Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bMovingEmote ? 1 : 0)
+        },
+        new FRepPropertyDef {
+            Name = "bMovingEmoteForwardOnly", Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bMovingEmoteForwardOnly ? 1 : 0)
+        },
         Reserved("bSpotted"), // 54, 0x06A9 - uint8
         Reserved("bWeaponActivated"), // 55, 0x06AA - uint8
         Reserved("bWeaponHolstered"), // 56, 0x06AE - uint8
@@ -643,11 +685,14 @@ internal static class NativeRepLayouts {
             GetObjectValue = obj => ((APawn) obj).LastReplicatedEmoteExecuted
         },
 
-        // 71, 0x0A40 - float. How fast a MOVING emote walks. Reserved rather than sent: the value
-        // lives on the emote asset itself (UAthenaDanceItemDefinition::WalkForwardSpeed), which an
-        // out-of-process server has no way to read - see FortEmoteSystem for the same limitation on
-        // bMovingEmote (52) / bMovingEmoteForwardOnly (53).
-        Reserved("EmoteWalkSpeed", ERepPropertyKind.Float),
+        // 71, 0x0A40 - float. How fast a MOVING emote walks. It used to be Reserved because the
+        // value lives on the emote asset (UAthenaDanceItemDefinition::WalkForwardSpeed) and an
+        // out-of-process server could not read a .uasset; it is baked now, along with
+        // bMovingEmote (52) and bMovingEmoteForwardOnly (53).
+        new FRepPropertyDef {
+            Name = "EmoteWalkSpeed", Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APawn) obj).EmoteWalkSpeed
+        },
 
         // 72..145, derived with Tools/RepHandles (`rep_handles.py AFortPlayerPawn`) and
         // cross-checked by Tools/RepHandles/verify_cs_handles.py. All reserved except the
@@ -756,13 +801,48 @@ internal static class NativeRepLayouts {
         Reserved("ZiplineState.AuthoritativeValue"), // 131, 0x1338 - int32
         Reserved("ZiplineState.SocketOffset"), // 132, 0x1338 - atomic struct FVector
         Reserved("bCanPredictJumpApex"), // 133, 0x13D0 - bool
-        Reserved("VehicleStateRep.Vehicle"), // 134, 0x1530 - class AActor*
-        Reserved("VehicleStateRep.VehicleApexZ"), // 135, 0x1530 - float
-        Reserved("VehicleStateRep.SeatIndex"), // 136, 0x1530 - uint8
-        Reserved("VehicleStateRep.ExitSocketIndex"), // 137, 0x1530 - uint8
-        Reserved("VehicleStateRep.bOverrideVehicleExit"), // 138, 0x1530 - bool
-        Reserved("VehicleStateRep.SeatTransitionVector"), // 139, 0x1530 - atomic struct FVector
-        Reserved("VehicleStateRep.EntryTime"), // 140, 0x1530 - float
+        // ---- VehicleStateRep, 134-140 - which vehicle and seat this pawn is in ----
+        // Seven leaves of FVehiclePawnState, and unlike ReplicatedBasedMovement above they carry NO
+        // lifetime condition, which is the whole point: the base is COND_SimulatedOnly and can never
+        // reach the driver's own client. See APawn.SetVehicleState.
+        new() {
+            Name = "VehicleStateRep.Vehicle", // 134 - class AActor*
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).VehicleStateVehicle
+        },
+        new() {
+            Name = "VehicleStateRep.VehicleApexZ", // 135 - float
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APawn) obj).VehicleStateApexZ
+        },
+        new() {
+            Name = "VehicleStateRep.SeatIndex", // 136 - uint8
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 256,
+            GetByteValue = obj => ((APawn) obj).VehicleStateSeatIndex
+        },
+        new() {
+            Name = "VehicleStateRep.ExitSocketIndex", // 137 - uint8
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 256,
+            GetByteValue = obj => ((APawn) obj).VehicleStateExitSocketIndex
+        },
+        new() {
+            Name = "VehicleStateRep.bOverrideVehicleExit", // 138 - bool
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => ((APawn) obj).VehicleStateOverrideExit ? (byte) 1 : (byte) 0
+        },
+        // 139 STAYS RESERVED, and is left out of the whitelist rather than written. It is a plain
+        // FVector - three raw floats, no quantized kind fits - and it is zero for every entry this
+        // server performs. A handle that is never in the changed set is simply not sent, and the
+        // client keeps its own default; writing it in the wrong format would corrupt every handle
+        // after it in the bunch, which is a much worse trade than a member nobody uses.
+        Reserved("VehicleStateRep.SeatTransitionVector", ERepPropertyKind.StructAtomic), // 139
+        new() {
+            Name = "VehicleStateRep.EntryTime", // 140 - float
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APawn) obj).VehicleStateEntryTime
+        },
         Reserved("PossessedProp"), // 141, 0x15C0 - class ABuildingGameplayActorPlayerPropAttachment*
         Reserved("CosmeticLoadout.BannerIconId"), // 142, 0x18C0 - class FString
         Reserved("CosmeticLoadout.BannerColorId"), // 143, 0x18C0 - class FString
@@ -2569,12 +2649,90 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout Pickup = new(PickupProps);
     public static readonly FRepLayout Weapon = new(WeaponProps);
 
+    /// <summary>
+    ///     AFortProjectileBase, and the one handle that makes a grenade go off.
+    ///
+    ///     The explosion is NOT something the client decides. The projectile Blueprint's own graph
+    ///     only arms an audio warning at FuseTime/2; the bang comes from
+    ///     AFortGameplayEffectDeliveryActor::bHasExploded, which is `Net | RepNotify`, and its OnRep
+    ///     is what raises the OnExploded event the Blueprint answers with its gameplay cue. So a
+    ///     projectile this server spawns and never explodes flies perfectly and then simply stops -
+    ///     which is exactly what the first live throw did.
+    ///
+    ///     Handles derived with Tools/RepHandles from the 10.40 SDK, not guessed: the 15 shared AActor
+    ///     handles, then AFortGameplayEffectDeliveryActor's bHasExploded (16) and bIsBeingKilled (17),
+    ///     SpawnContext (18-19), and AFortProjectileBase's own from 20 (ReplicatedMaxSpeed,
+    ///     GravityScale, ChargePercent, SimulationStoppingHit, ResumeSimulationCount, CurrentSkyTube).
+    ///
+    ///     Only 16 is real. Everything between it and the actor handles it inherits is Reserved -
+    ///     the client has correct CDO defaults for all of them, and the flight already looks right
+    ///     without a single one being sent, because the client simulates it from the spawn header's
+    ///     velocity. GravityScale (21) is the first candidate if an arc ever looks wrong.
+    /// </summary>
+    private static readonly FRepPropertyDef[] ProjectileProps = ActorProps.Concat(new FRepPropertyDef[] {
+        new() {                                                                   // 16
+            Name = "bHasExploded",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AFortProjectileBase) obj).bHasExploded ? 1 : 0)
+        },
+        new() {                                                                   // 17
+            Name = "bIsBeingKilled",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AFortProjectileBase) obj).bIsBeingKilled ? 1 : 0)
+        },
+        Reserved("SpawnContext.Team"),                                            // 18
+        Reserved("SpawnContext.Tags"),                                            // 19
+        Reserved("ReplicatedMaxSpeed", ERepPropertyKind.Float),                   // 20
+        Reserved("GravityScale", ERepPropertyKind.Float),                         // 21
+        Reserved("ChargePercent", ERepPropertyKind.Float),                        // 22
+        Reserved("SimulationStoppingHit"),                                        // 23
+        Reserved("ResumeSimulationCount", ERepPropertyKind.Int32),                // 24
+        Reserved("CurrentSkyTube")                                                // 25
+    }).ToArray();
+
+    public static readonly FRepLayout Projectile = new(ProjectileProps);
+
     public static readonly FRepLayout BuildingActor = new(BuildingActorProps);
     public static readonly FRepLayout BuildingContainer = new(BuildingContainerProps);
     public static readonly FRepLayout SupplyDropLlama = new(SupplyDropLlamaProps);
     public static readonly FRepLayout BuildingWall = new(BuildingWallProps);
 
+    /// <summary>
+    ///     AFortAthenaVehicle's own handles - AActor's 15, then the real chain, with only
+    ///     `bHasDriver` (22) actually written.
+    ///
+    ///     THIS IS NOT A CHARACTER'S LAYOUT, and the distinction is the reason AFortAthenaVehicle
+    ///     derives from AActor on this server: a vehicle's chain is
+    ///     AFortAthenaVehicle : AFortPhysicsPawn : AFortPawn(no) - in fact APawn straight to
+    ///     AFortPhysicsPawn - and its handles diverge from AFortPlayerPawnAthena's at 19. Sending a
+    ///     character's handle to a vehicle is the shape of failure that killed connections over the
+    ///     building tool's handle 36.
+    ///
+    ///     Derived with `python Tools/RepHandles/rep_handles.py AFortAthenaVehicle`:
+    ///     16-18 are APawn's, 19-21 are AFortPhysicsPawn's, and 22 is the first vehicle property.
+    /// </summary>
+    private static readonly FRepPropertyDef[] VehicleProps = ActorProps.Concat(new[] {
+        Reserved("RemoteViewPitch"), // 16, 0x022A - uint8
+        Reserved("PlayerState"), // 17, 0x0238 - class APlayerState*
+        Reserved("Controller"), // 18, 0x0250 - class AController*
+        Reserved("SafeTeleportInfo.Location"), // 19, 0x0278 - atomic struct FVector
+        Reserved("SafeTeleportInfo.Rotation"), // 20, 0x0278 - atomic struct FRotator
+        Reserved("GravityMultiplier"), // 21, 0x0290 - float
+        new() {
+            // 22, 0x0668 - "someone is in the driver's seat". The client's own vehicle UI and input
+            // state read it, and it is one bool rather than the seat component's 30-member slot
+            // struct, which makes it the cheapest thing to try when the client seats a player but
+            // will not let them out again.
+            Name = "bHasDriver",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => ((AFortAthenaVehicle) obj).bHasDriver ? (byte) 1 : (byte) 0
+        }
+    }).ToArray();
+
+    private static readonly FRepLayout Vehicle = new(VehicleProps);
+
     public static FRepLayout Get(AActor actor) => actor switch {
+        AFortAthenaVehicle => Vehicle,
         // Before ABuildingActor: a container IS one, and the first arm wins.
         ABuildingContainer => BuildingContainer,
         // Likewise - a llama derives from ABuildingActor but has its OWN handles from 38 on.
@@ -2583,6 +2741,7 @@ internal static class NativeRepLayouts {
         ABuildingActor => BuildingActor,
         AFortAthenaAircraft => Aircraft,
         AFortSafeZoneIndicator => SafeZoneIndicator,
+        AFortProjectileBase => Projectile,
         AFortPickup => Pickup,
         AFortWeapon => Weapon,
         AFortInventory => Inventory,

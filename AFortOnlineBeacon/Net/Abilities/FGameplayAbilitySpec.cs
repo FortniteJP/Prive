@@ -51,4 +51,28 @@ public sealed class FGameplayAbilitySpec : IFastArrayItem {
     ///     client ties the spec back to the thing in its hands.
     /// </summary>
     public UObject? SourceObject { get; set; }
+
+    /// <summary>
+    ///     FGameplayAbilitySpec::ReplicatedInstances - the sixth member, and the only one of the
+    ///     struct's two instance arrays that reaches the wire: it is a plain `UPROPERTY()` while
+    ///     NonReplicatedInstances immediately above it is `UPROPERTY(NotReplicated)`
+    ///     (GameplayAbilitySpec.h:273-279). That asymmetry is the whole mechanism - it is how a
+    ///     server-created ability instance becomes the client's GetPrimaryInstance().
+    ///
+    ///     Empty for almost everything, and correctly so: an ability whose ReplicationPolicy is
+    ///     ReplicateNo has the client build its own instance. Only ReplicateYes abilities need one
+    ///     here, and for them it is not optional - see UGameplayAbilityInstance for the full chain
+    ///     and for why a grenade is inert without it.
+    /// </summary>
+    public List<UObject> ReplicatedInstances { get; } = new();
+
+    /// <summary>
+    ///     The prediction key the client used the last time it activated this spec. NOT on the wire -
+    ///     server bookkeeping, kept because ClientEndAbility is only obeyed when the key MATCHES.
+    ///
+    ///     UAbilitySystemComponent::RemoteEndOrCancelAbility walks the spec's instances and ends only
+    ///     the one whose GetActivationPredictionKey() equals the key in the ActivationInfo it was
+    ///     sent. Send a fresh or empty key and the client silently keeps the ability running.
+    /// </summary>
+    public FPredictionKey? ActivationPredictionKey { get; set; }
 }

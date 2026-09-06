@@ -19,6 +19,11 @@ public enum EDeathCause : byte {
     SMG = 5,
     Sniper = 6,
     Melee = 8,
+    /// <summary>A thrown grenade - what FortProjectileSystem attributes an explosion to.</summary>
+    Grenade = 10,
+    C4 = 11,
+    GrenadeLauncher = 12,
+    RocketLauncher = 13,
     /// <summary>What a death this server cannot attribute goes out as.</summary>
     Unspecified = 48
 }

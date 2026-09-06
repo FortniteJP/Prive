@@ -1133,34 +1133,70 @@ internal static class NativeRpcHandlers {
         /// The other half of the ride, and the one that has to exist or a tester is STUCK on the
         /// vehicle with no way off.
         ///
-        /// AFortPlayerControllerAthena::ServerAttemptExitVehicle takes no parameters - field 284,
-        /// and the capture agrees. Detaching is just AttachParent = null, and
-        /// AActor::OnRep_AttachmentReplication's else branch does
-        /// `DetachFromActor(KeepWorldTransform)`, so the pawn is left exactly where the vehicle had
-        /// carried it rather than snapping anywhere.
+        /// AFortPlayerControllerAthena::ServerAttemptExitVehicle takes no parameters - field 284, and
+        /// the capture agrees. It arrives on the CONTROLLER, not the pawn or the vehicle.
         ///
-        /// ONE KNOWN TRAP, not hit yet but worth naming: that same branch then runs
-        /// `if (bReplicateMovement) OnRep_ReplicatedMovement()`, and this server sends no
-        /// ReplicatedMovement, so the client would apply an all-zero transform. That is the exact
-        /// mechanism behind the spawn-time camera roll recorded in UActorChannel's pawn property
-        /// set. If exiting teleports the player to the origin, clearing bReplicateMovement on the
-        /// pawn just before the detach is the lever.
+        /// REWRITTEN FOR THE STATE THAT ACTUALLY SEATS SOMEONE. The first version looked for
+        /// `pc.Pawn is { AttachParent: AFortAthenaVehicle }`, because boarding was an attachment
+        /// then. Boarding is now a movement base plus VehicleStateRep and nothing is ever attached,
+        /// so that pattern never matched and getting out did nothing at all - the player was seated,
+        /// pressed exit, and the server silently agreed with itself that they were not in a vehicle.
         ["ServerAttemptExitVehicle"] = new FRpcDef(
             "ServerAttemptExitVehicle",
             Array.Empty<FRpcParamDef>(),
             (actor, _) => {
                 if (actor is not APlayerController pc) return;
-                if (pc.Pawn is not { AttachParent: AFortAthenaVehicle vehicle } rider) return;
+                if (pc.Pawn is not { } rider) return;
 
-                rider.AttachParent = null;
-                rider.AttachLocationOffset = new FVector();
-                rider.AttachRotationOffset = new FRotator();
-                rider.AttachRelativeScale3D = new FVector { X = 1f, Y = 1f, Z = 1f };
+                if (rider.VehicleStateVehicle is not AFortAthenaVehicle vehicle) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerAttemptExitVehicle - {rider.GetFName()} is not in " +
+                                      "a vehicle as far as this server knows, ignoring");
+                    return;
+                }
+
+                // BOTH HALVES, in the order they were set. Clearing VehicleStateRep is what tells the
+                // driver's own client it is out; clearing the base is what tells everyone else.
+                rider.SetVehicleState(null, 0, 0f);
+                rider.SetMovementBase(null);
+
+                if (vehicle.Driver == rider) vehicle.Driver = null;
+                vehicle.SetOwner(null);
+                vehicle.FlushNetDormancy();
 
                 Console.WriteLine($"NativeRpcHandlers: ServerAttemptExitVehicle - {rider.GetFName()} left " +
-                                  $"{vehicle.GetFName()}. The detach goes out because AttachmentReplication " +
-                                  "stays in the pawn's replicated set once it has ever been attached " +
-                                  "(AActor.bAttachmentEverSet).");
+                                  $"{vehicle.GetFName()}");
+            }
+        ),
+
+        /// AFortPlayerControllerZone::ServerRequestSeatChange(int32 TargetSeatIndex) - moving between
+        /// seats without getting out.
+        ///
+        /// THE SERVER DOES NOT KNOW THE SEATS, and does not need to: the seat layout lives in the
+        /// vehicle Blueprint the client already has, and the client only ever asks for an index it
+        /// can see. What the server owns is the AUTHORITATIVE ANSWER - VehicleStateRep.SeatIndex is
+        /// what every client, including the asker, reads the seating from - so this accepts the
+        /// request and republishes the state. A real server would refuse an occupied seat; that needs
+        /// the seat array (see [[vehicle-wire-flow]]), and with one player there is nothing to refuse.
+        ["ServerRequestSeatChange"] = new FRpcDef(
+            "ServerRequestSeatChange",
+            new[] { new FRpcParamDef("TargetSeatIndex", ERpcParamKind.Int32) },
+            (actor, values) => {
+                if (actor is not APlayerController pc) return;
+                if (pc.Pawn is not { } rider) return;
+
+                if (rider.VehicleStateVehicle is not AFortAthenaVehicle vehicle) {
+                    Console.WriteLine("NativeRpcHandlers: ServerRequestSeatChange from a pawn this server does " +
+                                      "not have in a vehicle, ignoring");
+                    return;
+                }
+
+                var target = values[0] as int? ?? 0;
+                if (target is < 0 or > 255) return;
+
+                rider.SetVehicleState(vehicle, (byte) target, rider.VehicleStateEntryTime);
+
+                Console.WriteLine($"NativeRpcHandlers: ServerRequestSeatChange - {rider.GetFName()} moved to seat " +
+                                  $"{target} of {vehicle.GetFName()}");
             }
         ),
 
@@ -1508,25 +1544,82 @@ internal static class NativeRpcHandlers {
                     // (Offset zero, scale ONE: see AGameModeBase's bus attachment for why a zero
                     // scale collapses the pawn's transform. No seat socket, because socket names
                     // live in that same unreplicated slot struct.)
+                    // ENTERING A VEHICLE, as the PR3.0 capture shows a real server doing it - see
+                    // [[vehicle-wire-flow]] for the whole sequence and AFortOnlineBeacon's own
+                    // earlier attempt for what it is NOT.
+                    //
+                    // IT IS NOT AN ATTACHMENT. The previous version of this branch set
+                    // AttachParent/offsets, and its own comment recorded the result: "the client
+                    // applies the attachment but does not enter vehicle state, and the pawn sinks
+                    // through the floor. The seat component is what is missing." The seat component
+                    // was never what was missing - the real server does not attach the pawn at all.
+                    // It sets a MOVEMENT BASE (a relationship the client's movement code
+                    // understands) and hands the vehicle's ownership to the driver's connection.
+                    //
+                    // Still missing here, and why this is behind VEHICLE_RIDE: the two ServerOnly
+                    // abilities (GA_AthenaEnterVehicle_C applying GE_AthenaInVehicle_C, then
+                    // GA_AthenaInVehicle_C) and the ServerUpdateVehicleInputStateUnreliable /
+                    // ClientAcknowledgeVehicleInputState pair that carries the driving itself.
                     case AFortAthenaVehicle vehicle when Environment.GetEnvironmentVariable("VEHICLE_RIDE") is "1":
                         if (pc.Pawn is not { } rider) return;
 
-                        if (rider.AttachParent == vehicle) {
-                            Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} is " +
-                                              $"already riding {vehicle.GetFName()}, ignoring");
+                        if (rider.MovementBase != null) {
+                            // Interacting again while already aboard means GET OUT - the client sends
+                            // the same RPC for both, and the server is the only side that knows which
+                            // it is.
+                            rider.SetMovementBase(null);
+                            rider.SetVehicleState(null, 0, 0f);
+                            if (vehicle.Driver == rider) vehicle.Driver = null;
+                            vehicle.SetOwner(null);
+                            vehicle.FlushNetDormancy();
+
+                            Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} left " +
+                                              $"{vehicle.GetFName()}");
                             return;
                         }
 
-                        rider.AttachParent = vehicle;
-                        rider.AttachLocationOffset = new FVector();
-                        rider.AttachRotationOffset = new FRotator();
-                        rider.AttachRelativeScale3D = new FVector { X = 1f, Y = 1f, Z = 1f };
+                        if (vehicle.Driver != null && vehicle.Driver != rider) {
+                            Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {vehicle.GetFName()} " +
+                                              $"already has a driver ({vehicle.Driver.GetFName()}), ignoring");
+                            return;
+                        }
 
-                        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} is now " +
-                                          $"ATTACHED to {vehicle.GetFName()} ({vehicle.VehicleClassPath}). VEHICLE_RIDE=1 " +
-                                          "re-runs a KNOWN-INSUFFICIENT experiment: the client applies the attachment but " +
-                                          "does not enter vehicle state, and the pawn sinks through the floor. The seat " +
-                                          "component is what is missing - see this handler's comment.");
+                        // OWNERSHIP FIRST. The capture's giveaway is that the vehicle starts
+                        // replicating with `bNetOwner: 1` for the driver's connection the moment they
+                        // enter - the driver's input RPCs are only accepted from the owner.
+                        vehicle.SetOwner(pc);
+                        vehicle.Driver = rider;
+
+                        // WAKE IT, or the owner change never goes anywhere: a parked vehicle is
+                        // DormantAll from the moment its open bunch is acked, and a dormant actor is
+                        // not diffed at all. The client would keep its "no owning connection" view
+                        // and drop every RPC the driver sends from the seat.
+                        vehicle.FlushNetDormancy();
+
+                        // BOTH HALVES, because they reach different people. The movement base is
+                        // COND_SimulatedOnly, so it tells everyone EXCEPT the driver that this pawn
+                        // rides the vehicle; VehicleStateRep carries no condition and is what puts
+                        // the driver in the seat on their own screen.
+                        rider.SetMovementBase(vehicle.GetOrCreateMeshComponent());
+                        rider.SetVehicleState(vehicle, 0, (float) (rider.GetWorld()?.TimeSeconds ?? 0d));
+
+                        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} boarded " +
+                                          $"{vehicle.GetFName()} ({vehicle.VehicleClassPath}) - seat 0, based on its " +
+                                          "mesh. Driving itself still needs the input RPC pair - see vehicle-wire-flow.");
+                        return;
+
+                    // A VEHICLE THE GUARD ABOVE TURNED DOWN. Without this arm the RPC falls all the
+                    // way through to "named no resolvable actor", which is a lie: it resolved
+                    // perfectly and the server chose not to act. "I pressed interact and nothing
+                    // happened" has at least four causes - the RPC never arrived, it arrived naming
+                    // nothing, it named the vehicle and the switch is off, or it worked and the
+                    // client ignored the result - and only the first three are visible from here, so
+                    // each of them says which it is.
+                    case AFortAthenaVehicle offVehicle:
+                        Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract named vehicle " +
+                                          $"{offVehicle.GetFName()} ({offVehicle.VehicleClassPath}) but VEHICLE_RIDE is " +
+                                          $"'{Environment.GetEnvironmentVariable("VEHICLE_RIDE") ?? "unset"}' - " +
+                                          "set VEHICLE_RIDE=1 to board it.");
                         return;
 
                     // A LLAMA IS ALWAYS "BY ID", never by path: this server spawns it, so the
@@ -1663,20 +1756,40 @@ internal static class NativeRpcHandlers {
                 var entry = pickup.PrimaryPickupItemEntry;
                 if (entry == null) return;
 
-                // A fresh entry again: this one belongs to an inventory now, and the pickup's copy
-                // keeps whatever ReplicationId/Key it was given as a pickup - reusing it would carry
-                // that state into a completely different fast array.
-                inventory.Inventory.Add(new FFortItemEntry {
-                    ItemDefinition = entry.ItemDefinition,
-                    Count = entry.Count,
-                    Durability = entry.Durability,
-                    Level = entry.Level,
-                    LoadedAmmo = entry.LoadedAmmo
-                });
+                // STACKED, not appended. This used to add a row unconditionally, so two boxes of
+                // light ammo became two slots of 30 instead of one of 60 - see FortItemStacks, which
+                // also builds the fresh entry this needs (the pickup's own copy carries the
+                // ReplicationId/Key it was given as a pickup, and reusing it would drag that state
+                // into a completely different fast array).
+                var leftOver = FortItemStacks.Give(inventory, entry, entry.Count);
+
+                // WHAT DID NOT FIT GOES BACK ON THE GROUND rather than vanishing. The real server
+                // refuses the pickup outright when the stack is full, which needs a rule about
+                // inventory capacity this server does not have yet; dropping the remainder is the
+                // same bargain harvesting already makes, and it keeps the items in the world.
+                if (leftOver > 0) {
+                    SpawnDroppedPickup(pc, new FFortItemEntry { ItemDefinition = entry.ItemDefinition }, leftOver);
+                    Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup - {leftOver} x " +
+                                      $"{entry.ItemDefinition?.GetFName()} did not fit in the stack and went " +
+                                      "back on the ground");
+                }
 
                 // Handle 49 - what drives the client's pickup feedback. It is NOT what removes the
                 // world actor: OnRep_bPickedUp only hides it. The actor goes away when its channel
                 // closes, which Destroy() below arranges via ServerReplicateActors.
+                // THE FLUSH HERE IS A NO-OP TODAY AND IS KEPT ANYWAY - measured, not assumed. The
+                // wake pass runs at the top of the next replication tick, and Destroy() happens on
+                // this line, so a dormant pickup is still dormant when the destroy arrives and its
+                // removal goes out as a destruction info instead (144 dormancy closes and 10
+                // destruction infos in a live session, with zero wakes - the wake never gets a turn).
+                //
+                // That means bPickedUp does NOT reach the client for a dormant pickup. Harmless,
+                // because OnRep_bPickedUp only HIDES the actor and the destruction info removes it
+                // outright, which is why taking an item looks right. The flush stays because the
+                // ordering is a coincidence of doing both in one RPC: anything that ever sets a
+                // pickup property WITHOUT destroying it in the same breath needs exactly this call,
+                // and finding that out the hard way would cost another silent-failure hunt.
+                pickup.FlushNetDormancy();
                 pickup.bPickedUp = true;
                 pickup.Destroy();
 
@@ -1702,6 +1815,11 @@ internal static class NativeRpcHandlers {
                 if (values[2] is not FVector clientLoc) return;
 
                 actor.SetActorLocation(clientLoc);
+
+                // The ground the client is standing on, when it says it is standing on something.
+                // See TerrainGroundTruth: this is the only source of true ground heights this server
+                // has, and it costs one dictionary probe per move.
+                TerrainGroundTruth.Record(clientLoc, values[6] as byte? ?? 0);
 
                 if (actor is APawn trackedPawn && actor.GetWorld()?.NetDriver is { } driver) {
                     trackedPawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
@@ -1896,6 +2014,11 @@ internal static class NativeRpcHandlers {
                 // instances to run, so the honest thing it CAN do is confirm the prediction the
                 // client already played - which is what unblocks the client from asking again.
                 var predictionKey = values[2] as FPredictionKey ?? new FPredictionKey();
+
+                // Kept for ClientEndAbility, which is only obeyed when the key matches the one the
+                // activation used - see FGameplayAbilitySpec.ActivationPredictionKey.
+                spec.ActivationPredictionKey = predictionKey;
+
                 playerState.GetWorld()?.NetDriver?.SendClientActivateAbilitySucceed(
                     playerState, abilitySystem, handle, predictionKey);
             }
@@ -2665,9 +2788,66 @@ internal static class NativeRpcHandlers {
     }
 
     /// <summary>The RPC table for a replicated sub-object, keyed by what the sub-object actually is.</summary>
+    /// <summary>
+    ///     `Server_SpawnProjectile(FVector Location, FRotator Direction)` - how a thrown consumable
+    ///     actually gets thrown, and the payoff for the ability-instance work in
+    ///     UGameplayAbilityInstance: this RPC is what that unblocked. The client does NOT spawn the
+    ///     projectile; the ability's own spawn is behind a HasAuthority gate and it asks here.
+    ///
+    ///     THE SECOND PARAMETER IS A ROTATOR, NOT A VECTOR - which is the whole reason the layout
+    ///     needed measuring. "Direction" reads like an FVector, and two raw FVectors would be
+    ///     1 + 96 + 1 + 96 = 194 bits (SendPropertiesForRPC writes one presence bit per non-bool
+    ///     parameter, RepLayout.cpp:5656). The field measured 133. The SDK settles the type: the
+    ///     ubergraph hands this value to UFortAbilityTask_SpawnProjectileAndWait::SpawnProjectileAndWait,
+    ///     whose SpawnRotation and SpawnDirection are both `const FRotator&` - and the ability passes
+    ///     this ONE value as both.
+    ///
+    ///     So the payload is:
+    ///         1 bit   Location present
+    ///         96      Location - three raw floats (a plain FVector has no NetSerialize in 4.23)
+    ///         1 bit   Direction present
+    ///         3..51   Direction - FRotator::SerializeCompressedShort, which INTERLEAVES a presence
+    ///                 bit with each axis: [bit][pitch16?][bit][yaw16?][bit][roll16?]
+    ///
+    ///     VARIABLE LENGTH, and the 133 is a coincidence of one axis being zero. Four live samples
+    ///     all measured 133 because Roll was always exactly 0 (1+16+1+16+1 = 35); a rotator with all
+    ///     three axes set is 51 and the field would be 149. Reading it with the real variable-length
+    ///     reader rather than a fixed width is therefore not pedantry - a rolled throw would desync.
+    ///
+    ///     Verified against four throws: the decoded Yaw equalled the pawn's own yaw to 0.01 degrees
+    ///     (one sample differed by 0.47, the pawn having turned between the RPC and the log line),
+    ///     Pitch was -9 to -14 degrees (the upward throw arc), Roll exactly 0, and every sample ended
+    ///     on the field's last bit. Location landed 70 units above the pawn and about 12 forward and
+    ///     20 left of it - a muzzle, as expected.
+    /// </summary>
+    private static readonly FRpcParamDef[] ServerSpawnProjectileParams = {
+        new("Location", ERpcParamKind.Vector),
+        new("Direction", ERpcParamKind.Rotator)
+    };
+
+    private static readonly Dictionary<string, FRpcDef> ThrownAbilityRpcs = new() {
+        ["Server_SpawnProjectile"] = new FRpcDef(
+            "Server_SpawnProjectile",
+            ServerSpawnProjectileParams,
+            (actor, values) => {
+                var location = (FVector) values[0]!;
+                var direction = (FRotator) values[1]!;
+                // The RPC arrives on the ability instance, whose outer is the PlayerState - the pawn
+                // is one hop further out, and it is the pawn that knows which item is in hand.
+                var pawn = actor is APlayerState { Owner: APlayerController pc } ? pc.Pawn : null;
+
+                Console.WriteLine($"NativeRpcHandlers: Server_SpawnProjectile at {location} direction {direction}" +
+                                  (pawn == null ? " (no pawn resolved)" : $" from pawn '{pawn.GetFName()}' at {pawn.GetActorLocation()}"));
+
+                FortProjectileSystem.SpawnFor(pawn, location, direction);
+            },
+            expectsFullDecode: true)
+    };
+
     public static Dictionary<string, FRpcDef>? GetForSubObject(UObject subObject) => subObject switch {
         UFortAbilitySystemComponent => AbilitySystemComponentRpcs,
         UFortControllerComponent_Interaction => InteractionComponentRpcs,
+        UGameplayAbilityInstance => ThrownAbilityRpcs,
         _ => null
     };
 

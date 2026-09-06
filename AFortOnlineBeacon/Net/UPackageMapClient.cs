@@ -248,8 +248,19 @@ public class UPackageMapClient : UPackageMap {
         bunch.SerializeBits(&bSerializeScale, 1);
         if (bSerializeScale) scale.NetSerializeWriteQuantized(bunch, 10, 24); // FVector_NetQuantize10
 
-        var bSerializeVelocity = false;
+        // Velocity, the last of SerializeNewActor's four optional transform fields. Only a projectile
+        // has one so far, and for a projectile it is the whole point: the client runs the flight
+        // itself on a simulated proxy (its own UFortProjectileMovementComponent), and the arc it
+        // draws is decided by the velocity in THIS header. With it left at zero the grenade appears
+        // at the muzzle and drops straight down.
+        //
+        // The battle bus is the precedent for the field existing at all - a real capture shows
+        // `bSerializeLocation=True bSerializeRotation=False bSerializeScale=False bSerializeVelocity=True`
+        // on an aircraft spawn - so this is the field that capture was already exercising.
+        var velocity = actor.GetVelocity();
+        var bSerializeVelocity = !velocity.IsNearlyZero();
         bunch.SerializeBits(&bSerializeVelocity, 1);
+        if (bSerializeVelocity) velocity.NetSerializeWriteQuantized(bunch, 10, 24); // FVector_NetQuantize10
     }
 
     private unsafe void InternalWriteObject(FArchive ar, FNetworkGUID netGuid, UObject? obj, string objectPathName, UObject? objectOuter) {

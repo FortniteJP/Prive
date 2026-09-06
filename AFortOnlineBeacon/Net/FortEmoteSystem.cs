@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net;
+﻿namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Playing an emote - the server half of AFortPlayerController::ServerPlayEmoteItem.
@@ -58,18 +58,47 @@ public static class FortEmoteSystem {
     private static short _nextServerPredictionKey = 1;
 
     /// <summary>
-    ///     Which ability plays this cosmetic. A real server switches on the asset's CLASS
-    ///     (UAthenaSprayItemDefinition / UAthenaToyItemDefinition / UAthenaDanceItemDefinition); the
-    ///     class is not on the wire, so this switches on the asset's own folder, which is what names
-    ///     the class in practice - /Sprays/SPID_*, /Toys/TOY_*, /Dances/ and /VictoryPoses/ and
-    ///     /ConsumableEmotes/ EID_*.
+    ///     Which ability plays this cosmetic, ASKED OF THE ASSET rather than guessed from its folder.
     ///
-    ///     A toy returns null on purpose. Its ability is not a fixed asset at all: it is the
-    ///     TSoftClassPtr UAthenaToyItemDefinition::ToySpawnAbility, i.e. a per-toy value stored INSIDE
-    ///     the asset, so there is nothing to name without reading it. Guessing one would grant the
-    ///     wrong ability rather than none.
+    ///     This used to switch on the path containing /Sprays/ or /Toys/, because the item's real
+    ///     UClass is not on the wire and the asset could not be read. FortEmoteAssets.Generated.cs
+    ///     now carries the class AND the per-item ability for all 437 cosmetics, baked out of the
+    ///     paks, so both guesses can go:
+    ///
+    ///       * A TOY has no generic ability to fall back on - its
+    ///         UAthenaToyItemDefinition::ToySpawnAbility is a different class per toy - which is why
+    ///         toys were refused outright before. All 18 are now named.
+    ///       * THREE dances have a bespoke UAthenaDanceItemDefinition::CustomDanceAbility
+    ///         (EID_ThighSlapper, EID_VikingHorn, EID_WolfHowl) and were silently getting the
+    ///         generic one instead.
+    ///
+    ///     An emote the table does not know still falls back to the folder rule, so a cosmetic added
+    ///     later - or one the dump missed - degrades to the old behaviour rather than failing.
     /// </summary>
     private static string? AbilityPathFor(string emoteAssetPath) {
+        var itemName = emoteAssetPath[(emoteAssetPath.LastIndexOf('.') + 1)..];
+
+        if (FortEmoteAssets.For(itemName) is { } asset) {
+            // A per-item ability is named as a CLASS path; the grant needs its CDO - the same
+            // sibling-of-the-class rule FortWeaponActorClasses.FireAbilityFor documents.
+            if (asset.CustomAbility is { } classPath) {
+                var dot = classPath.LastIndexOf('.');
+                return dot < 0 ? null : $"{classPath[..dot]}.Default__{classPath[(dot + 1)..]}";
+            }
+
+            return asset.Kind switch {
+                FortEmoteAssets.EEmoteKind.Spray => SprayAbilityPath,
+                // A toy with no ToySpawnAbility is one this server cannot play - the same refusal as
+                // before, but now on the asset's own evidence rather than on its folder name.
+                FortEmoteAssets.EEmoteKind.Toy => null,
+                _ => EmoteAbilityPath
+            };
+        }
+
+        Console.WriteLine($"FortEmoteSystem: '{itemName}' is not in FortEmoteAssets.Generated.cs - falling " +
+                          "back to the folder rule. Re-run Tools/EmoteTable/gen_emotes.py if this is a real " +
+                          "10.40 cosmetic.");
+
         if (emoteAssetPath.Contains("/Sprays/", StringComparison.OrdinalIgnoreCase)) return SprayAbilityPath;
         if (emoteAssetPath.Contains("/Toys/", StringComparison.OrdinalIgnoreCase)) return null;
         return EmoteAbilityPath;
@@ -126,6 +155,22 @@ public static class FortEmoteSystem {
         // What every OTHER client sees. Set before the grant is flushed only so both leave on the
         // same tick; they travel on different channels (the pawn's and the PlayerState's) and are
         // independent - see APawn.LastReplicatedEmoteExecuted.
+        // A MOVING emote moves because of these three, and nothing else. They were Reserved until
+        // the asset values existed; now they come straight off FortEmoteAssets.Generated.cs. Only 22
+        // of 263 dances set them, so almost every emote correctly leaves them at the default and
+        // dances on the spot.
+        if (FortEmoteAssets.For(emoteAssetPath[(emoteAssetPath.LastIndexOf('.') + 1)..]) is { } emoteAsset2) {
+            pawn.bMovingEmote = emoteAsset2.bMovingEmote;
+            pawn.bMovingEmoteForwardOnly = emoteAsset2.bMoveForwardOnly;
+            pawn.EmoteWalkSpeed = float.IsNaN(emoteAsset2.WalkForwardSpeed) ? 0f : emoteAsset2.WalkForwardSpeed;
+
+            if (emoteAsset2.bMovingEmote) {
+                Console.WriteLine($"FortEmoteSystem: '{emoteAsset2.DisplayName}' is a MOVING emote " +
+                                  $"(forwardOnly={emoteAsset2.bMoveForwardOnly}, speed={pawn.EmoteWalkSpeed}) - " +
+                                  "handles 52/53/71 go out with it.");
+            }
+        }
+
         pawn.LastReplicatedEmoteExecuted = emoteAsset;
 
         var netDriver = controller.GetWorld()?.NetDriver;
@@ -182,6 +227,11 @@ public static class FortEmoteSystem {
         var handle = pawn.ActiveEmoteAbilityHandle;
         pawn.ActiveEmoteAbilityHandle = 0;
         pawn.LastReplicatedEmoteExecuted = null;
+
+        // Cleared with the emote, or the pawn would keep walking at a dance's speed after it ended.
+        pawn.bMovingEmote = false;
+        pawn.bMovingEmoteForwardOnly = false;
+        pawn.EmoteWalkSpeed = 0f;
 
         controller.PlayerState?.AbilitySystemComponent?.ClearAbility(handle);
 

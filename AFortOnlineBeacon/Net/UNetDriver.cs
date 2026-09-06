@@ -89,6 +89,7 @@ public abstract class UNetDriver {
         // the first few lines of the log, not buried after a join. See its doc comment.
         NativeClassNetCache.EnsureVerified();
         UActorChannel.VerifyLifetimeConditions();
+        BuildingStructuralSupportSystem.VerifyCollisionGeometry();
         return true;
     }
     
@@ -150,6 +151,14 @@ public abstract class UNetDriver {
         }
     }
 
+    /// <summary>The end of the same handshake - see UActorChannel.SendClientEndAbility.</summary>
+    public void SendClientEndAbility(AActor owner, UObject abilitySystem, int abilityHandle,
+                                     FPredictionKey predictionKey) {
+        foreach (var connection in ClientConnections) {
+            connection.FindActorChannel(owner)?.SendClientEndAbility(abilitySystem, abilityHandle, predictionKey);
+        }
+    }
+
     /// <summary>
     ///     Pushes <paramref name="owner"/>'s AbilitySystemComponent on every connection that has a
     ///     channel for it, without waiting for the next replication tick. Here for the same reason
@@ -161,6 +170,61 @@ public abstract class UNetDriver {
             connection.FindActorChannel(owner)?.FlushAbilitySystemComponent();
         }
     }
+
+    /// <summary>
+    ///     UNetDriver::NotifyActorDestroyed - the destroy path for a client that has no channel to
+    ///     close.
+    ///
+    ///     A connection WITH a channel needs nothing here: the per-tick walk closes it with
+    ///     EChannelCloseReason::Destroyed and that is what removes the actor. This covers the two
+    ///     cases where there is no channel and the client nevertheless knows the actor:
+    ///
+    ///       * it went DORMANT - the channel was closed deliberately and the client was told to keep
+    ///         the actor, which is exactly the trap that kept pickups out of dormancy;
+    ///       * distance culling never opened one, but some other object reference taught the client
+    ///         the NetGUID anyway.
+    ///
+    ///     Both used to end with the actor alive on the client forever, silently. Real UE keeps a
+    ///     DestroyedStartupOrDormantActors map and drains it during ServerReplicateActors; this sends
+    ///     immediately, which is simpler and costs one small bunch per connection at the moment of
+    ///     destruction rather than a per-tick sweep.
+    /// </summary>
+    public void NotifyActorDestroyed(AActor destroyed) {
+        if (!destroyed.bReplicates) return;
+
+        // Never introduced to anyone - the guid cache would happily mint one here, and destroying an
+        // actor the client has never heard of is a bunch that can only confuse it.
+        if (!GuidCache.NetGUIDLookup.TryGetValue(destroyed, out var knownGuid) || !knownGuid.IsValid()) return;
+
+        foreach (var connection in ClientConnections) {
+            if (connection.FindActorChannel(destroyed) != null) continue;   // the ordinary close covers it
+
+            // ONLY FOR ACTORS THIS CONNECTION WAS TOLD TO KEEP. The guid cache is driver-wide, not
+            // per connection, so "a NetGUID exists" says one client saw the actor - not this one. The
+            // dormant set is the one thing that is per connection and certain: we closed its channel
+            // ourselves and told it to hold on to the actor.
+            //
+            // The other case - never culled into view, but taught the guid by some other object
+            // reference - is left alone deliberately. Sending a destroy for an actor a client never
+            // knew is a bunch it can only misread, and getting it right needs per-connection
+            // ack tracking (real UE's FNetGUIDCache NetGUIDAckStatus), which this port does not have.
+            if (!connection.DormantActors.Remove(destroyed)) continue;
+
+            var channel = (UActorChannel) connection.CreateChannelByName(
+                EName.Actor, EChannelCreateFlags.OpenedLocally, UnrealConstants.IndexNone);
+
+            channel.SendDestructionInfo(destroyed);
+
+            if (_LoggedDestructionInfoClasses.Add(destroyed.GetType().Name)) {
+                Console.WriteLine($"UNetDriver.NotifyActorDestroyed: {destroyed.GetType().Name} was DORMANT on " +
+                                  "this connection, so a channel-free destruction info went instead of a channel " +
+                                  "close. THIS IS WHAT LETS DESTROYABLE ACTORS BE DORMANT. ONE LINE PER CLASS.");
+            }
+        }
+    }
+
+    /// <summary>Actor classes a destruction info has already been reported for - once each.</summary>
+    private readonly HashSet<string> _LoggedDestructionInfoClasses = new();
 
     /// <summary>
     ///     Set false by REP_TICK=0. The escape hatch for the whole ongoing-replication pass: before
@@ -198,6 +262,22 @@ public abstract class UNetDriver {
             if (actor.bReplicateMovement && !actor.IsPendingKillPending()) actor.GatherCurrentMovement(now);
         }
 
+        // WAKE anything that asked to be woken, BEFORE the sweep that would otherwise skip it.
+        // AActor.FlushNetDormancy cannot reach the connections itself; this is the driver doing it on
+        // the actor's behalf, and doing it FIRST is what makes "flush then destroy" work - the channel
+        // reopens on this pass and the destroy close goes out on the next.
+        foreach (var actor in NetworkObjectList.ToArray()) {
+            if (!actor.bDormancyFlushed) continue;
+
+            actor.bDormancyFlushed = false;
+            foreach (var connection in ClientConnections) {
+                if (connection.DormantActors.Remove(actor)) {
+                    Console.WriteLine($"UNetDriver: {actor.GetType().Name} '{actor.GetFName()}' WOKE from " +
+                                      "dormancy - its channel reopens on this pass.");
+                }
+            }
+        }
+
         foreach (var connection in ClientConnections) {
             updated += OpenChannelsForNewlyRelevantActors(connection);
 
@@ -206,15 +286,44 @@ public abstract class UNetDriver {
             foreach (var channel in connection.OpenChannels.ToArray()) {
                 if (channel is not UActorChannel actorChannel) continue;
 
-                if (actorChannel.ReplicateActorUpdate()) updated++;
+                var wroteThisTick = actorChannel.ReplicateActorUpdate();
+                if (wroteThisTick) updated++;
+
+                if (actorChannel.Actor is not { } actor) continue;
 
                 // A destroyed actor's channel is closed AFTER its last property update, so a final
                 // state change (a pickup's bPickedUp, say) still gets a chance to go out ahead of
                 // the close. Closing is the only thing that removes the actor from the client -
                 // marking it destroyed server-side is invisible on its own.
-                if (actorChannel.Actor is { } actor && actor.IsPendingKillPending() && !actorChannel.Closing) {
+                if (actor.IsPendingKillPending() && !actorChannel.Closing) {
                     actorChannel.Close(EChannelCloseReason.Destroyed);
                     updated++;
+                    continue;
+                }
+
+                // DORMANCY. An actor that says it will not change again gets its channel CLOSED, and
+                // the client keeps it: UActorChannel::CleanUp (DataChannel.cpp:1978) has a branch
+                // for exactly this close reason that sets NetDormancy on its own copy and skips
+                // DestroyActorAndComponents. Nothing else in this server may close a channel and
+                // leave the actor standing.
+                //
+                // Not until it has actually SENT everything, though. The gate is "wrote nothing this
+                // tick and the open has been acked" - a channel closed before its open lands, or
+                // while a property is still pending, would leave the client holding an actor that
+                // never received the state that made it worth having.
+                if (DormancyEnabled && actor.NetDormancy == ENetDormancy.DormantAll
+                    && !wroteThisTick && actorChannel.OpenAcked && !actorChannel.Closing) {
+                    actorChannel.Close(EChannelCloseReason.Dormancy);
+                    connection.DormantActors.Add(actor);
+                    updated++;
+
+                    if (_LoggedDormantClasses.Add(actor.GetType().Name)) {
+                        Console.WriteLine($"UNetDriver: {actor.GetType().Name} went DORMANT (first one: " +
+                                          $"'{actor.GetFName()}', ChIndex={actorChannel.ChIndex}). Its channel is " +
+                                          "closed and the client keeps the actor. ONE LINE PER CLASS - later ones " +
+                                          "are silent; count them with `grep -c reason=Dormancy`. NET_DORMANCY=0 " +
+                                          "disables this.");
+                    }
                 }
             }
         }
@@ -316,6 +425,12 @@ public abstract class UNetDriver {
         foreach (var actor in NetworkObjectList.ToArray()) {
             if (!actor.bReplicates || actor.IsPendingKillPending()) continue;
             if (connection.FindActorChannel(actor) != null) continue;
+
+            // Already told this connection to keep it and stop listening. Re-opening a channel would
+            // undo the dormancy and hand the client a second copy of everything - AActor.FlushNetDormancy
+            // is the only way back, and the driver clears this set for it below.
+            if (connection.DormantActors.Contains(actor)) continue;
+
             considered++;
 
             if (!actor.IsNetRelevantFor(viewer, viewLocation)) {
@@ -397,6 +512,26 @@ public abstract class UNetDriver {
 
     /// <summary>Which viewpoint each connection's culling last measured from, so a CHANGE can be reported.</summary>
     private readonly Dictionary<UNetConnection, string> _LastViewpointSource = new();
+
+    /// <summary>
+    ///     Dormancy, ON by default since 2026-09-04. NET_DORMANCY=0 turns it off.
+    ///
+    ///     It shipped opt-in first, because a channel closed for the wrong reason - or at the wrong
+    ///     moment - leaves an actor on the client the server will never speak about again, and that
+    ///     failure looks like nothing at all until somebody tries to interact with it. A live session
+    ///     then closed 144 channels as dormant and destroyed 10 dormant actors through
+    ///     UActorChannel.SendDestructionInfo with no errors, no wakes needed, no reopens, and both
+    ///     vehicles and picked-up items behaving correctly - so the default flipped.
+    ///
+    ///     IF SOMETHING GOES WRONG LATER, SUSPECT THIS FIRST. The symptom it produces is an actor
+    ///     that is present on the client and inert - visible but unusable, or gone server-side and
+    ///     still drawn. NET_DORMANCY=0 restores exactly the old behaviour in one run, which makes it
+    ///     a cheap thing to rule in or out.
+    /// </summary>
+    private static readonly bool DormancyEnabled = Environment.GetEnvironmentVariable("NET_DORMANCY") is not "0";
+
+    /// <summary>Actor classes that have already been reported as going dormant - once each.</summary>
+    private readonly HashSet<string> _LoggedDormantClasses = new();
 
     /// <summary>Actor classes distance culling has already been reported as refusing at least once.</summary>
     private readonly HashSet<string> _LoggedCulledClasses = new();

@@ -508,6 +508,29 @@ internal static class NativeClassNetCache {
     // The controller's InteractionComp - see UFortControllerComponent_Interaction for why this
     // matters: every chest, ammo box and door arrives through it, and without a cache the field
     // index cannot be decoded even once the sub-object itself resolves.
+    /// <summary>
+    ///     The thrown-consumable ability family - GA_Athena_Grenade_WithTrajectory_C and everything
+    ///     under it (Frag, TNT, Sticky, Gas v2, Rethrow, SneakySnowman, UtilityGrenade).
+    ///
+    ///     ONE FIELD, AT INDEX 0, AND THE INDEX IS ONE BIT WIDE. That is not an assumption; the
+    ///     whole chain above it contributes nothing:
+    ///
+    ///       * UGameplayAbility has no GetLifetimeReplicatedProps and no net UFUNCTIONs at all
+    ///         (checked against the 4.23 plugin source).
+    ///       * UFortGameplayAbility has no CPF_Net property and no Server_/Client_/NetMulticast
+    ///         function either (checked against the 10.40 Dumper-7 SDK).
+    ///       * GA_Athena_Grenade_WithTrajectory_C's own compiled functions are 39, of which exactly
+    ///         ONE is FUNC_Net: Server_SpawnProjectile.
+    ///       * The leaf classes (GA_Athena_FragGrenade_WithTrajectory_C and its siblings) have no
+    ///         bytecode at all - they only override CDO defaults - so they add no fields, and a
+    ///         subclass's own fields would in any case be numbered AFTER the parent's.
+    ///
+    ///     So GetMaxIndex() is 1 and the field index is SerializeInt(_, 2) = one bit. The arithmetic
+    ///     agrees with the wire: a real throw arrived as a 150-bit content block, and
+    ///     1 (index) + 16 (SerializeIntPacked of a value >= 128) + 133 (payload) = 150 exactly.
+    /// </summary>
+    public static readonly FClassNetCache ThrownAbilityCache = new(null, OwnFieldsSorted("Server_SpawnProjectile"));
+
     private static readonly FClassNetCache FortControllerComponentCache = new(ActorComponentCache, FortControllerComponentOwnFields);
     public static readonly FClassNetCache FortControllerComponentInteractionCache =
         new(FortControllerComponentCache, FortControllerComponentInteractionOwnFields);
@@ -524,6 +547,42 @@ internal static class NativeClassNetCache {
     private static readonly FClassNetCache FortPlayerPawnCache = new(FortPawnCache, FortPlayerPawnOwnFields);
     private static readonly FClassNetCache FortPlayerPawnAthenaCache = new(FortPlayerPawnCache, FortPlayerPawnAthenaOwnFields);
     private static readonly FClassNetCache PawnCache = new(FortPlayerPawnAthenaCache, PlayerPawnAthenaOwnFields);
+
+    // ---------------------------------- VEHICLES ----------------------------------
+    //
+    // A VEHICLE IS A PAWN, and this matters for RPC decoding even though AFortAthenaVehicle derives
+    // from AActor on this server (see that class for why - a vehicle's REP LAYOUT must not be a
+    // character's). The ClassNetCache is a different thing from the layout: the client numbers an
+    // RPC's field by walking the REAL chain, AFortAthenaVehicle : AFortPhysicsPawn : AFortPawn :
+    // ACharacter : APawn : AActor, and - crucially - serialises that index as a bounded int whose
+    // WIDTH comes from GetMaxIndex()+1.
+    //
+    // So decoding a vehicle bunch with AActor's cache does not merely mislabel the field, it reads
+    // the wrong NUMBER OF BITS and every bit after it is garbage. The symptom was exactly that:
+    //
+    //     field[1]=bCanBeDamaged on ChIndex=18 Actor=ShoppingCartVehicleSK_C (867 payload bits)
+    //
+    // a bool property, arriving from a client, carrying 867 bits of payload. Nothing about that is
+    // possible; the index was read at the wrong width.
+    private static readonly string[] FortPhysicsPawnOwnFields = OwnFieldsSorted(
+        "SafeTeleportInfo", "GravityMultiplier",
+        "ClientAckGoodMove", "ClientBroadcastHitDetection", "ServerMove", "ServerUpdateStateSync"
+    );
+
+    private static readonly string[] FortAthenaVehicleOwnFields = OwnFieldsSorted(
+        "bHasDriver", "EmptyDriverInputState", "VehicleAttributes", "IgnoredBuildingActors",
+        "CorrectTargetOrientation", "bPendingDeath",
+        // NOT ClientIsDriver, despite the name: the SDK declares it `bool ClientIsDriver() const`,
+        // and an RPC cannot return a value. It is a getter. Including it made this cache one field
+        // too big, which is enough on its own to change the width of every field index - and it is
+        // exactly the kind of name-based guess that made this list unreliable, since the SDK headers
+        // carry no FUNC_Net flag for functions.
+        "ServerOnAttemptInteract", "ServerSetIgnoreAllFallingDamage",
+        "ServerSetIgnoreNextFallingDamage", "ServerStartFire", "ServerUsingRiftPortal"
+    );
+
+    private static readonly FClassNetCache FortPhysicsPawnCache = new(FortPawnCache, FortPhysicsPawnOwnFields);
+    private static readonly FClassNetCache FortAthenaVehicleCache = new(FortPhysicsPawnCache, FortAthenaVehicleOwnFields);
 
     private static readonly FClassNetCache GameStateBaseCache = new(ActorCache, GameStateBaseOwnFields);
     private static readonly FClassNetCache GameStateEngineCache = new(GameStateBaseCache, GameStateOwnFields);
@@ -639,6 +698,9 @@ internal static class NativeClassNetCache {
 
     public static FClassNetCache Get(AActor actor) => actor switch {
         AFortWeapon weapon => FortWeaponNetCaches.For(weapon, ActorCache),
+        // Before the APawn arm below - a vehicle is not an APawn on THIS server (its rep layout is
+        // AActor's on purpose), so the pattern would never reach it there.
+        AFortAthenaVehicle vehicle => FortVehicleNetCaches.For(vehicle, FortAthenaVehicleCache),
         AFortInventory => FortInventoryCache,
         AFortBroadcastRemoteClientInfo => FortBroadcastRemoteClientInfoCache,
         AGameState => GameStateCache,

@@ -96,5 +96,24 @@ public class FRotator {
         Pitch = DecompressAxisFromShort(view & 0xFFFF)
     };
 
+    /// <summary>
+    ///     FRotationMatrix(R).GetScaledAxis(EAxis::X) - the direction this rotation points.
+    ///
+    ///     Roll does not appear because it cannot: rolling about the forward axis leaves that axis
+    ///     alone. UE's pitch is POSITIVE UP (unlike the raw math convention), which is why Z is
+    ///     +sin(pitch) rather than -sin(pitch); a sign slip here sends a grenade into the ground.
+    /// </summary>
+    public FVector GetForwardVector() {
+        var pitch = Pitch * MathF.PI / 180f;
+        var yaw = Yaw * MathF.PI / 180f;
+        var cosPitch = MathF.Cos(pitch);
+
+        return new FVector {
+            X = cosPitch * MathF.Cos(yaw),
+            Y = cosPitch * MathF.Sin(yaw),
+            Z = MathF.Sin(pitch)
+        };
+    }
+
     public override string ToString() => $"(P={Pitch:F2}, Y={Yaw:F2}, R={Roll:F2})";
 }

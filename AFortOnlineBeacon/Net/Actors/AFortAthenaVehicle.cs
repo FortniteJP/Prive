@@ -1,3 +1,5 @@
+﻿using AFortOnlineBeacon.Core.Objects;
+
 namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
@@ -38,11 +40,23 @@ public class AFortAthenaVehicle : AActor {
     ///     tens of them rather than thousands, so a generous radius costs almost nothing.
     ///     VEHICLE_CULL_DISTANCE overrides it in units; NET_CULL=0 disables culling entirely.
     /// </summary>
-    public AFortAthenaVehicle() =>
+    public AFortAthenaVehicle() {
         NetCullDistanceSquared =
             float.TryParse(Environment.GetEnvironmentVariable("VEHICLE_CULL_DISTANCE"), out var units) && units > 0
                 ? units * units
                 : 40000f * 40000f;
+
+        // DORMANT AS SOON AS IT HAS BEEN SENT. A parked vehicle is the textbook case: up to 325 of
+        // them map-wide, nothing about one ever changes after the spawn bunch, and none is ever
+        // destroyed - so every tick spent diffing its channel is wasted, for the whole match. This is
+        // only the REQUEST; UNetDriver decides when, and its gate is "the open was acked and nothing
+        // changed this tick", which is exactly the right moment and needs no timing here.
+        //
+        // Safe precisely BECAUSE a vehicle is never destroyed - see AActor.Destroy for what a
+        // destroyed dormant actor would do to a client and what is missing to support it. If vehicles
+        // ever become destructible, this line has to go in the same change.
+        SetNetDormancy(ENetDormancy.DormantAll);
+    }
 
     /// <summary>
     ///     The Blueprint class path this instance was spawned as - for logging only.
@@ -53,4 +67,35 @@ public class AFortAthenaVehicle : AActor {
     ///     "()". Deriving it from the class the actor was actually spawned as cannot go stale.
     /// </summary>
     public string VehicleClassPath => GetClass()?.NativePackagePath ?? string.Empty;
+
+    /// <summary>
+    ///     The mesh the driver's movement base points at - see UFortVehicleSkelMeshComponent. Built on
+    ///     demand rather than in the constructor because UObjectGlobals.NewObject needs the outer to
+    ///     exist first, the same order APlayerController.CreateInteractionComponent works in.
+    /// </summary>
+    public UFortVehicleSkelMeshComponent? MeshComponent { get; private set; }
+
+    /// <summary>Who is driving, or null. Server-side; the client learns it from the movement base.</summary>
+    public APawn? Driver { get; set; }
+
+    /// <summary>
+    ///     AFortAthenaVehicle::bHasDriver - handle 22, and true exactly when Driver is set.
+    ///
+    ///     Derived rather than stored so the two can never disagree: every path that seats or unseats
+    ///     someone goes through Driver, and a bool that has to be maintained alongside it is a bool
+    ///     that will eventually be left behind.
+    /// </summary>
+    public bool bHasDriver => Driver != null;
+
+    public UFortVehicleSkelMeshComponent? GetOrCreateMeshComponent() {
+        if (MeshComponent != null) return MeshComponent;
+
+        MeshComponent = UObjectGlobals.NewObject<UFortVehicleSkelMeshComponent>(
+            this,
+            GUClassArray.StaticClass<UFortVehicleSkelMeshComponent>(),
+            new FName(UFortVehicleSkelMeshComponent.SubObjectName),
+            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject);
+
+        return MeshComponent;
+    }
 }

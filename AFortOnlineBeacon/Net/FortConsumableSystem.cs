@@ -92,8 +92,12 @@ internal static class FortConsumableSystem {
     ///     player's hands too, because the weapon actor is keyed to its inventory row by
     ///     ItemEntryGuid and that row is about to stop existing - the same rule
     ///     ServerAttemptInventoryDrop follows.
+    ///
+    ///     Shared with FortProjectileSystem: a thrown grenade is consumed by exactly the same rule
+    ///     (its ability carries the same AbilityCosts entry), and having two copies of "take one off
+    ///     the stack, unequip when the stack is gone" is how the two would drift apart.
     /// </summary>
-    private static void ConsumeOne(APlayerState playerState, AFortWeapon weapon, string displayName) {
+    internal static void ConsumeOne(APlayerState playerState, AFortWeapon weapon, string displayName) {
         if (playerState.GetOwningController() is not APlayerController { WorldInventory: { } inventory } controller) return;
 
         var entry = inventory.Inventory.Items.FirstOrDefault(item => item.ItemGuid == weapon.ItemEntryGuid);

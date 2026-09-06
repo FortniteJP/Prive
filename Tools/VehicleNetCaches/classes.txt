@@ -1,0 +1,7 @@
+/Game/Athena/DrivableVehicles/AntelopeVehicle.AntelopeVehicle_C
+/Game/Athena/DrivableVehicles/Biplane/Blueprints/FerretVehicle.FerretVehicle_C
+/Game/Athena/DrivableVehicles/Golf_Cart/Golf_Cart_Base/Blueprints/GolfCartVehicleSK.GolfCartVehicleSK_C
+/Game/Athena/DrivableVehicles/JackalVehicle_Athena.JackalVehicle_Athena_C
+/Game/Athena/DrivableVehicles/Octopus/OctopusVehicle.OctopusVehicle_C
+/Game/Athena/DrivableVehicles/PushCannon.PushCannon_C
+/Game/Athena/DrivableVehicles/ShoppingCartVehicleSK.ShoppingCartVehicleSK_C

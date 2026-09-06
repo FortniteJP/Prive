@@ -141,6 +141,10 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // Net.JumpDiagnostics for why an absent log line is not good enough.
         Net.JumpDiagnostics.Tick(this, TimeSeconds);
 
+        // The running verdict on the baked height map, measured against where players actually
+        // stand. Silent unless TERRAIN_GROUNDTRUTH names a file.
+        Net.TerrainGroundTruth.Tick(TimeSeconds);
+
         // Diagnostic only, off unless HEALTH_DEBUG_RAMP=1 - see FortDamageSystem.DebugRamp for the
         // question it answers.
         FortDamageSystem.DebugRamp(this, TimeSeconds);
@@ -179,6 +183,14 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     public AGameModeBase? GetAuthGameMode() => _AuthorityGameMode;
 
     public void InitializeActorsForPlay(FUrl inUrl, bool bResetTime) {
+        // Say out loud what this server knows about the world's shape. All three are optional files
+        // and all three fail SILENTLY when absent - the symptom is a grenade going through a wall or
+        // through the ground, which looks like a physics bug rather than a missing file.
+        Console.WriteLine($"World collision: hulls " +
+                          $"{(Net.WorldCollision.Loaded ? $"{Net.WorldCollision.ShapeCount:N0} shape(s) x {Net.WorldCollision.InstanceCount:N0} placement(s)" : "NONE")}, " +
+                          $"voxel walls {(Net.TerrainWalls.Loaded ? $"{Net.TerrainWalls.SpanCount:N0} span(s)" : "NONE")}, " +
+                          $"placed-mesh heights {(Net.TerrainHeightMap.HasMeshGrid ? "loaded" : "NONE")}.");
+
         // Don't reset time for seamless world transitions.
         if (bResetTime) {
             TimeSeconds = 0.0f;

@@ -31,6 +31,15 @@ public class AActor : UObject {
 
     public FVector GetActorLocation() => Location;
 
+    /// <summary>
+    ///     AActor::GetVelocity - zero for everything that does not move under its own power, which is
+    ///     almost everything here. It exists so UPackageMapClient's spawn header can fill in
+    ///     bSerializeVelocity: a projectile's whole flight is the client simulating THIS value.
+    /// </summary>
+    public FVector Velocity { get; set; } = new();
+
+    public virtual FVector GetVelocity() => Velocity;
+
     public void SetActorLocation(FVector newLocation) {
         Location = newLocation;
         bHasKnownLocation = true;
@@ -267,6 +276,16 @@ public class AActor : UObject {
         if (bActorIsBeingDestroyed) return;
 
         bActorIsBeingDestroyed = true;
+
+        // TELL THE CLIENTS THAT HAVE NO CHANNEL FOR THIS ACTOR, BEFORE IT LEAVES THE NETWORK LIST.
+        //
+        // Closing a channel is how a destroy normally reaches a client, and there are two ways an
+        // actor can be destroyed with no channel to close: it went DORMANT (the channel was closed on
+        // purpose and the client was told to keep the actor), or distance culling meant a channel was
+        // never opened at all while some other reference still taught the client its NetGUID. Both
+        // used to leave the actor on the client forever. See UNetDriver.NotifyActorDestroyed.
+        GetWorld()?.NetDriver?.NotifyActorDestroyed(this);
+
         GetWorld()?.NetDriver?.RemoveNetworkActor(this);
         Destroyed();
     }
@@ -328,6 +347,17 @@ public class AActor : UObject {
     public int ReplicatedPropertySetRevision { get; private set; }
 
     /// <summary>
+    ///     Says that WHICH properties this actor replicates has just changed, so every channel
+    ///     carrying it rebuilds its cached set.
+    ///
+    ///     Anything that turns a conditional property group on or off has to call this, and the cost
+    ///     of forgetting is silence: the server does the work, logs that it did, and the diff never
+    ///     looks at the new handles. That happened to the attachment group above, and then happened
+    ///     again to the movement base (APawn.SetMovementBase) even with this comment already written.
+    /// </summary>
+    protected void MarkReplicatedPropertySetChanged() => ReplicatedPropertySetRevision++;
+
+    /// <summary>
     ///     Whether this actor has EVER been attached to anything, and therefore whether the six
     ///     AttachmentReplication handles belong in its replicated set. Sticky on purpose.
     ///
@@ -344,6 +374,47 @@ public class AActor : UObject {
     ///     See UActorChannel's pawn property set.
     /// </summary>
     public bool bAttachmentEverSet { get; private set; }
+
+    /// <summary>
+    ///     AActor::NetDormancy (ENetDormancy) - whether this actor still needs replicating at all.
+    ///
+    ///     DORM_DormantAll means "nothing about me will change again until somebody says otherwise".
+    ///     The server closes the actor's channels with EChannelCloseReason::Dormancy, and the client
+    ///     KEEPS THE ACTOR - UActorChannel::CleanUp (DataChannel.cpp:1978) has a branch specifically
+    ///     for this: `else if (Dormant &amp;&amp; CloseReason == Dormancy &amp;&amp; !GetTearOff())` sets
+    ///     NetDormancy on its own copy and skips DestroyActorAndComponents entirely. That is what
+    ///     makes closing safe here and not anywhere else.
+    ///
+    ///     Only two of UE's five values are modelled. DORM_Initial (never replicate at all) and the
+    ///     per-connection DORM_DormantPartial have no user here.
+    /// </summary>
+    public ENetDormancy NetDormancy { get; private set; } = ENetDormancy.Awake;
+
+    /// <summary>AActor::SetNetDormancy - ask for dormancy; the driver decides when to act on it.</summary>
+    public void SetNetDormancy(ENetDormancy dormancy) => NetDormancy = dormancy;
+
+    /// <summary>
+    ///     AActor::FlushNetDormancy - "I am about to change, wake me up".
+    ///
+    ///     MUST be called before anything that changes a dormant actor, and ESPECIALLY before
+    ///     destroying one: a dormant actor has no open channel, so the destroy close that normally
+    ///     removes it from the client has nothing to travel on. Waking it puts it back in the
+    ///     newly-relevant sweep, the channel reopens, and the close goes out on the pass after.
+    ///     Skipping this is how an actor would vanish server-side and live forever on the client.
+    /// </summary>
+    public void FlushNetDormancy() {
+        if (NetDormancy == ENetDormancy.Awake) return;
+
+        NetDormancy = ENetDormancy.Awake;
+        bDormancyFlushed = true;
+    }
+
+    /// <summary>
+    ///     Set by <see cref="FlushNetDormancy"/> and consumed by UNetDriver, which uses it to drop
+    ///     this actor from every connection's dormant set. The actor cannot reach the connections
+    ///     itself, and the driver walks them anyway.
+    /// </summary>
+    public bool bDormancyFlushed { get; set; }
 
     /// <summary>FRepAttachment::LocationOffset - where on the parent this actor sits.</summary>
     public FVector AttachLocationOffset { get; set; } = new();
