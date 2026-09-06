@@ -33,10 +33,14 @@ public static class FortDamageSystem {
         float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
 
     /// <summary>
-    ///     Flat per-hit damage to a player, standing in for the weapon's own stat row - the same
-    ///     placeholder arrangement, and the same eventual fix, as NativeRpcHandlers'
-    ///     BuildingDamagePerHit. 20 is a mid-tier assault rifle body shot, so five hits kill a
-    ///     full-health player carrying no shield.
+    ///     Flat per-hit damage to a player, used ONLY for a weapon Tools/WeaponStats has no row for.
+    ///
+    ///     This used to be the damage every weapon did - a pickaxe, a sniper rifle and a point-blank
+    ///     shotgun pellet all took exactly 20 off a player. The real numbers now come from the
+    ///     weapon's own stat row (see FortWeaponStats), with four range breakpoints and a crit
+    ///     multiplier each, so this is a fallback rather than the model. It is kept, and the caller
+    ///     names the weapon in the log when it is used, because an unknown weapon should be visible
+    ///     rather than silently doing assault-rifle damage.
     /// </summary>
     public static float WeaponDamage => Env("WEAPON_DAMAGE", 20.0f);
 

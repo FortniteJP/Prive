@@ -29,6 +29,12 @@ TABLES = [
     # covers belongs to ABuildingActor, which sits above it - checking against the derived class is
     # the stricter of the two, since it would also catch anything wrongly inserted in between.
     ("BuildingActorProps", ["ActorProps"], "ABuildingSMActor"),
+    ("VehicleSeatComponentProps", [], "UFortVehicleSeatComponent"),
+    # A STRUCT, not a class: FAthenaCarPlayerSlot is the inner of UFortVehicleSeatComponent's
+    # PlayerSlots, and this table is the per-element handle space. Its LENGTH is load-bearing in a
+    # way no other table's is - it is the divisor in `element * len + member`, so one missing entry
+    # does not lose a member, it renumbers every seat after the first.
+    ("VehicleSeatProps", [], "FAthenaCarPlayerSlot", "--struct"),
 ]
 
 ENTRY_RE = re.compile(
@@ -71,13 +77,13 @@ def same(got, exp):
 def main():
     src = io.open(CS, encoding="utf-8-sig").read()
     bad = 0
-    for var, prefixes, ue_class in TABLES:
+    for var, prefixes, ue_class, *extra in TABLES:
         names = []
         for p in prefixes:
             names += cs_names(src, p)
         names += cs_names(src, var)
 
-        lines = subprocess.run([sys.executable, "Tools/RepHandles/rep_handles.py", ue_class],
+        lines = subprocess.run([sys.executable, "Tools/RepHandles/rep_handles.py", ue_class] + extra,
                                capture_output=True, text=True).stdout.splitlines()
         want = [re.match(r"\s*(\d+)\s+\S+\s+\S+\s+(\S+)", l).group(2)
                 for l in lines if re.match(r"\s*\d+\s", l)]

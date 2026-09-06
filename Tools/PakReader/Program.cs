@@ -1052,15 +1052,19 @@ public static class Program {
             try { item = provider.LoadPackageObject(path); } catch { continue; }
             if (item == null) continue;
 
-            // The row NAME is what matters; the table it points at is UtilityItemDamage for every
-            // throwable, and naming it here as well would just be noise repeated 200 times.
-            var row = item.GetOrDefault<CUE4Parse.UE4.Assets.Objects.FStructFallback?>("WeaponStatHandle", null)
-                ?.GetOrDefault<FName>("RowName").Text ?? "";
+            // THE TABLE IS PRINTED TOO, which it did not used to be. The old comment here said the
+            // table "is UtilityItemDamage for every throwable, and naming it here as well would just
+            // be noise" - true of throwables and false of everything else: a GUN's handle points at
+            // a different table entirely, and with only the row name there was no way to find out
+            // which. One column is much cheaper than that discovery being impossible.
+            var handle = item.GetOrDefault<CUE4Parse.UE4.Assets.Objects.FStructFallback?>("WeaponStatHandle", null);
+            var row = handle?.GetOrDefault<FName>("RowName").Text ?? "";
+            var table = handle?.GetOrDefault<CUE4Parse.UE4.Assets.Exports.UObject?>("DataTable", null)?.Name ?? "";
 
             if (row.Length == 0) continue;
 
             found++;
-            Console.WriteLine($"{path}\t{row}\t" +
+            Console.WriteLine($"{path}\t{row}\t{table}\t" +
                               $"{Soft(item, "ProjectileTemplate")}\t{Soft(item, "PrimaryFireAbility")}");
         }
 

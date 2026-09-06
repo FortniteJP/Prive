@@ -88,6 +88,43 @@ public class AFortPickup : AActor {
     /// <summary>AFortPickup::bTossedFromContainer (0x043A, Net + RepNotify) - handle 50. False: a player dropped this.</summary>
     public bool bTossedFromContainer { get; set; }
 
+    /// <summary>
+    ///     AFortPickup::PickupLocationData.PickupTarget (handle 38) - the pawn this item is flying
+    ///     TO, and the whole reason the client animates a pickup instead of the actor just
+    ///     vanishing. Null on a pickup lying in the world.
+    ///
+    ///     The client sends the flight itself in ServerHandlePickup(InFlyTime, InStartDirection),
+    ///     which this server already decoded and threw away: it destroyed the actor on the spot, so
+    ///     there was never anything left to fly. Setting these four and holding the destroy for
+    ///     FlyTime is the whole feature.
+    /// </summary>
+    public APawn? PickupTarget { get; set; }
+
+    /// <summary>
+    ///     AFortPickup::PickupLocationData.ItemOwner (handle 40) - who the item belongs to for the
+    ///     duration of the flight. PR3.0 sets this alongside PickupTarget in both of its pickup
+    ///     hooks, so it is part of the same set rather than something a toss uses on its own.
+    /// </summary>
+    public APawn? ItemOwner { get; set; }
+
+    /// <summary>
+    ///     AFortPickup::PickupLocationData.FlyTime (handle 43) - how long the arc takes.
+    ///
+    ///     The SERVER's number, not the client's: see FortPickupFlightSystem.FlightSeconds for why
+    ///     the client's own InFlyTime is discarded, and where 0.40s comes from.
+    /// </summary>
+    public float FlyTime { get; set; }
+
+    /// <summary>
+    ///     AFortPickup::PickupLocationData.StartDirection (handle 44) - which way the item sets off.
+    ///     An FVector_NetQuantizeNormal: SerializeFixedVector&lt;1, 16&gt;, i.e. each component as a
+    ///     16-bit fixed-point value over [-1, 1], NOT one of the packed-vector encodings.
+    /// </summary>
+    public FVector StartDirection { get; set; } = new();
+
+    /// <summary>AFortPickup::PickupLocationData.bPlayPickupSound (handle 47) - the client's own request, echoed back.</summary>
+    public bool bPlayPickupSound { get; set; }
+
     /// <summary>AFortPickup::bServerStoppedSimulation (0x043D, Net + RepNotify) - handle 53. True means "it has come to rest where I told you", which is all this server can honestly claim: there is no projectile movement simulation here.</summary>
     public bool bServerStoppedSimulation { get; set; } = true;
 }

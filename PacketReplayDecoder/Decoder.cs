@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Sockets;
 using AFortOnlineBeacon.Core;
+using AFortOnlineBeacon.Core.Math;
 using AFortOnlineBeacon.Core.Names;
 using AFortOnlineBeacon.Net;
 using AFortOnlineBeacon.Net.Abilities;
@@ -759,9 +760,33 @@ internal sealed class RoleDecoder {
             var bVel = r.ReadBit();
             Log($"#{packetIndex}:     bSerializeLocation={bLoc} bSerializeRotation={bRot} bSerializeScale={bScale} bSerializeVelocity={bVel}");
 
-            if (bLoc || bRot || bScale || bVel) {
-                Log($"#{packetIndex}:     spawn includes transform data - wire format for quantized Location/Rotation/Scale/Velocity is not modeled by this decoder, stopping content decode for this bunch");
-                return;
+            // THE SPAWN TRANSFORM, read by mirroring what this project's own UPackageMapClient writes
+            // (SerializeNewActor's four optional fields): FVector_NetQuantize10 for the three vectors
+            // and FRotator::SerializeCompressedShort for the rotation.
+            //
+            // This used to stop the whole bunch, which quietly made the decoder useless for exactly
+            // the actors worth studying - anything spawned with a position, which is every vehicle,
+            // pickup and projectile in the capture. Their CONTENT BLOCKS sit after this header, so
+            // "not modeled" here meant the sub-object state of a real server's vehicles could never
+            // be read.
+            if (bLoc) {
+                var loc = FVector.NetSerializeReadQuantized(r, 10, 24);
+                Log($"#{packetIndex}:     spawn Location=({loc.X:F1}, {loc.Y:F1}, {loc.Z:F1})");
+            }
+
+            if (bRot) {
+                var rot = FRotator.NetSerializeRead(r);
+                Log($"#{packetIndex}:     spawn Rotation=(P{rot.Pitch:F1}, Y{rot.Yaw:F1}, R{rot.Roll:F1})");
+            }
+
+            if (bScale) {
+                var scale = FVector.NetSerializeReadQuantized(r, 10, 24);
+                Log($"#{packetIndex}:     spawn Scale=({scale.X:F2}, {scale.Y:F2}, {scale.Z:F2})");
+            }
+
+            if (bVel) {
+                var vel = FVector.NetSerializeReadQuantized(r, 10, 24);
+                Log($"#{packetIndex}:     spawn Velocity=({vel.X:F1}, {vel.Y:F1}, {vel.Z:F1})");
             }
         }
 

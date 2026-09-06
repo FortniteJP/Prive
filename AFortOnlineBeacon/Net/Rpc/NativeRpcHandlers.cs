@@ -503,7 +503,6 @@ internal static class NativeRpcHandlers {
                 building.SetActorLocation(placeAt);
                 building.SetActorRotation(new FRotator { Yaw = buildYaw });
                 building.SetMirrored(buildData.bMirrored);
-                building.SetReplicates(true);
 
                 // HP/material/slot kind and the structural-support grid - see ABuildingActor and
                 // BuildingStructuralSupportSystem's doc comments for what these feed. Register only
@@ -516,6 +515,18 @@ internal static class NativeRpcHandlers {
                 building.SetAnchor(placeAt, buildYaw);
 
                 BuildingStructuralSupportSystem.Register(building);
+
+                // REPLICATES ONLY NOW, once the piece is fully in its as-placed state. This used to
+                // be set before InitializeFromClass, which meant the actor became replicable while
+                // its health was still MaxHitPoints and Register/BeginConstruction had not yet put
+                // it under construction at a fraction of that.
+                //
+                // The symptom was on screen rather than in a log: the piece appeared at its FULL
+                // look, then played the crumbling animation, then built back up. That middle step is
+                // the client doing exactly what it was told - health going 150 -> 90 is damage, and
+                // damage is what the breaking animation is for. A freshly placed wall should never
+                // have had a 150 to fall from.
+                building.SetReplicates(true);
 
                 // A real server's own ServerCreateBuildingActor hook deducts a flat 10 units of
                 // whatever resource the spawned class costs (confirmed independently: matches
@@ -1039,12 +1050,28 @@ internal static class NativeRpcHandlers {
                 // framing is wrong, and storing a number known to be wrong is worse than storing
                 // none. This gate stays even though the decode is now confirmed - it is what would
                 // catch a regression.
+                //
+                // ...BUT THE PAWN CANNOT BE THE ONLY REFERENCE, and taking it as one built a loop
+                // that fed itself. The server's pawn location goes stale the moment a player boards
+                // a vehicle (a based ServerMove carries no world position - see the move handler),
+                // so after driving 50 m every camera update failed this test and was thrown away -
+                // which meant the server could never learn where the player was, which is what kept
+                // the pawn stale. The one world-space position source still arriving was being
+                // discarded precisely when it was the only one left.
+                //
+                // CONTINUITY IS THE SECOND REFERENCE, and it is a real check rather than a
+                // concession: consecutive camera samples are metres apart because a camera moves
+                // continuously, so a chain of them stays trustworthy however far it wanders from a
+                // pawn position the server stopped updating. A mis-scaled decode still fails it,
+                // because a wrong scale factor moves the value by kilometres between one sample and
+                // the next, not metres.
                 var pawnLoc = camPawn.GetActorLocation();
-                var dx = camLoc.X - pawnLoc.X;
-                var dy = camLoc.Y - pawnLoc.Y;
-                var dz = camLoc.Z - pawnLoc.Z;
-                var distance = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-                var plausible = distance <= 5000f;
+                var distance = Distance(camLoc, pawnLoc);
+
+                var continuous = pc.LastClientCameraLocation is { } previous
+                                 && Distance(camLoc, previous) <= 5000f;
+
+                var plausible = distance <= 5000f || continuous;
 
                 if (plausible) {
                     // HOW OFTEN THIS ACTUALLY ARRIVES, measured rather than assumed - the first
@@ -1064,6 +1091,22 @@ internal static class NativeRpcHandlers {
                                           $"in {elapsed:F1}s ({_cameraSampleCount / MathF.Max(elapsed, 0.001f):F1}/s), " +
                                           $"longest gap {_cameraLongestGap:F2}s. Any server-side staleness bound has " +
                                           "to be well above that longest gap - see UNetDriver.CameraViewpointTimeout.");
+                    }
+
+                    // THE BOOM LENGTH, measured while both ends are known good. `distance` is
+                    // camera-to-pawn, and it only means anything while the pawn's own position is
+                    // current - which is exactly while unbased moves are still arriving. Recorded
+                    // here so a later movement correction can walk back along the camera's forward
+                    // vector and land on the player instead of on their camera. See
+                    // APawn.LastObservedCameraBoom for why this has to be measured per player, and
+                    // APawn.ObserveCameraBoom for why the SMALLEST recent sample is the one kept.
+                    //
+                    // The skew bound is the load-bearing part: the two ends arrive in different
+                    // messages, so any time between them shows up as extra distance. At one second
+                    // it let a 552uu "boom" through where the real one is about 254, and the
+                    // correction then overshot the player into the map.
+                    if (cameraNow - camPawn.LastUnbasedMoveTime <= APawn.BoomSampleSkewSeconds) {
+                        camPawn.ObserveCameraBoom(distance, cameraNow);
                     }
 
                     pc.LastClientCameraLocation = camLoc;
@@ -1159,9 +1202,20 @@ internal static class NativeRpcHandlers {
                 rider.SetVehicleState(null, 0, 0f);
                 rider.SetMovementBase(null);
 
+                // ...and the third: the seat array is what the client's own exit path reads, so
+                // leaving it occupied would put the player back in a vehicle they just left.
+                vehicle.SeatPawn(rider, -1, 0f);
+
                 if (vehicle.Driver == rider) vehicle.Driver = null;
                 vehicle.SetOwner(null);
                 vehicle.FlushNetDormancy();
+
+                // AND TELL THE CLIENT IT IS WALKING AGAIN. Getting out of the seat is not enough:
+                // the client put itself in EFortCustomMovement::Driving and only a server movement
+                // correction can take it out (ReplicatedMovementMode never reaches the pawn's own
+                // player). Without this the player is out of the vehicle and cannot move at all.
+                rider.RequestMovementModeCorrection(APawn.PackedMovementModeWalking);
+                rider.BeginVehicleExitReport();
 
                 Console.WriteLine($"NativeRpcHandlers: ServerAttemptExitVehicle - {rider.GetFName()} left " +
                                   $"{vehicle.GetFName()}");
@@ -1193,6 +1247,16 @@ internal static class NativeRpcHandlers {
                 var target = values[0] as int? ?? 0;
                 if (target is < 0 or > 255) return;
 
+                // THE SEAT ARRAY IS NOW THE AUTHORITY on who sits where, so an occupied seat can
+                // finally be refused - which the note above said needed exactly this.
+                if (vehicle.SeatComponent is { } seats && target < seats.PlayerSlots.Length &&
+                    seats.PlayerSlots[target].Player is { } occupant && occupant != rider) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerRequestSeatChange - seat {target} of " +
+                                      $"{vehicle.GetFName()} is taken by {occupant.GetFName()}, refusing");
+                    return;
+                }
+
+                vehicle.SeatPawn(rider, target, rider.VehicleStateEntryTime);
                 rider.SetVehicleState(vehicle, (byte) target, rider.VehicleStateEntryTime);
 
                 Console.WriteLine($"NativeRpcHandlers: ServerRequestSeatChange - {rider.GetFName()} moved to seat " +
@@ -1437,16 +1501,106 @@ internal static class NativeRpcHandlers {
                           $"{string.Join(", ", drops.Select(d => $"{d.Count}x{d.ItemPath[(d.ItemPath.LastIndexOf('.') + 1)..]}"))}");
     }
 
-    private static readonly FRpcParamDef[] ServerMoveTimeStampPrefix = {
-        new FRpcParamDef("TimeStamp", ERpcParamKind.Float)
+    /// <summary>Straight-line distance between two points, for the camera plausibility checks.</summary>
+    private static float Distance(FVector a, FVector b) {
+        var dx = a.X - b.X;
+        var dy = a.Y - b.Y;
+        var dz = a.Z - b.Z;
+        return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /// <summary>
+    ///     ACharacter::ServerMove IN FULL (Character.h:248), tail included.
+    ///
+    ///     THIS USED TO STOP AT THE TIMESTAMP, and the comment justifying that said the tail carried
+    ///     "a UPrimitiveComponent* and an FName, neither of which FRpcReader can read". It could read
+    ///     the component all along - an object reference is exactly what ERpcParamKind.Object is -
+    ///     and the FName needed nine lines (UPackageMap::StaticSerializeName already had a read side
+    ///     for the Name PROPERTY kind).
+    ///
+    ///     WHAT THAT COST. A client sends the BASED variant whenever it stands on a MOVABLE
+    ///     primitive, and the based variants were the ones being truncated - so the server threw away
+    ///     ClientLoc for every player standing on a vehicle, and it never learned that the player was
+    ///     standing on one at all. From boarding to long after exit, the server's pawn stayed at the
+    ///     spot where the player got in.
+    ///
+    ///     `ClientBaseBoneName` is read and discarded on purpose: nothing here wants a bone name, but
+    ///     the two parameters that matter most sit on the far side of it.
+    /// </summary>
+    private static readonly FRpcParamDef[] ServerMoveParams = {
+        new FRpcParamDef("TimeStamp", ERpcParamKind.Float),
+        new FRpcParamDef("InAccel", ERpcParamKind.VectorQuantize10),
+        new FRpcParamDef("ClientLoc", ERpcParamKind.VectorQuantize100),
+        new FRpcParamDef("CompressedMoveFlags", ERpcParamKind.Byte),
+        new FRpcParamDef("ClientRoll", ERpcParamKind.Byte),
+        new FRpcParamDef("View", ERpcParamKind.UInt32),
+        new FRpcParamDef("ClientMovementBase", ERpcParamKind.Object),
+        new FRpcParamDef("ClientBaseBoneName", ERpcParamKind.Name),
+        new FRpcParamDef("ClientMovementMode", ERpcParamKind.Byte)
     };
 
-    private static readonly FRpcParamDef[] ServerMoveDualTimeStampPrefix = {
+    /// <summary>
+    ///     ACharacter::ServerMoveNoBase - the bandwidth-saving variant a client sends whenever it is
+    ///     NOT standing on a movable primitive, which for a player on the ground is almost always.
+    /// </summary>
+    private static readonly FRpcParamDef[] ServerMoveNoBaseParams = {
+        new FRpcParamDef("TimeStamp", ERpcParamKind.Float),
+        new FRpcParamDef("InAccel", ERpcParamKind.VectorQuantize10),
+        new FRpcParamDef("ClientLoc", ERpcParamKind.VectorQuantize100),
+        new FRpcParamDef("CompressedMoveFlags", ERpcParamKind.Byte),
+        new FRpcParamDef("ClientRoll", ERpcParamKind.Byte),
+        new FRpcParamDef("View", ERpcParamKind.UInt32),
+        new FRpcParamDef("ClientMovementMode", ERpcParamKind.Byte)
+    };
+
+    /// <summary>
+    ///     ACharacter::ServerMoveOld (Character.h) - an OLD move being resent because the server
+    ///     never acknowledged it. Three parameters and no location or movement mode at all, so this
+    ///     one genuinely is the whole signature rather than a prefix.
+    /// </summary>
+    private static readonly FRpcParamDef[] ServerMoveOldParams = {
+        new FRpcParamDef("OldTimeStamp", ERpcParamKind.Float),
+        new FRpcParamDef("OldAccel", ERpcParamKind.VectorQuantize10),
+        new FRpcParamDef("OldMoveFlags", ERpcParamKind.Byte)
+    };
+
+    /// <summary>
+    ///     ACharacter::ServerMoveDual (Character.h:263) - two moves in one call. The first four
+    ///     parameters are the older, already-superseded move; everything from `TimeStamp` on is the
+    ///     real one, and has the same shape as <see cref="ServerMoveParams" />.
+    /// </summary>
+    private static readonly FRpcParamDef[] ServerMoveDualParams = {
         new FRpcParamDef("TimeStamp0", ERpcParamKind.Float),
         new FRpcParamDef("InAccel0", ERpcParamKind.VectorQuantize10),
         new FRpcParamDef("PendingFlags", ERpcParamKind.Byte),
         new FRpcParamDef("View0", ERpcParamKind.UInt32),
-        new FRpcParamDef("TimeStamp", ERpcParamKind.Float)
+        new FRpcParamDef("TimeStamp", ERpcParamKind.Float),
+        new FRpcParamDef("InAccel", ERpcParamKind.VectorQuantize10),
+        new FRpcParamDef("ClientLoc", ERpcParamKind.VectorQuantize100),
+        new FRpcParamDef("NewFlags", ERpcParamKind.Byte),
+        new FRpcParamDef("ClientRoll", ERpcParamKind.Byte),
+        new FRpcParamDef("View", ERpcParamKind.UInt32),
+        new FRpcParamDef("ClientMovementBase", ERpcParamKind.Object),
+        new FRpcParamDef("ClientBaseBoneName", ERpcParamKind.Name),
+        new FRpcParamDef("ClientMovementMode", ERpcParamKind.Byte)
+    };
+
+    /// <summary>
+    ///     ACharacter::ServerMoveDualNoBase (Character.h:269) - the same two moves with the base
+    ///     parameters implied null, so it stops two parameters short of the dual above.
+    /// </summary>
+    private static readonly FRpcParamDef[] ServerMoveDualNoBaseParams = {
+        new FRpcParamDef("TimeStamp0", ERpcParamKind.Float),
+        new FRpcParamDef("InAccel0", ERpcParamKind.VectorQuantize10),
+        new FRpcParamDef("PendingFlags", ERpcParamKind.Byte),
+        new FRpcParamDef("View0", ERpcParamKind.UInt32),
+        new FRpcParamDef("TimeStamp", ERpcParamKind.Float),
+        new FRpcParamDef("InAccel", ERpcParamKind.VectorQuantize10),
+        new FRpcParamDef("ClientLoc", ERpcParamKind.VectorQuantize100),
+        new FRpcParamDef("NewFlags", ERpcParamKind.Byte),
+        new FRpcParamDef("ClientRoll", ERpcParamKind.Byte),
+        new FRpcParamDef("View", ERpcParamKind.UInt32),
+        new FRpcParamDef("ClientMovementMode", ERpcParamKind.Byte)
     };
 
     /// <summary>
@@ -1569,9 +1723,12 @@ internal static class NativeRpcHandlers {
                             // it is.
                             rider.SetMovementBase(null);
                             rider.SetVehicleState(null, 0, 0f);
+                            vehicle.SeatPawn(rider, -1, 0f);
                             if (vehicle.Driver == rider) vehicle.Driver = null;
                             vehicle.SetOwner(null);
                             vehicle.FlushNetDormancy();
+                            rider.RequestMovementModeCorrection(APawn.PackedMovementModeWalking);
+                            rider.BeginVehicleExitReport();
 
                             Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} left " +
                                               $"{vehicle.GetFName()}");
@@ -1600,8 +1757,19 @@ internal static class NativeRpcHandlers {
                         // COND_SimulatedOnly, so it tells everyone EXCEPT the driver that this pawn
                         // rides the vehicle; VehicleStateRep carries no condition and is what puts
                         // the driver in the seat on their own screen.
+                        var entryTime = (float) (rider.GetWorld()?.TimeSeconds ?? 0d);
+
                         rider.SetMovementBase(vehicle.GetOrCreateMeshComponent());
-                        rider.SetVehicleState(vehicle, 0, (float) (rider.GetWorld()?.TimeSeconds ?? 0d));
+                        rider.SetVehicleState(vehicle, 0, entryTime);
+
+                        // AND THE SEAT ARRAY, which is the half the client reads when deciding
+                        // whether it is allowed to get out again - see UFortVehicleSeatComponent.
+                        if (!vehicle.SeatPawn(rider, 0, entryTime)) {
+                            Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - no seat data for " +
+                                              $"{vehicle.GetClass()?.GetFName()}, so nothing will be told it is " +
+                                              "occupied. Exiting and seat changes will not work on this vehicle; " +
+                                              "re-run Tools/VehicleSeats/gen_vehicle_seats.py for its Blueprint.");
+                        }
 
                         Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - {rider.GetFName()} boarded " +
                                           $"{vehicle.GetFName()} ({vehicle.VehicleClassPath}) - seat 0, based on its " +
@@ -1754,24 +1922,26 @@ internal static class NativeRpcHandlers {
                 }
 
                 var entry = pickup.PrimaryPickupItemEntry;
-                if (entry == null) return;
+                if (entry?.ItemDefinition is not { } incoming) return;
 
-                // STACKED, not appended. This used to add a row unconditionally, so two boxes of
-                // light ammo became two slots of 30 instead of one of 60 - see FortItemStacks, which
-                // also builds the fresh entry this needs (the pickup's own copy carries the
-                // ReplicationId/Key it was given as a pickup, and reusing it would drag that state
-                // into a completely different fast array).
-                var leftOver = FortItemStacks.Give(inventory, entry, entry.Count);
-
-                // WHAT DID NOT FIT GOES BACK ON THE GROUND rather than vanishing. The real server
-                // refuses the pickup outright when the stack is full, which needs a rule about
-                // inventory capacity this server does not have yet; dropping the remainder is the
-                // same bargain harvesting already makes, and it keeps the items in the world.
-                if (leftOver > 0) {
-                    SpawnDroppedPickup(pc, new FFortItemEntry { ItemDefinition = entry.ItemDefinition }, leftOver);
-                    Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup - {leftOver} x " +
-                                      $"{entry.ItemDefinition?.GetFName()} did not fit in the stack and went " +
-                                      "back on the ground");
+                // NOTHING FITS AND NOTHING CAN BE TRADED FOR IT - only then does the pickup not
+                // happen. A full bar is not a refusal in Fortnite: walking over a gun with five
+                // slots used SWAPS it for whatever is in your hands, and the plain ServerHandlePickup
+                // above is what the client sends for that case (it re-sent it 40 times in one live
+                // session while the player stood on an item this server kept declining).
+                // FortItemStacks.SwapCandidate has which item leaves and why.
+                //
+                // ASKED AS A DRY RUN because the grant itself now waits for the animation, and this
+                // question cannot: there is no way to un-fly an item, so a refusal has to be decided
+                // while the item is still on the ground. Same walk, same data, no mutation. Returning
+                // here leaves the world actor exactly as it was, with no animation and no
+                // destroy-and-respawn flicker.
+                if (FortItemStacks.Give(inventory, entry, entry.Count, dryRun: true) >= entry.Count
+                    && FortItemStacks.SwapCandidate(inventory, pawn, incoming) == null) {
+                    Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup - {pc.GetFName()} has no room for " +
+                                      $"{entry.ItemDefinition?.GetFName()} and nothing it can trade for it, " +
+                                      "leaving it on the ground");
+                    return;
                 }
 
                 // Handle 49 - what drives the client's pickup feedback. It is NOT what removes the
@@ -1789,81 +1959,107 @@ internal static class NativeRpcHandlers {
                 // ordering is a coincidence of doing both in one RPC: anything that ever sets a
                 // pickup property WITHOUT destroying it in the same breath needs exactly this call,
                 // and finding that out the hard way would cost another silent-failure hunt.
-                pickup.FlushNetDormancy();
-                pickup.bPickedUp = true;
-                pickup.Destroy();
+                // THE FLIGHT, instead of destroying it where it stands. The client asked for one -
+                // InStartDirection is its own parameter, decoded above and until now discarded - and
+                // an actor removed on this line has nothing left to animate. See
+                // FortPickupFlightSystem, which sets the flight properties, wakes the actor so they
+                // actually go out, runs the grant below when the arc lands, and destroys it.
+                //
+                // InFlyTime is deliberately NOT passed on. It was, and the pace the client asks for
+                // is Save The World's; FortPickupFlightSystem.FlightSeconds has the 0.40s that
+                // replaced it and where that number comes from. Logged so the client's own request
+                // stays visible rather than silently dropped.
+                var requestedFlyTime = values[1] as float? ?? 0f;
 
-                Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup guid={entry.ItemGuid} count={entry.Count} -> " +
-                                  $"inventory now {inventory.Inventory.Count} item(s), " +
-                                  $"ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
+                FortPickupFlightSystem.Begin(
+                    pickup, pawn,
+                    values[2] as FVector ?? new FVector(),
+                    values[3] as bool? ?? false,
+                    (float) (pawn.GetWorld()?.TimeSeconds ?? 0d),
+                    () => {
+                        // THE SWAP, decided here rather than carried from above. 0.40s is long
+                        // enough to drop something, so the question "is there still no room?" is
+                        // asked again at the moment the item arrives; the alternative is trading
+                        // away a weapon to fill a slot that has since emptied.
+                        var swappedOut = FortItemStacks.Give(inventory, entry, entry.Count, dryRun: true) >= entry.Count
+                            ? FortItemStacks.SwapCandidate(inventory, pawn, incoming)
+                            : null;
+
+                        if (swappedOut != null) {
+                            // In that order: OUT of the inventory, out of the player's HANDS, then
+                            // back into the world. The weapon actor is keyed to its inventory row by
+                            // ItemEntryGuid and that row is about to be gone, which is the same
+                            // reason ServerAttemptInventoryDrop unequips - a weapon left in the
+                            // hands of a pawn whose inventory no longer lists it is a gun that
+                            // cannot be dropped, fired or replaced.
+                            inventory.Inventory.Remove(swappedOut);
+                            if (pawn.CurrentWeapon?.ItemEntryGuid == swappedOut.ItemGuid) pawn.UnequipCurrentWeapon();
+                            SpawnDroppedPickup(pc, swappedOut, swappedOut.Count);
+
+                            Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup swapped out " +
+                                              $"{swappedOut.ItemDefinition?.GetFName()} x{swappedOut.Count} " +
+                                              $"for {incoming.GetFName()}");
+                        }
+
+                        // STACKED, not appended. This used to add a row unconditionally, so two
+                        // boxes of light ammo became two slots of 30 instead of one of 60 - see
+                        // FortItemStacks, which also builds the fresh entry this needs (the pickup's
+                        // own copy carries the ReplicationId/Key it was given as a pickup, and
+                        // reusing it would drag that state into a completely different fast array).
+                        //
+                        // RUN AGAIN FOR REAL rather than trusting the dry run above, for the same
+                        // reason: the honest answer is whatever fits at the moment the item arrives.
+                        var known = inventory.Inventory.Items.Select(item => item.ItemGuid).ToHashSet();
+                        var leftOver = FortItemStacks.Give(inventory, entry, entry.Count);
+
+                        // A SWAP PUTS THE NEW ITEM IN YOUR HANDS. The player was holding the item
+                        // that just left, so without this they are left holding nothing at all - the
+                        // client has no reason to send ServerExecuteInventoryItem, since from its
+                        // point of view it never changed slot. PR3.0 does the same thing by calling
+                        // ClientEquipItem, and gates it the same way: only when the swapped-out item
+                        // was the one actually equipped.
+                        if (swappedOut != null && pawn.CurrentWeapon == null
+                            && inventory.Inventory.Items.FirstOrDefault(item => !known.Contains(item.ItemGuid)) is { } equipped) {
+                            pawn.EquipInventoryItem(equipped);
+                        }
+
+                        // A PARTIAL take puts the rest back on the ground rather than vanishing -
+                        // the same bargain harvesting already makes, and it keeps the items in the
+                        // world. This now covers the case the dry run cannot: room that was there
+                        // when the item set off and is gone by the time it lands.
+                        if (leftOver > 0) {
+                            SpawnDroppedPickup(pc, new FFortItemEntry { ItemDefinition = entry.ItemDefinition }, leftOver);
+                            Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup - {leftOver} x " +
+                                              $"{entry.ItemDefinition?.GetFName()} did not fit in the stack and went " +
+                                              "back on the ground");
+                        }
+
+                        Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup landed guid={entry.ItemGuid} " +
+                                          $"count={entry.Count} -> inventory now {inventory.Inventory.Count} item(s), " +
+                                          $"ArrayReplicationKey={inventory.Inventory.ArrayReplicationKey}");
+                    });
+
+                Console.WriteLine($"NativeRpcHandlers: ServerHandlePickup {entry.ItemDefinition?.GetFName()} x{entry.Count} " +
+                                  $"flying to {pc.GetFName()} for {pickup.FlyTime:0.00}s " +
+                                  $"(client asked for {requestedFlyTime:0.00}s)");
             }
         ),
 
-        ["ServerMoveNoBase"] = new FRpcDef(
-            "ServerMoveNoBase",
-            new[] {
-                new FRpcParamDef("TimeStamp", ERpcParamKind.Float),
-                new FRpcParamDef("InAccel", ERpcParamKind.VectorQuantize10),
-                new FRpcParamDef("ClientLoc", ERpcParamKind.VectorQuantize100),
-                new FRpcParamDef("CompressedMoveFlags", ERpcParamKind.Byte),
-                new FRpcParamDef("ClientRoll", ERpcParamKind.Byte),
-                new FRpcParamDef("View", ERpcParamKind.UInt32),
-                new FRpcParamDef("ClientMovementMode", ERpcParamKind.Byte)
-            },
-            (actor, values) => {
-                if (values[0] is float timeStamp && actor is APawn movedPawn) movedPawn.MarkGoodMove(timeStamp);
-                if (values[2] is not FVector clientLoc) return;
+        // ACharacter's move RPCs. All six share one handler, because they are the same message at
+        // three levels of detail: the NoBase variants imply a null base, the Dual variants carry an
+        // older move ahead of the real one, and ServerMoveOld is a resend with no position at all.
+        // The handler reads parameters BY NAME, so a variant that lacks one simply has nothing to
+        // apply rather than needing its own code path.
+        ["ServerMove"] = Move("ServerMove", ServerMoveParams),
+        ["ServerMoveNoBase"] = Move("ServerMoveNoBase", ServerMoveNoBaseParams),
+        ["ServerMoveOld"] = Move("ServerMoveOld", ServerMoveOldParams),
+        ["ServerMoveDual"] = Move("ServerMoveDual", ServerMoveDualParams),
+        ["ServerMoveDualNoBase"] = Move("ServerMoveDualNoBase", ServerMoveDualNoBaseParams),
 
-                actor.SetActorLocation(clientLoc);
-
-                // The ground the client is standing on, when it says it is standing on something.
-                // See TerrainGroundTruth: this is the only source of true ground heights this server
-                // has, and it costs one dictionary probe per move.
-                TerrainGroundTruth.Record(clientLoc, values[6] as byte? ?? 0);
-
-                if (actor is APawn trackedPawn && actor.GetWorld()?.NetDriver is { } driver) {
-                    trackedPawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
-                    trackedPawn.TrackMoveFlags(values[3] as byte? ?? 0, values[6] as byte? ?? 0);
-                    // Fall damage. Only this move variant carries a location AND a movement mode -
-                    // the based ServerMove* variants below are decoded as a timestamp-only prefix -
-                    // and a falling character is by definition not based on anything, so this is
-                    // where a fall is visible.
-                    trackedPawn.TrackFallDamage(clientLoc, values[6] as byte? ?? 0);
-                }
-
-                var view = values[5] is uint v ? FRotator.FromPackedView(v) : null;
-                if (view != null && actor is APawn viewPawn) {
-                    viewPawn.LastClientViewRotation = view;
-
-                    // And onto the ACTOR, so ReplicatedMovement carries it and other clients see this
-                    // player facing the way they are actually facing. Yaw only: a character's capsule
-                    // never pitches or rolls, and the view's pitch belongs to the control rotation,
-                    // which is a separate thing the owning client keeps for itself.
-                    viewPawn.SetActorRotation(new FRotator { Yaw = view.Yaw });
-                }
-                if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: ServerMoveNoBase on {actor.GetFName()} TimeStamp={values[0]} ClientLoc={clientLoc} CompressedMoveFlags={values[3]} ClientRoll={values[4]} View={view} ClientMovementMode={values[6]}");
-            }
-        ),
-
-        // ACharacter's other move RPCs. Only a PREFIX of each parameter list is declared here, which
-        // is deliberate and safe: UActorChannel.ReadContentBlockFields always resyncs to the field's
-        // own declared NumPayloadBits afterwards, so a handler that stops reading early cannot
-        // desync the bunch. That is what makes ServerMove and the two based ServerMoveDual variants
-        // decodable at all - their tails carry a UPrimitiveComponent* and an FName, neither of which
-        // FRpcReader can read, but both sit AFTER everything we actually need.
-        //
-        // What we need is the move's timestamp, because that is the only thing ClientAckGoodMove
-        // carries and one ack frees every client saved move up to it.
-        ["ServerMove"] = MovePrefix("ServerMove", ServerMoveTimeStampPrefix),
-        ["ServerMoveOld"] = MovePrefix("ServerMoveOld", ServerMoveTimeStampPrefix),
-
-        // The Dual variants pack two moves per call: (TimeStamp0, InAccel0, PendingFlags, View0)
-        // then the real, newer move starting with its own TimeStamp. Acking the older TimeStamp0
-        // would leave the newer move unacknowledged, so decode through to the fifth parameter.
-        // MarkGoodMove takes the max, so reading both is harmless either way.
-        ["ServerMoveDual"] = MovePrefix("ServerMoveDual", ServerMoveDualTimeStampPrefix),
-        ["ServerMoveDualNoBase"] = MovePrefix("ServerMoveDualNoBase", ServerMoveDualTimeStampPrefix),
-        ["ServerMoveDualHybridRootMotion"] = MovePrefix("ServerMoveDualHybridRootMotion", ServerMoveDualTimeStampPrefix),
+        // The HybridRootMotion variant has the same signature as ServerMoveDual (Character.h:275) -
+        // it differs only in what the server does with it, which is root-motion bookkeeping this
+        // project does not have.
+        ["ServerMoveDualHybridRootMotion"] = Move("ServerMoveDualHybridRootMotion", ServerMoveDualParams),
 
         // AFortPlayerPawn::ServerPlayUnableToPerformActionMontage() - the "you can't do that" animation
         // (no room to build, nothing to interact with). It exists so OTHER clients see the gesture;
@@ -1916,16 +2112,158 @@ internal static class NativeRpcHandlers {
         )
     };
 
-    /// <summary>A move RPC we decode only far enough to learn which timestamps it acknowledges.</summary>
-    private static FRpcDef MovePrefix(string name, FRpcParamDef[] paramDefs) => new(
+    /// <summary>
+    ///     Forces every RPC table to build, at startup, so a mis-ordered declaration fails HERE
+    ///     rather than on the first bunch of a live match.
+    ///
+    ///     WHY THIS IS A REAL HAZARD AND NOT A STYLE POINT. C# runs static field initializers in
+    ///     TEXTUAL order, so a shared FRpcParamDef[] declared BELOW a dictionary that references it
+    ///     is simply null when that dictionary is built. FRpcDef's constructor catches it - and its
+    ///     message already says "most likely declared after the dictionary that references it",
+    ///     because this has happened before - but a type initializer only runs on FIRST USE, and the
+    ///     first use is a client bunch arriving mid-match. The whole class then throws forever:
+    ///
+    ///         ReadContentBlockFields threw ... TypeInitializationException ... FRpcDef
+    ///         'ServerMoveNoBase' was given a null parameter list
+    ///
+    ///     Every RPC in the game stops working, from one declaration being in the wrong place. This
+    ///     turns that into a startup failure with the same message and no match in progress. It is
+    ///     called next to VerifyLifetimeConditions for the same reason that one exists.
+    /// </summary>
+    public static void VerifyRpcTables() {
+        var tables = typeof(NativeRpcHandlers)
+            .GetFields(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            .Where(field => field.FieldType == typeof(Dictionary<string, FRpcDef>))
+            .ToArray();
+
+        var total = 0;
+        var missingParams = new List<string>();
+
+        foreach (var table in tables) {
+            var rpcs = (Dictionary<string, FRpcDef>) table.GetValue(null)!;
+            total += rpcs.Count;
+
+            // The constructor already refuses a null list, so reaching here means every entry built.
+            // What is still worth saying is when a table came out EMPTY, which is the other shape
+            // the same ordering mistake takes.
+            if (rpcs.Count == 0) missingParams.Add(table.Name);
+        }
+
+        Console.WriteLine(missingParams.Count == 0
+            ? $"NativeRpcHandlers: all {tables.Length} RPC tables built, {total} handlers."
+            : $"NativeRpcHandlers: {string.Join(", ", missingParams)} built EMPTY - check declaration order.");
+    }
+
+    /// <summary>
+    ///     Every ACharacter move RPC, handled once.
+    ///
+    ///     PARAMETERS ARE LOOKED UP BY NAME rather than by index, which is what lets six signatures
+    ///     of three different lengths share this. A variant that does not carry ClientLoc (the
+    ///     "old move" resend) simply has none to apply.
+    ///
+    ///     THE ONE RULE THAT IS NOT OBVIOUS: `ClientLoc` IS RELATIVE WHEN THE MOVE IS BASED.
+    ///     CallServerMove (CharacterMovementComponent.cpp:8120) picks
+    ///     `UseRelativeLocation(ClientMovementBase) ? SavedRelativeLocation : SavedLocation`, so the
+    ///     vector in a based move is an offset inside the base's own space - a couple of hundred
+    ///     units, near zero. Writing that into SetActorLocation would teleport the player to the
+    ///     world origin, which is why a based move's position is READ AND REPORTED here but not
+    ///     applied: this server does not track the base component's world transform, so it cannot
+    ///     turn the offset back into a world position yet. Doing that properly needs the vehicle's
+    ///     own replicated transform, and is its own change.
+    /// </summary>
+    private static FRpcDef Move(string name, FRpcParamDef[] paramDefs) => new(
         name,
         paramDefs,
         (actor, values) => {
             if (actor is not APawn pawn) return;
 
+            object? Param(string param) {
+                for (var i = 0; i < paramDefs.Length; i++) {
+                    if (paramDefs[i].Name == param) return values[i];
+                }
+
+                return null;
+            }
+
+            // Every timestamp in the call - the Dual variants carry two, and MarkGoodMove takes the
+            // max, so acking both is right and free.
             foreach (var value in values) if (value is float timeStamp) pawn.MarkGoodMove(timeStamp);
 
-            if (NetDebugLog.VerboseEnabled) Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()} PendingAckGoodMoveTimeStamp={pawn.PendingAckGoodMoveTimeStamp}");
+            var movementMode = Param("ClientMovementMode") as byte?;
+            var movementBase = Param("ClientMovementBase") as UObject;
+            // THE VARIANT DECIDES THIS, NOT THE RESOLVED OBJECT. CallServerMove picks the based
+            // variant on `UseRelativeLocation(ClientMovementBase)`, which is
+            // `IsDynamicBase(base)` = `base && base->Mobility == Movable` (Character.h:126) - null
+            // safe, so a based variant on the wire PROVES the client had a real movable base and
+            // therefore sent a RELATIVE location.
+            //
+            // Testing `movementBase != null` instead would have been wrong exactly when it matters:
+            // FRpcReader resolves an object this server never gave a NetGUID to as null, and the
+            // live log shows precisely that (`ServerMoveDual ... base=none`). The position would then
+            // have been treated as absolute and the pawn teleported to a few hundred units from the
+            // world origin.
+            var isBased = paramDefs.Any(def => def.Name == "ClientMovementBase");
+
+            pawn.ReportMoveAfterExit(name, movementMode, movementBase?.GetFName().ToString());
+
+            // The flags parameter is called CompressedMoveFlags on the single moves and NewFlags on
+            // the duals - the same byte either way.
+            if (movementMode is { } mode) {
+                pawn.TrackMoveFlags((Param("CompressedMoveFlags") ?? Param("NewFlags")) as byte? ?? 0, mode);
+            }
+
+            if (Param("View") is uint packedView) {
+                var view = FRotator.FromPackedView(packedView);
+                pawn.LastClientViewRotation = view;
+
+                // And onto the ACTOR, so ReplicatedMovement carries it and other clients see this
+                // player facing the way they are actually facing. Yaw only: a character's capsule
+                // never pitches or rolls, and the view's pitch belongs to the control rotation,
+                // which is a separate thing the owning client keeps for itself.
+                pawn.SetActorRotation(new FRotator { Yaw = view.Yaw });
+            }
+
+            if (Param("ClientLoc") is not FVector clientLoc) return;
+
+            if (isBased) {
+                // KEPT, even though it is not a world position: it is the only thing a movement
+                // correction can express a position with, because the client can turn it back into
+                // one and this server cannot. See UActorChannel.SendMovementCorrection.
+                pawn.LastClientRelativeLocation = clientLoc;
+
+                // See the method comment: this is an offset in the base's space, not a world
+                // position, and applying it would be far worse than leaving the position stale.
+                if (NetDebugLog.VerboseEnabled) {
+                    Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()} is BASED on " +
+                                      $"{movementBase?.GetFName().ToString() ?? "a component this server has no id for"} " +
+                                      $"- ClientLoc={clientLoc} is relative to it, so this server's idea of where " +
+                                      "the pawn is stays where it was.");
+                }
+
+                return;
+            }
+
+            actor.SetActorLocation(clientLoc);
+            pawn.LastUnbasedMoveTime = actor.GetWorld()?.TimeSeconds ?? 0f;
+
+            // The ground the client is standing on, when it says it is standing on something.
+            // See TerrainGroundTruth: this is the only source of true ground heights this server
+            // has, and it costs one dictionary probe per move. Only unbased moves, and that is a
+            // correctness point rather than an optimisation - a player standing on a vehicle is
+            // standing on a vehicle, and recording its deck as terrain would poison the bake this
+            // data exists to check.
+            TerrainGroundTruth.Record(clientLoc, movementMode ?? 0);
+
+            if (actor.GetWorld()?.NetDriver is { } driver) pawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
+
+            // Fall damage. A falling character is by definition not based on anything, so this is
+            // where a fall is visible.
+            if (movementMode is { } fallMode) pawn.TrackFallDamage(clientLoc, fallMode);
+
+            if (NetDebugLog.VerboseEnabled) {
+                Console.WriteLine($"NativeRpcHandlers: {name} on {actor.GetFName()} ClientLoc={clientLoc} " +
+                                  $"movementMode={movementMode} PendingAck={pawn.PendingAckGoodMoveTimeStamp}");
+            }
         }
     );
 
@@ -2008,6 +2346,15 @@ internal static class NativeRpcHandlers {
                 // here like any other shot - same grant at equip, same spec handle, same RPC. This
                 // is the one place that has to know the difference. See FortConsumableSystem.
                 FortConsumableSystem.TryUse(playerState, spec);
+
+                // A SHOT SPENDS A ROUND. Firing never did on this server - reloading worked, the
+                // magazine simply never went down - so a player could empty a 30-round clip
+                // indefinitely and the HUD counter never moved.
+                //
+                // This is the right hook because it is the SHOT, not the hit: it fires once per
+                // trigger pull, whereas ReportTargetData arrives once per pellet, and it still fires
+                // when the shot misses. AmmoCostPerFire comes from the same stat row as the damage.
+                SpendAmmoForShot(playerState, spec);
 
                 // Accept it. Real UE runs the ability's own CanActivate/cost/cooldown checks here and
                 // may answer ClientActivateAbilityFailed instead; this server has no ability
@@ -2258,7 +2605,7 @@ internal static class NativeRpcHandlers {
                     }
                 }
 
-                var damage = DamageFor(hit);
+                var damage = DamageFor(hit, actor as APlayerState);
                 var wasKilled = building.CurrentHitPoints <= damage;
                 BuildingStructuralSupportSystem.ApplyDamage(building, damage);
                 ReportDamagedBuilding(actor, building, wasKilled, IsWeakspotHit(hit));
@@ -2274,7 +2621,7 @@ internal static class NativeRpcHandlers {
             // the honest fix is a server-side trace, which needs collision geometry this project
             // does not have (only the baked terrain heightmap, see TerrainHeightMap).
             if (hit.Actor is APawn victimPawn) {
-                DamagePlayer(actor as APlayerState, victimPawn);
+                DamagePlayer(actor as APlayerState, victimPawn, hit);
                 continue;
             }
 
@@ -2293,10 +2640,53 @@ internal static class NativeRpcHandlers {
     ///     only the WEAK-SPOT DETECTION (`IsWeakspotHit`) is derived from the real PAK data; how much
     ///     extra damage/resources it's worth is a placeholder throughout this file.
     /// </summary>
-    private static int DamageFor(FHitResult hit) =>
-        IsWeakspotHit(hit) ? BuildingDamagePerHit * WeakspotDamageMultiplier : BuildingDamagePerHit;
+    private static int DamageFor(FHitResult hit, APlayerState? instigator = null) {
+        var weapon = instigator?.GetOwningPawn()?.CurrentWeapon?.WeaponData?.GetFName().ToString();
 
-    /// <summary>See DamageFor. Placeholder, like FellingBonusMultiplier/WeakspotBonusMultiplier.</summary>
+        if (FortWeaponStats.For(weapon) is not { } stats) {
+            if (weapon != null && _warnedUnknownWeapons.Add(weapon)) {
+                Console.WriteLine($"NativeRpcHandlers: no baked stats for '{weapon}' - structure damage falls " +
+                                  $"back to the flat {BuildingDamagePerHit}. Re-run " +
+                                  "Tools/WeaponStats/gen_weapon_stats.py if this weapon should be in the table.");
+            }
+
+            return IsWeakspotHit(hit) ? BuildingDamagePerHit * WeakspotDamageMultiplier : BuildingDamagePerHit;
+        }
+
+        var damage = stats.EnvironmentDamageAt(ShotDistance(hit));
+
+        // THE WEAK-SPOT MULTIPLIER IS THE WEAPON'S OWN, not this file's guess. DamageZone_Vulnerability
+        // is 10.0 on the pickaxe and 0 on every gun - and 0 means "this weapon has no vulnerability
+        // zone", not "no bonus", so it is only applied when it is actually set.
+        if (IsWeakspotHit(hit) && stats.Vulnerability > 0f) damage *= stats.Vulnerability;
+
+        return (int) MathF.Round(damage);
+    }
+
+    /// <summary>
+    ///     How far the shot travelled, for the damage falloff - the client's own trace start to the
+    ///     point it says it hit.
+    ///
+    ///     Taken from the hit rather than from the two actors' positions on purpose: the falloff is a
+    ///     property of the SHOT, and the server's idea of where either party is can lag (a player on
+    ///     a vehicle has no world position here at all - see the move handler). The client already
+    ///     reports both ends of the trace in the same struct, and they are consistent with each other
+    ///     by construction.
+    /// </summary>
+    private static float ShotDistance(FHitResult hit) {
+        var dx = hit.ImpactPoint.X - hit.TraceStart.X;
+        var dy = hit.ImpactPoint.Y - hit.TraceStart.Y;
+        var dz = hit.ImpactPoint.Z - hit.TraceStart.Z;
+        return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private static readonly HashSet<string> _warnedUnknownWeapons = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    ///     The fallback weak-spot multiplier, used only for a weapon the bake does not know. Still a
+    ///     placeholder - the real number is the row's own DamageZone_Vulnerability, which DamageFor
+    ///     now uses whenever it has one.
+    /// </summary>
     private const int WeakspotDamageMultiplier = 3;
 
     /// <summary>DESTRUCTIBLE_SCENERY=1 gates <see cref="DamageLevelActor"/> - see there for what it does and why it defaults off.</summary>
@@ -2462,7 +2852,7 @@ internal static class NativeRpcHandlers {
             SpawnWeakSpot(playerState, levelActor, hit);
         }
 
-        if (!levelActor.ApplyDamage(DamageFor(hit)) || !levelActor.MarkDestroyed()) return false;
+        if (!levelActor.ApplyDamage(DamageFor(hit, actor as APlayerState)) || !levelActor.MarkDestroyed()) return false;
 
         Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY marked '{hit.ActorPath}' destroyed " +
                           $"({levelActor.CurrentHitPoints}/{levelActor.MaxHitPoints} HP)");
@@ -2593,7 +2983,7 @@ internal static class NativeRpcHandlers {
     ///     which is what the elimination feed's icon is driven by. It is a coarse mapping - see
     ///     <see cref="DeathCauseFor"/> - because a precise one needs the weapon stat table.
     /// </summary>
-    private static void DamagePlayer(APlayerState? instigator, APawn victimPawn) {
+    private static void DamagePlayer(APlayerState? instigator, APawn victimPawn, FHitResult hit) {
         if (victimPawn.PlayerState is not { } victim) {
             Console.WriteLine($"NativeRpcHandlers: hit on {victimPawn.GetFName()}, which has no PlayerState - " +
                               "nothing to damage");
@@ -2608,9 +2998,87 @@ internal static class NativeRpcHandlers {
             return;
         }
 
-        FortDamageSystem.ApplyDamage(victim, FortDamageSystem.WeaponDamage,
-                                     DeathCauseFor(instigator?.GetOwningPawn()?.CurrentWeapon), instigator);
+        var weapon = instigator?.GetOwningPawn()?.CurrentWeapon;
+        var weaponName = weapon?.WeaponData?.GetFName().ToString();
+        var stats = FortWeaponStats.For(weaponName);
+
+        // THE BONE IS LOGGED ON EVERY PLAYER HIT, and not only when it looks like a head. The
+        // critical-zone rule below is the one assumption in this path (see IsCriticalHit), and the
+        // only way to check it is to see what a real client actually names when someone lands a
+        // headshot - so the value goes in the log whether or not it matched.
+        var bone = hit.BoneName?.ToString() ?? "(none)";
+        var critical = IsCriticalHit(hit);
+
+        if (stats == null) {
+            if (weaponName != null && _warnedUnknownWeapons.Add(weaponName)) {
+                Console.WriteLine($"NativeRpcHandlers: no baked stats for '{weaponName}' - player damage falls " +
+                                  $"back to the flat {FortDamageSystem.WeaponDamage}. Re-run " +
+                                  "Tools/WeaponStats/gen_weapon_stats.py if this weapon should be in the table.");
+            }
+
+            FortDamageSystem.ApplyDamage(victim, FortDamageSystem.WeaponDamage,
+                                         DeathCauseFor(weapon), instigator);
+            return;
+        }
+
+        var distance = ShotDistance(hit);
+        var damage = stats.DamageAt(distance);
+        if (critical) damage *= stats.Critical;
+
+        Console.WriteLine($"NativeRpcHandlers: {victim.GetFName()} hit by '{weaponName}' at {distance:F0}uu " +
+                          $"on bone '{bone}'{(critical ? " (CRITICAL)" : string.Empty)} - " +
+                          $"{damage:F1} damage (falloff {stats.DmgPB:g}@{stats.RngPB:g} -> " +
+                          $"{stats.DmgMax:g}@{stats.RngMax:g}, crit x{stats.Critical:g})");
+
+        FortDamageSystem.ApplyDamage(victim, damage, DeathCauseFor(weapon), instigator);
     }
+
+    /// <summary>
+    ///     Takes this shot's rounds out of the equipped weapon's magazine, if the activated ability
+    ///     is that weapon's fire ability.
+    ///
+    ///     THE SPEC HANDLE IS THE TEST, not the ability's name or class: `AFortWeapon` already keeps
+    ///     `GrantedAbilitySpecHandle` (wire handle 32) because the CLIENT needs it, and it is the
+    ///     only thing that distinguishes "the player fired" from any other ability they might
+    ///     activate - a reload, an emote, a consumable. Matching on it costs one comparison and
+    ///     cannot mistake one for another.
+    ///
+    ///     Runs out of ammo silently rather than refusing: the client has already played the shot it
+    ///     is predicting, and this server has no ClientActivateAbilityFailed path to answer with
+    ///     (see the activation handler). Clamping at zero at least keeps the count honest.
+    /// </summary>
+    private static void SpendAmmoForShot(APlayerState playerState, FGameplayAbilitySpec spec) {
+        if (playerState.GetOwningPawn()?.CurrentWeapon is not { } weapon) return;
+        if (weapon.GrantedAbilitySpecHandle != spec.Handle) return;
+
+        var weaponName = weapon.WeaponData?.GetFName().ToString();
+        var cost = FortWeaponStats.For(weaponName) is { } stats ? (int) MathF.Round(stats.AmmoPerFire) : 1;
+        if (cost <= 0) return;
+
+        var before = weapon.AmmoCount;
+        weapon.AmmoCount = Math.Max(0, weapon.AmmoCount - cost);
+
+        if (weapon.AmmoCount == before) return;
+
+        Console.WriteLine($"NativeRpcHandlers: {playerState.GetFName()} fired '{weaponName}' - " +
+                          $"ammo {before} -> {weapon.AmmoCount}");
+    }
+
+    /// <summary>
+    ///     Whether a hit landed on the CRITICAL damage zone - a headshot.
+    ///
+    ///     THE MULTIPLIER IS DERIVED, THE ZONE IS NOT. `DamageZone_Critical` comes straight from the
+    ///     weapon's stat row (2.0 on most guns, 1.0 on the pickaxe), so how much a headshot is worth
+    ///     is real data. WHICH bone counts as the head is the assumption: Fortnite's pawns use the
+    ///     UE mannequin skeleton, whose head bone is `head`, and the zone tables that would say so
+    ///     properly have not been read out of the paks.
+    ///
+    ///     Which is why DamagePlayer logs the bone name on EVERY hit, matched or not - one live
+    ///     headshot names the real bone, and if it is not `head` this rule is one string away from
+    ///     being right.
+    /// </summary>
+    private static bool IsCriticalHit(FHitResult hit) =>
+        hit.BoneName?.ToString().StartsWith("head", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     ///     What killed someone, for the elimination feed. Only the pickaxe is told apart with any

@@ -146,7 +146,76 @@ public enum ERepPropertyKind {
     ///     one for an empty array, which is what the three TArray members inside
     ///     AFortPickup::PrimaryPickupItemEntry need.
     /// </summary>
-    EmptyDynamicArray
+    EmptyDynamicArray,
+
+    /// <summary>
+    ///     An FVector_NetQuantizeNormal leaf - one handle, SerializeFixedVector&lt;1, 16&gt;: three
+    ///     16-bit fixed-point components over [-1, 1], with no bit-count header. RepLayout
+    ///     special-cases the struct by name (RepLayout.cpp:4464) so it never recurses into X/Y/Z.
+    ///
+    ///     Not one of the packed VectorQuantize kinds and not interchangeable with them - those
+    ///     write a length header and a variable width. `AFortPickup::PickupLocationData.StartDirection`
+    ///     is the one this project sends.
+    /// </summary>
+    VectorNormal,
+
+    /// <summary>
+    ///     A plain FVector leaf - ONE handle, three raw 32-bit floats.
+    ///
+    ///     One handle and not three: RepLayout.cpp:4444 special-cases a struct named `Vector` into
+    ///     ERepLayoutCmdType::PropertyVector before the recursion that would otherwise split it into
+    ///     X/Y/Z, exactly as it does for Rotator and the quantized vectors. Getting that wrong
+    ///     inside an array element would be invisible in the value and fatal in the numbering -
+    ///     every later element's handles would be off by two per vector.
+    ///
+    ///     Distinct from <see cref="VectorQuantize10"/>/<see cref="VectorQuantize100"/>, which are
+    ///     the PACKED encodings; this is the uncompressed one an ordinary FVector member gets.
+    /// </summary>
+    Vector,
+
+    /// <summary>
+    ///     An FText leaf - ONE handle, and no value serializer here.
+    ///
+    ///     UTextProperty is not one of the types AddPropertyCmd names (RepLayout.cpp:4424-4521), so
+    ///     it falls through to the generic `ERepLayoutCmdType::Property` and travels as
+    ///     UProperty::NetSerializeItem, i.e. FText's own history-based archive format. That format
+    ///     is versioned, variable-shape (an FText can be a literal, a namespace/key lookup, or one
+    ///     of a dozen generators) and nothing here has ever produced or verified a byte of it.
+    ///
+    ///     So this kind exists to RESERVE the handle, never to fill it. That is enough for every
+    ///     use so far: an FText inside a replicated struct is configured by the Blueprint, the
+    ///     client already holds it, and a server that never names it leaves it alone. See
+    ///     <see cref="StructArray"/> for why leaving a member alone is a real option rather than a
+    ///     gap.
+    /// </summary>
+    Text,
+
+    /// <summary>
+    ///     A TArray of non-atomic STRUCTS, sent as a partial update: the array's own handle, the
+    ///     element count, and then only the members this server actually models, addressed by
+    ///     element.
+    ///
+    ///     THE PARTIAL UPDATE IS THE POINT, and it is what makes replicating a configured array
+    ///     possible at all. `PrepReceivedArray` (RepLayout.cpp:2682) resizes the client's array to
+    ///     the count on the wire and does nothing else - and `FScriptArrayHelper::Resize` to the
+    ///     size it already has is a no-op. So sending the count the client already has leaves every
+    ///     element's data exactly as the Blueprint configured it, and the handles that follow
+    ///     overwrite only the members named. A server does not have to know how to serialize an
+    ///     FText to change who is sitting in a seat.
+    ///
+    ///     WIRE FORMAT, from SendProperties_r's DynamicArray branch (RepLayout.cpp:2020):
+    ///     [array handle(packed)][ArrayNum(raw uint16)] then, in ASCENDING handle order,
+    ///     [handle(packed)][value] for each member sent, then [0(packed)]. The handle for member j
+    ///     (1-based, in <see cref="FRepPropertyDef.Children"/> order) of element i is
+    ///     `i * Children.Length + j` - FRepHandleIterator::NextHandle (RepLayout.cpp:1568) inverts
+    ///     exactly that division, and the receive side counts through the same space by walking
+    ///     every element's cmds in one continuous handle counter.
+    ///
+    ///     Which is why <see cref="FRepPropertyDef.Children"/> has to list ALL of the struct's
+    ///     replicated members, including the ones with no getter: they are what makes the divisor
+    ///     right. A missing child does not lose a member, it corrupts every element after the first.
+    /// </summary>
+    StructArray
 }
 
 /// <summary>
@@ -173,6 +242,12 @@ public sealed class FRepPropertyDef {
     /// <summary>Elements for <see cref="ERepPropertyKind.ObjectRefArray"/>.</summary>
     public Func<object, IReadOnlyList<UObject>>? GetObjectArrayValue { get; init; }
 
+    /// <summary>
+    ///     Elements for <see cref="ERepPropertyKind.StructArray"/> - each one is then read through
+    ///     <see cref="Children"/>, so the element type is whatever those children's getters expect.
+    /// </summary>
+    public Func<object, IReadOnlyList<object>>? GetStructArrayValue { get; init; }
+
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Name"/>.</summary>
     public Func<object, FName>? GetNameValue { get; init; }
 
@@ -191,7 +266,7 @@ public sealed class FRepPropertyDef {
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Float"/>.</summary>
     public Func<object, float>? GetFloatValue { get; init; }
 
-    /// <summary>Only meaningful for <see cref="ERepPropertyKind.VectorQuantize10"/>.</summary>
+    /// <summary>Only meaningful for <see cref="ERepPropertyKind.VectorQuantize10"/>, <see cref="ERepPropertyKind.VectorQuantize100"/> and <see cref="ERepPropertyKind.Vector"/>.</summary>
     public Func<object, FVector>? GetVectorValue { get; init; }
 
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Rotator"/>.</summary>
@@ -200,6 +275,43 @@ public sealed class FRepPropertyDef {
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ByteEnum"/> - the enum's highest raw value (e.g. ENetRole.ROLE_MAX=4), matching UByteProperty::NetSerializeItem's CeilLogTwo(Enum-&gt;GetMaxEnumValue()).</summary>
     public int EnumMaxValue { get; init; }
 
-    /// <summary>Only meaningful for <see cref="ERepPropertyKind.StructRecurse"/>, in the struct's own offset order.</summary>
+    /// <summary>
+    ///     For <see cref="ERepPropertyKind.StructRecurse"/> and <see cref="ERepPropertyKind.StructArray"/>,
+    ///     in the struct's own offset order (name as tie-break, RepSkip members omitted) - the order
+    ///     FCompareUFieldOffsets sorts by in InitFromProperty_r.
+    /// </summary>
     public FRepPropertyDef[]? Children { get; init; }
+
+    /// <summary>
+    ///     Whether this server has a REAL value for this leaf, read off the instance - which is the
+    ///     rule that decides what a <see cref="ERepPropertyKind.StructArray"/> element puts on the
+    ///     wire and what it leaves exactly as the client configured it.
+    ///
+    ///     NOT "can this Kind be written". <see cref="ERepPropertyKind.EmptyDynamicArray"/> can
+    ///     always be written - it is a constant - and it is FALSE here anyway, because at top level
+    ///     it means "reserve this handle, this project cannot produce the real contents" and inside
+    ///     an array element writing it would send an EMPTY array over data the client already holds
+    ///     correctly. FAthenaCarPlayerSlot::ExitSockets is the case: the first version of this
+    ///     property said true, which would have blanked every seat's exit sockets - the exact
+    ///     destruction the partial-update design exists to avoid.
+    /// </summary>
+    public bool IsModelled => Kind switch {
+        ERepPropertyKind.Bool or ERepPropertyKind.ByteEnum => GetByteValue != null,
+        ERepPropertyKind.Int32 or ERepPropertyKind.Int16 => GetIntValue != null,
+        ERepPropertyKind.Float or ERepPropertyKind.QuantizedBuildingAttribute => GetFloatValue != null,
+        ERepPropertyKind.String => GetStringValue != null,
+        ERepPropertyKind.Name => GetNameValue != null,
+        ERepPropertyKind.NetId => GetNetIdValue != null,
+        ERepPropertyKind.ObjectRef => GetObjectValue != null,
+        ERepPropertyKind.ObjectRefArray => GetObjectArrayValue != null,
+        ERepPropertyKind.StructArray => GetStructArrayValue != null,
+        ERepPropertyKind.Rotator => GetRotatorValue != null,
+        ERepPropertyKind.RepMovement => GetRepMovementValue != null,
+        ERepPropertyKind.Vector or ERepPropertyKind.VectorQuantize10 or ERepPropertyKind.VectorQuantize100
+            or ERepPropertyKind.VectorNormal => GetVectorValue != null,
+
+        // Everything else is unmodelled by construction: EmptyDynamicArray for the reason above,
+        // and StructAtomic/Text/StructRecurse have no value writer at all - see their own remarks.
+        _ => false
+    };
 }

@@ -27,6 +27,7 @@ public static class FRpcReader {
                 ERpcParamKind.ObjectPath => ReadObjectPath(bunch),
                 ERpcParamKind.ObjectOrPath => ReadObjectOrPath(bunch),
                 ERpcParamKind.AssetPath => ReadAssetPath(bunch),
+                ERpcParamKind.Name => ReadName(bunch),
                 ERpcParamKind.Float => bunch.ReadFloat(),
                 ERpcParamKind.Vector => FVector.NetSerializeRead(bunch),
                 ERpcParamKind.VectorQuantize => FVector.NetSerializeReadQuantized(bunch, 1, 20),
@@ -58,6 +59,13 @@ public static class FRpcReader {
     ///     that in the stream. UPackageMapClient.ReadObjectRef handles both shapes.
     /// </summary>
     private static UObject? ReadObject(FArchive bunch) => UPackageMapClient.ReadObjectRef(bunch, out _);
+
+    /// <summary>An FName parameter - see <see cref="ERpcParamKind.Name"/>.</summary>
+    private static object? ReadName(FArchive bunch) {
+        FName? name = null;
+        UPackageMap.StaticSerializeName(bunch, ref name);
+        return name?.ToString();
+    }
 
     /// <summary>
     ///     See <see cref="ERpcParamKind.ObjectOrPath"/> - the resolved object when the client named one

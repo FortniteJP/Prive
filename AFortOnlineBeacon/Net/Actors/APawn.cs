@@ -731,5 +731,197 @@ public class APawn : AActor {
     /// <summary>Records a client move timestamp as accepted. Newest wins - an ack is cumulative.</summary>
     public void MarkGoodMove(float timeStamp) {
         if (timeStamp > PendingAckGoodMoveTimeStamp) PendingAckGoodMoveTimeStamp = timeStamp;
+        if (timeStamp > LastClientMoveTimeStamp) LastClientMoveTimeStamp = timeStamp;
+    }
+
+    /// <summary>
+    ///     The newest move timestamp this client has sent, NEVER cleared - unlike
+    ///     <see cref="PendingAckGoodMoveTimeStamp" />, which is zeroed the moment it is acked.
+    ///
+    ///     A correction needs this rather than the pending one, and the difference is the whole
+    ///     difference between a correction that works and one that is silently dropped:
+    ///     ClientAdjustPosition_Implementation begins with `ClientData->GetSavedMoveIndex(TimeStamp)`
+    ///     and RETURNS if that finds nothing (CharacterMovementComponent.cpp:9165). A stale or zero
+    ///     timestamp names no saved move, so the client discards the whole correction and logs it at
+    ///     Log verbosity, which nothing prints.
+    /// </summary>
+    public float LastClientMoveTimeStamp { get; private set; }
+
+    /// <summary>
+    ///     The last position this client reported RELATIVE to its movement base, or null if it has
+    ///     not sent a based move. See NativeRpcHandlers' move handler for why a based move's
+    ///     ClientLoc is relative and cannot be used as a world position.
+    /// </summary>
+    public FVector? LastClientRelativeLocation { get; set; }
+
+    /// <summary>
+    ///     When an UNBASED client move last gave this pawn a real world position, in world seconds.
+    ///     Negative infinity until one does.
+    ///
+    ///     This is the only honest measure of whether <see cref="AActor.GetActorLocation" /> means
+    ///     anything for a player: a based move carries no world position at all, so the moment
+    ///     someone stands on a vehicle this stops advancing and the stored location starts aging.
+    /// </summary>
+    public float LastUnbasedMoveTime { get; set; } = float.NegativeInfinity;
+
+    /// <summary>
+    ///     How closely a camera sample and the pawn's own position must agree in TIME before the gap
+    ///     between them is worth calling a boom length. A tenth of a second is about four units of
+    ///     drift per metre-per-second of player speed - so at a sprint, tens of units rather than
+    ///     hundreds. One second, which this used to be, allows more drift than the boom itself.
+    /// </summary>
+    public const float BoomSampleSkewSeconds = 0.15f;
+
+    /// <summary>
+    ///     How far this client's camera actually sits from its pawn, MEASURED while both were known
+    ///     good - the length of the third-person boom, per player and recent.
+    ///
+    ///     Exists so a movement correction can put the player where the PLAYER is rather than where
+    ///     their camera is. The camera is the only world-space position this server still receives
+    ///     during a ride (see UActorChannel.SendMovementCorrection), and it hangs a boom's length
+    ///     behind and above; walking back along the camera's own forward vector by this distance
+    ///     lands on the pawn.
+    ///
+    ///     WHY A MEASUREMENT AND NOT A CONSTANT. UE pulls the camera IN when it is obstructed, so
+    ///     the boom is not a fixed number - it is whatever the client last used. Guessing high in a
+    ///     tight space would place the player past themselves and into whatever is in front of them,
+    ///     and ClientAdjustPosition teleports without a collision sweep. A measured value cannot
+    ///     overshoot, because the client's own camera collision has already swept the segment
+    ///     between the pawn and the camera: every point on it is clear.
+    /// </summary>
+    public float? LastObservedCameraBoom { get; private set; }
+
+    private float _boomObservedAt = float.NegativeInfinity;
+
+    /// <summary>How long a boom measurement stands before it is replaced by a fresh one outright.</summary>
+    private const float BoomWindowSeconds = 5f;
+
+    /// <summary>
+    ///     Records one camera-to-pawn distance, keeping the SMALLEST seen recently rather than the
+    ///     latest.
+    ///
+    ///     WHY THE MINIMUM. The two ends are not sampled at the same instant - the camera arrives in
+    ///     its own RPC and the pawn's position in a move - so any skew between them ADDS to the
+    ///     distance, never subtracts: a player running at 410 uu/s puts 410 units of drift into a
+    ///     one-second gap. That is not theory, it is what the first live run measured - a 552uu
+    ///     "boom" where the real one is about 254 - and it made the correction overshoot past the
+    ///     player into whatever was in front of them, which is how someone lands unable to move.
+    ///
+    ///     Error in this measurement is therefore one-directional, so the minimum is the estimate
+    ///     closest to the truth AND the one that fails safely: too short lands between the player
+    ///     and their camera, which the camera's own collision sweep has already proven clear. Too
+    ///     long lands inside the map.
+    ///
+    ///     The window exists so a genuinely longer boom can be adopted again - a camera that pulled
+    ///     in against a wall and then swung back out would otherwise hold the estimate down forever.
+    /// </summary>
+    public void ObserveCameraBoom(float distance, float now) {
+        if (LastObservedCameraBoom is not { } existing
+            || now - _boomObservedAt > BoomWindowSeconds
+            || distance < existing) {
+            LastObservedCameraBoom = distance;
+            _boomObservedAt = now;
+        }
+    }
+
+    /// <summary>
+    ///     The packed movement mode the server wants this client to be in, or null when it has no
+    ///     opinion - which is almost always. Consumed once by UActorChannel.SendMovementCorrection.
+    ///
+    ///     THIS IS THE ONLY WAY TO TELL AN AUTONOMOUS PROXY WHAT MOVEMENT MODE IT IS IN.
+    ///     ReplicatedMovementMode is COND_SimulatedOnly, so it never reaches the player who owns the
+    ///     pawn; the owning client runs its own movement and only ever defers to the server through
+    ///     a correction, where ClientAdjustPosition_Implementation does exactly one thing with this
+    ///     byte - `ApplyNetworkMovementMode(ServerMovementMode)`, under the comment "Trust the
+    ///     server's movement mode" (CharacterMovementComponent.cpp:9198).
+    /// </summary>
+    public byte? PendingMovementModeCorrection { get; private set; }
+
+
+    /// <summary>
+    ///     EMovementMode::MOVE_Walking, packed. UCharacterMovementComponent::PackNetworkMovementMode
+    ///     (CharacterMovementComponent.cpp:1148) is `MovementMode | (groundBit &lt;&lt; 3)` for a
+    ///     non-custom mode, and the ground bit is 0 for Walking - so plain 1. A CUSTOM mode is
+    ///     `CustomMovementMode + 16` instead, which is why Driving arrives as 17 and why the two
+    ///     encodings can never collide (a non-custom mode maxes out at 15).
+    /// </summary>
+    public const byte PackedMovementModeWalking = 1;
+
+    /// <summary>
+    ///     Asks for a movement-mode correction on the next update - see
+    ///     <see cref="PendingMovementModeCorrection" />.
+    /// </summary>
+    public void RequestMovementModeCorrection(byte packedMode) => PendingMovementModeCorrection = packedMode;
+
+    /// <summary>Consumes the pending correction, so one request sends exactly one correction.</summary>
+    public byte? TakeMovementModeCorrection() {
+        var mode = PendingMovementModeCorrection;
+        PendingMovementModeCorrection = null;
+        return mode;
+    }
+
+    private int _exitReportMovesLeft;
+
+    /// <summary>
+    ///     Start reporting the next few client moves in detail, because the player has just left a
+    ///     vehicle and cannot move afterwards.
+    ///
+    ///     WHAT THIS IS FOR, precisely. This server never corrects a client's position and never
+    ///     refuses a move - there is no ClientAdjustPosition here and TrackMovementSpeed only logs -
+    ///     so a player who cannot move is being stopped by their OWN client's state, and there are
+    ///     four candidates that need different fixes. The next few moves tell them apart with no
+    ///     guessing:
+    ///
+    ///       no moves at all         -> the client is blocked before movement even runs: a gameplay
+    ///                                  effect or ability from boarding that nothing ever removed
+    ///                                  (GE_AthenaInVehicle_C is the suspect - see vehicle-wire-flow).
+    ///       only based ServerMove   -> the client still thinks it is standing on the vehicle. The
+    ///                                  seat is empty and the base is not.
+    ///       ServerMoveNoBase, mode 17 -> stuck in EFortCustomMovement::Driving with nothing to
+    ///                                  drive (17 = 1 Driving + the 16 custom-mode threshold).
+    ///       ServerMoveNoBase, mode 1 -> the client is walking as far as it is concerned, and the
+    ///                                  problem is somewhere this report does not reach.
+    ///
+    ///     Bounded to a handful of moves: this is a question about the first moment after an exit,
+    ///     and a per-move log at 60Hz would bury the answer in the noise it creates.
+    /// </summary>
+    public void BeginVehicleExitReport() {
+        _exitReportMovesLeft = 20;
+        Console.WriteLine($"APawn.BeginVehicleExitReport: {GetFName()} just left a vehicle - reporting its " +
+                          "next 20 client moves. See this method's comment for what each outcome means. " +
+                          "SILENCE HERE IS ITSELF THE ANSWER: it means the client sent no moves at all.");
+    }
+
+    /// <summary>
+    ///     One client move, while <see cref="BeginVehicleExitReport" /> is still watching.
+    ///
+    ///     STOPS ON SUCCESS RATHER THAN ON A COUNT. The thing worth knowing is whether the client
+    ///     left EFortCustomMovement::Driving, so the first non-custom mode ends the report with one
+    ///     line saying so - and a client that never leaves it keeps reporting until the budget runs
+    ///     out, which is the case that needs the lines. A fixed count printed twenty identical lines
+    ///     on success, which is noise that hides the one line that matters.
+    /// </summary>
+    public void ReportMoveAfterExit(string variant, byte? movementMode, string? movementBase) {
+        if (_exitReportMovesLeft <= 0) return;
+        _exitReportMovesLeft--;
+
+        var mode = movementMode is { } packed
+            ? packed >= 16
+                ? $"{packed} (custom {packed - 16}; 1=Driving 3=Parachuting 4=Skydiving)"
+                : $"{packed} (1=Walking 3=Falling 6=Custom)"
+            : "not carried by this variant";
+
+        // A non-custom mode means the correction landed and the player can move again.
+        if (movementMode is { } settled && settled < 16) {
+            _exitReportMovesLeft = 0;
+            Console.WriteLine($"APawn.ReportMoveAfterExit: {GetFName()} is out of the vehicle and back in " +
+                              $"movementMode={mode} - the movement correction landed. ({variant}, " +
+                              $"base={movementBase ?? "none"})");
+            return;
+        }
+
+        Console.WriteLine($"APawn.ReportMoveAfterExit: {GetFName()} {variant}, movementMode={mode}, " +
+                          $"base={movementBase ?? "none"} ({_exitReportMovesLeft} more before giving up - " +
+                          "still stuck if this runs out)");
     }
 }

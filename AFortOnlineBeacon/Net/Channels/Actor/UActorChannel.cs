@@ -357,6 +357,14 @@ public class UActorChannel : UChannel {
             "PrimaryPickupItemEntry.GenericAttributeValues",
             "PickupLocationData.LootInitialPosition", "PickupLocationData.LootFinalPosition",
             "PickupLocationData.FinalTossRestLocation", "PickupLocationData.TossState",
+            // THE FLIGHT TO THE PLAYER (38, 40, 43, 44, 47). Like bPickedUp below, these are only
+            // ever meaningful after the initial burst - they say which pawn the item is flying to
+            // and how, so the client can animate it into the player's hands instead of watching it
+            // blink out. Listed here because this set doubles as the per-tick diff's walk list: a
+            // property missing from it is never compared and can never start being sent.
+            "PickupLocationData.PickupTarget", "PickupLocationData.ItemOwner",
+            "PickupLocationData.FlyTime",
+            "PickupLocationData.StartDirection", "PickupLocationData.bPlayPickupSound",
             "bTossedFromContainer", "bServerStoppedSimulation",
             // Not sent as true at spawn - it is the per-tick diff that carries it, once
             // ServerHandlePickup flips it. That makes this the first property in the project
@@ -458,11 +466,8 @@ public class UActorChannel : UChannel {
         // have. Sending one is the BunchIsError-then-silent-disconnect failure - see
         // NativeRepLayouts.SupplyDropLlamaProps. Looted (39) is the whole opened-state visual.
         AFortAthenaSupplyDropLlama => new HashSet<string> { "RemoteRole", "Role", "Looted" },
-        ABuildingActor => new HashSet<string> {
-            "RemoteRole", "Role", "ReplicatedBuildingAttributeSet", "HealthBarIndicatorDifficultyRating",
-            // The component the attribute set has to be reachable through before its OnRep can
-            // broadcast anything - see ABuildingActor.AbilitySystemComponent.
-            "ReplicatedAbilitySystemComponent",
+        ABuildingActor placedBuilding => WithBuildingAttributeSet(placedBuilding, new HashSet<string> {
+            "RemoteRole", "Role", "HealthBarIndicatorDifficultyRating",
             "bDestroyed", "bPlayerPlaced",
             // MIRRORING (45 and 58). Both of these had a working getter in NativeRepLayouts and
             // were never named here, so neither had ever gone out on the wire - which is why three
@@ -482,13 +487,38 @@ public class UActorChannel : UChannel {
             // The compact health path (59/61/62). This, not the attribute set, is what carries a
             // LIVE health update: it is RepNotify on the actor itself, so the client is told health
             // changed instead of only finding out next time something re-reads the value.
-            "MinimalReplicationProxy.BuildTime",
+            "MinimalReplicationProxy.BuildTime", "MinimalReplicationProxy.RepairTime",
             "MinimalReplicationProxy.Health", "MinimalReplicationProxy.MaxHealth",
             // The damage cue (67) - see ABuildingActor.OnDamaged.
             "ProxyGameplayCueDamagePhysical.ProxyGameplayCueDamagePhysicalMagnitude"
-        },
+        }),
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
+
+    /// <summary>
+    ///     Adds the attribute-set references (handles 19 and 20) unless this is a player-built piece
+    ///     with the sub-object gated off - see ReplicateBuildingAttributeSet for the evidence and the
+    ///     BUILDING_ATTR_SET switch.
+    ///
+    ///     THE TWO HAVE TO AGREE. Handle 19 is an ObjectRef NAMING the attribute set, so sending it
+    ///     while the set itself is never replicated hands the client a reference to an object it will
+    ///     never receive - and this project's standing hazard is exactly that: an ObjectRef whose
+    ///     target does not resolve arrives null and is never reconsidered, because a property that
+    ///     matches the shadow is not compared again. Gating one without the other would swap "two
+    ///     sources of health" for "one dangling pointer", which is not obviously better.
+    /// </summary>
+    private static HashSet<string> WithBuildingAttributeSet(ABuildingActor building, HashSet<string> properties) {
+        if (building.bPlayerPlaced && Environment.GetEnvironmentVariable("BUILDING_ATTR_SET") != "1") {
+            return properties;
+        }
+
+        properties.Add("ReplicatedBuildingAttributeSet");
+
+        // The component the attribute set has to be reachable through before its OnRep can
+        // broadcast anything - see ABuildingActor.AbilitySystemComponent.
+        properties.Add("ReplicatedAbilitySystemComponent");
+        return properties;
+    }
 
     /// <summary>
     ///     Default subobjects (CreateDefaultSubobject in the native constructor) to replicate via a
@@ -1026,6 +1056,8 @@ public class UActorChannel : UChannel {
         var wroteSomething = ReplicateCustomDeltaUpdate();
         wroteSomething |= ReplicateEquippedWeapon();
         wroteSomething |= ReplicateAbilitySystemComponent();
+        wroteSomething |= ReplicateVehicleSeats();
+
         wroteSomething |= ReplicateMovementSet();
         wroteSomething |= ReplicatePlayerAttrSet();
         wroteSomething |= ReplicateHealthSet();
@@ -1177,6 +1209,27 @@ public class UActorChannel : UChannel {
 
         var packageMap = (UPackageMapClient) Connection!.PackageMap!;
         packageMap.SerializeObject(bunch, obj);
+
+        // A SUB-OBJECT THAT COULD NOT BE GIVEN A NetGUID, said out loud. FNetGUIDCache refuses one
+        // to anything whose IsSupportedForNetworking() is false, and the default rule for that walks
+        // the OUTER chain - so a component of a runtime-spawned actor is refused unless its class
+        // overrides it, exactly as UActorComponent does. The reference then goes out as the invalid
+        // guid 0 and the SERVER NOTICES NOTHING: the block is written, the bunch is sent, the log
+        // line says it worked. The only symptom is on the client, one layer removed from the cause:
+        //
+        //     LogNet: Warning: UActorChannel::ProcessBunch: ReadContentBlockPayload failed to
+        //             find/create object. RepObj: NULL, Channel: 18
+        //
+        // Once per class, because the answer is a property of the class and repeating it per tick
+        // would bury it. See UFortVehicleSeatComponent, which is the case that cost a live test.
+        if (!packageMap.GuidCache!.GetNetGUID(obj).IsValid() &&
+            _warnedUnsupportedSubObjects.Add(obj.GetClass().GetFName().ToString())) {
+            Console.WriteLine($"UActorChannel.WriteContentBlockHeader: {obj.GetFName()} " +
+                              $"({obj.GetClass().GetFName()}) has NO NetGUID - it is being sent as the " +
+                              "invalid guid 0 and the client will resolve it to NULL. Its class almost " +
+                              "certainly needs `public override bool IsSupportedForNetworking() => true;` " +
+                              "(the default rule refuses anything whose outer chain is not name-stable).");
+        }
 
         if (obj.IsNameStableForNetworking()) {
             bunch.WriteBit(true);
@@ -1420,6 +1473,9 @@ public class UActorChannel : UChannel {
 
     private readonly HashSet<UObject> _sentAbilityInstances = new();
 
+    /// <summary>Sub-object classes already reported as un-networkable - see WriteContentBlockHeader.</summary>
+    private readonly HashSet<string> _warnedUnsupportedSubObjects = new();
+
     /// <summary>
     ///     Runs the ability-system push out of band, outside the per-tick replication pass. The one
     ///     caller is <see cref="FortEmoteSystem"/>: an emote grants a spec and then immediately tells
@@ -1429,6 +1485,73 @@ public class UActorChannel : UChannel {
     ///     runs, and it sends nothing when nothing changed.
     /// </summary>
     public bool FlushAbilitySystemComponent() => ReplicateAbilitySystemComponent();
+
+    /// <summary>What this channel last sent for the vehicle's seat component.</summary>
+    private readonly Dictionary<string, object?> _seatShadowState = new();
+
+    /// <summary>
+    ///     Sends the vehicle's seat array as a sub-object content block - the same framing the
+    ///     AbilitySystemComponent uses, and the piece that tells a client it is genuinely SEATED.
+    ///
+    ///     Only `Player`, and only on the seats that changed hands. The array's other thirty members
+    ///     per seat stay exactly as the client's Blueprint configured them, because the element count
+    ///     on the wire matches the count it already has and `PrepReceivedArray` then resizes nothing
+    ///     - see ERepPropertyKind.StructArray for why that is the whole trick, and
+    ///     UFortVehicleSeatComponent for why the seats have to be baked rather than invented.
+    ///
+    ///     RELIABLE, unlike the actor property update it rides beside. Seating changes on an event
+    ///     and never repeats: a lost "you are in seat 0" is not corrected by the next tick, it leaves
+    ///     a player who is driving a vehicle their own client thinks is empty - which is precisely
+    ///     the state that made exiting impossible in the first place.
+    ///
+    ///     VEHICLE_SEATS=0 turns it off. The escape hatch is here because this is the first array of
+    ///     structs this project has ever written, and a wrong handle inside one is not a wrong value:
+    ///     the client's ReceiveProperties fails and the CONNECTION closes. Driving already works
+    ///     without this, so it must stay possible to get back to that.
+    /// </summary>
+    private unsafe bool ReplicateVehicleSeats() {
+        if (Connection == null || Actor is not AFortAthenaVehicle vehicle) return false;
+        if (Environment.GetEnvironmentVariable("VEHICLE_SEATS") is "0") return false;
+
+        // Nothing to say until someone has actually been seated: creating the component early would
+        // export a NetGUID for it and change nothing on the client.
+        if (vehicle.SeatComponent is not { } seats) return false;
+
+        var layout = NativeRepLayouts.VehicleSeatComponent;
+        var changed = layout.CompareProperties(seats, SeatProperties, _seatShadowState);
+        if (changed.Count == 0) return false;
+
+        var changedNames = changed.Select(entry => entry.Name).ToHashSet();
+
+        using var payload = new FNetBitWriter(Connection.PackageMap, 256);
+        layout.WriteChangedProperties(payload, seats, changedNames);
+
+        using var bunch = new FOutBunch(this, false);
+        bunch.bReliable = true;
+
+        WriteContentBlockHeader(seats, bunch, hasRepLayout: true);
+
+        var numPayloadBits = (uint) payload.GetNumBits();
+        bunch.SerializeIntPacked(&numPayloadBits);
+
+        var payloadData = payload.GetData();
+        fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
+
+        var guid = ((UPackageMapClient) Connection.PackageMap!).GuidCache!.GetNetGUID(seats);
+        Console.WriteLine($"ReplicateVehicleSeats: ChIndex={ChIndex} Actor={vehicle.GetFName()} " +
+                          $"seatGuid={guid} slots=[{string.Join(", ", seats.PlayerSlots.Select(
+                              (slot, index) => $"{index}:{slot.Player?.GetFName().ToString() ?? "-"}"))}] " +
+                          $"numPayloadBits={numPayloadBits} " +
+                          $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
+
+        SendBunch(bunch, false);
+
+        FRepLayout.CommitShadowState(changed, _seatShadowState);
+        return true;
+    }
+
+    /// <summary>The one property of the seat component this server ever sends.</summary>
+    private static readonly HashSet<string> SeatProperties = new() { "PlayerSlots" };
 
     /// <summary>
     ///     Sends the PlayerState's MovementSet attribute values as a sub-object content block - the
@@ -1453,7 +1576,29 @@ public class UActorChannel : UChannel {
     ///     cover the case where the channel's initial open push already sent it as null.
     /// </summary>
     private unsafe bool ReplicateBuildingAttributeSet() {
-        if (Connection == null || Actor is not ABuildingActor { BuildingAttributeSet: { } attributeSet }) return false;
+        if (Connection == null || Actor is not ABuildingActor { BuildingAttributeSet: { } attributeSet } buildingActor) return false;
+
+        // NOT ON A PLAYER-BUILT PIECE, by default, and that default comes from the reference capture
+        // rather than from taste.
+        //
+        // A real server carries a building's health on the building's OWN channel, as
+        // MinimalReplicationProxy.Health/MaxHealth - the client's RepLayout log names them as
+        // Int16Property, which is exactly what NativeRepLayouts declares at handles 61/62. The whole
+        // PR3.0 capture contains exactly ONE BuildingAttributeSet sub-object, and it belongs to
+        // `BGA_Athena_Ostrich_Drop_C`, a level building gameplay actor. **Not one PBWA_* has one.**
+        //
+        // So on a player-built piece this is a SECOND source of health that the reference server
+        // does not send, arriving as floats beside the Int16 the client is already reading - and a
+        // client given two sources for one number is a good candidate for health that "looks off".
+        //
+        // Kept behind a switch rather than deleted, because the capture cannot actually prove the
+        // negative: every PBWA in it was replaced within milliseconds while the player edited
+        // stairs, so NONE of them was ever damaged, and "no health traffic" there is as consistent
+        // with "nothing to send" as with "never sent". BUILDING_ATTR_SET=1 restores the old
+        // behaviour for a side-by-side, which is the only way to settle it.
+        if (buildingActor.bPlayerPlaced && Environment.GetEnvironmentVariable("BUILDING_ATTR_SET") != "1") {
+            return false;
+        }
 
         var layout = NativeRepLayouts.BuildingActorSet;
         var changed = layout.CompareProperties(attributeSet, BuildingAttributeSetProperties, _buildingAttrSetShadowState);
@@ -2111,6 +2256,20 @@ public class UActorChannel : UChannel {
         if (Actor is not APawn pawn) return;
         if (pawn.PendingAckGoodMoveTimeStamp <= 0f) return;
 
+        // A PENDING CORRECTION SUPPRESSES THE ACK, because in real UE they are the same message.
+        // FNetworkPredictionData_Server_Character has ONE PendingAdjustment with a `bAckGoodMove`
+        // flag, and SendClientAdjustment (CharacterMovementComponent.cpp:9002) is a straight
+        // if/else on it: a correction REPLACES the ack, it does not accompany it.
+        //
+        // Sending both independently - which this did - is a race the correction loses about half
+        // the time. ClientAckGoodMove frees every client saved move up to its timestamp, and
+        // ClientAdjustPosition_Implementation opens by looking that same timestamp UP in that same
+        // list (`GetSavedMoveIndex`, line 9165) and returns if it is gone. So the ack going out
+        // first quietly deletes the move the correction was about to name, the correction is
+        // discarded, and the player is left in whatever movement mode they were stuck in - which is
+        // exactly the intermittent "sometimes cannot move after getting out" this produced.
+        if (pawn.PendingMovementModeCorrection != null) return;
+
         var now = Actor.GetWorld()?.TimeSeconds ?? (Environment.TickCount64 / 1000f);
         if (now - pawn.ServerLastClientGoodMoveAckTime <= NetworkMinTimeBetweenClientAckGoodMoves) return;
         pawn.ServerLastClientGoodMoveAckTime = now;
@@ -2129,6 +2288,215 @@ public class UActorChannel : UChannel {
             writer.WriteFloat(timeStamp);
         }, reliable: false);
     }
+
+    /// <summary>
+    ///     ACharacter::ClientAdjustPosition (Character.h:296) - the server telling an autonomous
+    ///     proxy to trust it about where it is and, crucially, WHAT MOVEMENT MODE IT IS IN.
+    ///
+    ///     WHY THIS HAD TO EXIST. A player who got out of a vehicle could not move: their client
+    ///     stayed in EFortCustomMovement::Driving (movementMode 17 = custom 1 + the 16 threshold)
+    ///     with nothing left to drive, and no amount of clearing VehicleStateRep or the seat array
+    ///     changed it. The mode is not a replicated property for its owner - ACharacter's
+    ///     ReplicatedMovementMode is COND_SimulatedOnly, so it reaches every client EXCEPT the one
+    ///     whose pawn it is. `ApplyNetworkMovementMode(ServerMovementMode)` inside this RPC, under
+    ///     the comment "Trust the server's movement mode" (CharacterMovementComponent.cpp:9198), is
+    ///     the only channel there is.
+    ///
+    ///     A CORRECTION ALWAYS MOVES THE PLAYER, and that is the hard part rather than the mode
+    ///     byte. There is no mode-only variant: the implementation does
+    ///     `SetWorldLocation(WorldShiftedNewLocation, ETeleportType::TeleportPhysics)`
+    ///     unconditionally, with no collision sweep. So a position that is wrong by a couple of
+    ///     metres does not get corrected by the client - it drops the player through the floor,
+    ///     which is exactly what the first version of this did.
+    ///
+    ///     THE FIRST VERSION SENT THE CLIENT'S OWN RELATIVE POSITION BACK, reasoning that the client
+    ///     could turn it into a world position and so nobody had to know one. That is wrong, and
+    ///     the engine says so in a single line - the reconstruction is
+    ///
+    ///         WorldShiftedNewLocation = NewLocation + BaseLocation;   // line 9184
+    ///
+    ///     which adds the base's LOCATION and throws its ROTATION away, while the relative location
+    ///     the client computed (ACharacter::SaveRelativeBasedMovement) is in the base's rotated
+    ///     local space. For a shopping cart parked at any yaw but zero, the seat offset comes back
+    ///     rotated wrongly - metres off, downwards as often as not, and TeleportPhysics puts the
+    ///     player there regardless of what is in the way. (The `// TODO: error handling` sitting
+    ///     next to that line is a fair warning about how much this path was ever exercised.)
+    ///
+    ///     SO THE POSITION IS DERIVED FROM WHAT THIS SERVER ACTUALLY KNOWS, in world space:
+    ///
+    ///       * APlayerController::ServerUpdateCamera keeps arriving throughout a ride and carries a
+    ///         WORLD-space camera location. It is not the pawn - a third-person boom measured 254
+    ///         units on this build (see the RPC's own comment) - but it is real, current, and above
+    ///         the player rather than below them.
+    ///       * The baked map then supplies the ground under that XY, which is what
+    ///         TerrainHeightMap exists for and is trusted for elsewhere (building support, projectile
+    ///         floors). Dropping the player onto measured ground is the one thing that reliably does
+    ///         not put them inside it.
+    ///
+    ///     Where the bake has no ground - the warmup island, for one - the camera position itself
+    ///     is used instead, and that is safe for the same reason the ground was: UE's third-person
+    ///     camera collision-sweeps to avoid penetrating geometry, so the camera is always standing
+    ///     in free space. Only a client that has never sent a camera at all gets no correction.
+    /// </summary>
+    private void SendMovementCorrection() {
+        if (Actor is not APawn pawn) return;
+        if (pawn.TakeMovementModeCorrection() is not { } packedMode) return;
+
+        // 1. THE TIMESTAMP MUST NAME A LIVE SAVED MOVE. ClientAdjustPosition_Implementation opens
+        //    with `GetSavedMoveIndex(TimeStamp)` and returns outright if that misses (line 9165),
+        //    logging at a verbosity nothing prints. LastClientMoveTimeStamp is the newest move
+        //    actually received and is never cleared, unlike PendingAckGoodMoveTimeStamp.
+        if (pawn.LastClientMoveTimeStamp <= 0f) {
+            Console.WriteLine($"UActorChannel.SendMovementCorrection: {pawn.GetFName()} has never sent a move, " +
+                              "so there is no timestamp a correction could name - not sending.");
+            return;
+        }
+
+        if (ResolveCorrectionLocation(pawn) is not { } newLocation) return;
+
+        SendRpc("ClientAdjustPosition", writer => {
+            writer.WriteBit(true);
+            writer.WriteFloat(pawn.LastClientMoveTimeStamp);          // TimeStamp
+
+            writer.WriteBit(true);
+            newLocation.NetSerializeWrite(writer);                    // NewLoc, absolute
+
+            // NewVel - zero, and deliberately: a server that is not simulating this pawn has no
+            // honest velocity to give, and the client is about to land on the ground anyway.
+            writer.WriteBit(true);
+            new FVector().NetSerializeWrite(writer);
+
+            // NewBase / NewBaseBoneName - both absent. Sending the position ABSOLUTE is what makes
+            // that safe: a relative correction whose base fails to resolve on the client is thrown
+            // away entirely ("could not resolve the new relative movement base actor, ignoring
+            // server correction!", line 9152), and an absolute one has no such dependency.
+            writer.WriteBit(false);
+            writer.WriteBit(false);
+
+            // bHasBase / bBaseRelativePosition - BOOLS, so no presence bit of their own. That is
+            // FRepLayout::SendPropertiesForRPC's rule and it is not cosmetic: writing a presence bit
+            // here would shift every bit after it.
+            writer.WriteBit(false);
+            writer.WriteBit(false);
+
+            writer.WriteBit(true);
+            writer.WriteByte(packedMode);                             // ServerMovementMode
+        }, reliable: true);
+
+        // THE CORRECTION IS ALSO THE ACK, so the pending one is dropped rather than sent after it.
+        // ClientAdjustPosition_Implementation calls `ClientData->AckMove(MoveIndex, *this)` on the
+        // way through (CharacterMovementComponent.cpp:9172), which frees the client's saved moves
+        // exactly as ClientAckGoodMove would - real UE never sends both because they are two
+        // branches of one function. Leaving this set would put a redundant ack on the wire naming a
+        // move the client has just retired.
+        pawn.PendingAckGoodMoveTimeStamp = 0f;
+
+        // AND THE SERVER'S OWN COPY, which has been stale since the player boarded (a based
+        // ServerMove carries no world position - see the move handler). Leaving it behind would
+        // make relevancy, fall damage and every distance check run off the boarding spot.
+        pawn.SetActorLocation(newLocation);
+
+        Console.WriteLine($"UActorChannel.SendMovementCorrection: ChIndex={ChIndex} {pawn.GetFName()} -> packed " +
+                          $"movement mode {packedMode} " +
+                          $"({(packedMode >= 16 ? $"custom {packedMode - 16}" : "not custom")}) " +
+                          $"at {newLocation}, TimeStamp={pawn.LastClientMoveTimeStamp}. " +
+                          "If the client ignores this, its log says why (LogNetPlayerMovement).");
+    }
+
+    /// <summary>
+    ///     Where to put the pawn in a correction - the camera's world XY, dropped onto the baked
+    ///     ground. Null when either half is unavailable, which means no correction is sent at all.
+    /// </summary>
+    private static FVector? ResolveCorrectionLocation(APawn pawn) {
+        if ((pawn.Controller as APlayerController)?.LastClientCameraLocation is not { } camera) {
+            Console.WriteLine($"UActorChannel.SendMovementCorrection: {pawn.GetFName()} needs a movement-mode " +
+                              "correction but this client has never sent ServerUpdateCamera, so there is no " +
+                              "world position to put it at - not sending (a guess would teleport it into the map).");
+            return null;
+        }
+
+        // HOW OLD THAT CAMERA IS, reported every time. A correction placed from a stale camera is a
+        // teleport back to wherever the player was when it went stale, and the failure looks exactly
+        // like a correction that was never sent - so the age is part of the answer, not a detail.
+        var controller = (APlayerController) pawn.Controller!;
+        var age = (pawn.GetWorld()?.TimeSeconds ?? 0f) - controller.LastClientCameraTime;
+
+        // WALK BACK ALONG THE BOOM FIRST, so everything below is about the PLAYER's position rather
+        // than the camera's. The camera hangs behind and above; its own forward vector points at the
+        // player, and LastObservedCameraBoom is how far along that ray they were the last time both
+        // ends were known good.
+        //
+        // SAFE BECAUSE OF WHAT THE CLIENT ALREADY DID: UE's third-person camera sweeps from the pawn
+        // out to the camera and stops at the first obstruction, so the whole segment between them is
+        // clear. A MEASURED boom lands on that segment. A guessed one could overshoot past the
+        // player into whatever is in front of them, which is why this uses no default - without a
+        // measurement it stays at the camera, two metres back and definitely clear.
+        var aimed = camera;
+        var boomNote = "no boom measured yet, so this is the camera position itself";
+
+        if (pawn.LastObservedCameraBoom is { } boom && controller.LastClientCameraRotation is { } look) {
+            var forward = look.GetForwardVector();
+            aimed = new FVector {
+                X = camera.X + forward.X * boom,
+                Y = camera.Y + forward.Y * boom,
+                Z = camera.Z + forward.Z * boom
+            };
+
+            boomNote = $"walked {boom:F0}uu along the camera's forward vector to reach the player";
+        }
+
+        // ...AND ONLY THEN ASK FOR THE GROUND, at the point the player is actually going to be put.
+        // Querying under the CAMERA and then placing somewhere else was wrong by a boom's length,
+        // which over a cliff edge or a roof line is the difference between standing and falling.
+        // Searching downward is the right direction either way: the camera sits above the player.
+        var ground = TerrainHeightMap.GetSurfaceUnder(aimed.X, aimed.Y, PawnGroundProbeRadius, camera.Z);
+
+        if (ground is not { } groundZ) {
+            // NO BAKED GROUND HERE - and refusing to send was the wrong answer, measured: the very
+            // first live attempt failed at (-116795, -117859, 4504), which is the WARMUP ISLAND. It
+            // is a separate sublevel placed off the map proper and the terrain bake does not cover
+            // it, so a rule of "ground or nothing" means no correction anywhere a tester actually
+            // stands before a match starts.
+            //
+            // THE POINT ON THE BOOM IS THE FALLBACK, and it is a much better one than it looks:
+            // UE's third-person camera sweeps from the pawn out to the camera and stops at the first
+            // obstruction, so every point on that segment is FREE SPACE by construction - which is
+            // the exact property the ground lookup was there to guarantee. With a measured boom that
+            // point IS the player; with none yet it is the camera, a couple of metres back and
+            // equally clear, and the client simply drops.
+            //
+            // The baked ground is still preferred for Z where it exists, because a ray along the
+            // boom says where the player is standing and not what they are standing on.
+            Console.WriteLine($"UActorChannel.SendMovementCorrection: camera at ({camera.X:F0}, " +
+                              $"{camera.Y:F0}, {camera.Z:F0}) [{age:F1}s old], {boomNote} - no baked ground " +
+                              $"there, so placing at ({aimed.X:F0}, {aimed.Y:F0}, {aimed.Z:F0}) as-is. " +
+                              "(Warmup island and anywhere else outside the terrain bake - see " +
+                              "map-collision-bake.)");
+
+            return aimed;
+        }
+
+        // GROUND WINS ON Z, the boom on XY. The bake knows the floor better than a camera ray does,
+        // and the boom knows where along the ground the player was standing - taking one from each
+        // is better than either alone.
+        Console.WriteLine($"UActorChannel.SendMovementCorrection: camera at ({camera.X:F0}, {camera.Y:F0}, " +
+                          $"{camera.Z:F0}) [{age:F1}s old], {boomNote}; baked ground {groundZ:F0}.");
+
+        return new FVector { X = aimed.X, Y = aimed.Y, Z = groundZ + PawnCapsuleHalfHeight };
+    }
+
+    /// <summary>
+    ///     Half of a Fortnite player capsule, which is what separates the actor's ORIGIN (its
+    ///     centre) from the ground its feet are on. Placing an actor at the ground height itself
+    ///     buries it to the waist and the client's floor check then resolves it downwards.
+    /// </summary>
+    private const float PawnCapsuleHalfHeight = 96f;
+
+    /// <summary>
+    ///     How wide a footprint the ground query may consider, matching the capsule's radius. Zero
+    ///     would ask about a single point and miss whenever the camera happens to hang over an edge.
+    /// </summary>
+    private const float PawnGroundProbeRadius = 48f;
 
     private void SendPawnRpc(string fieldName, APawn pawn) => SendObjectRpc(fieldName, pawn);
 
@@ -3095,9 +3463,26 @@ public class UActorChannel : UChannel {
             if (subObject == null) {
                 HandlePossessionRpc(fieldName);
 
-                // Any accepted client move leaves a timestamp owed back to the client; this is the
-                // only place we learn one arrived. Throttled inside - see SendClientAckGoodMove.
-                if (fieldName.StartsWith("ServerMove", StringComparison.Ordinal)) SendClientAckGoodMove();
+                // Any accepted client move leaves the server owing the client EITHER an ack or a
+                // correction, and this is where real UE decides which: SendClientAdjustment runs off
+                // the move it just processed and is a straight if/else on bAckGoodMove
+                // (CharacterMovementComponent.cpp:9002). Both live here for the same reason.
+                //
+                // ORDER MATTERS AND IS NOT COSMETIC. A correction names the timestamp of a move that
+                // must still be in the client's SavedMoves, and an ack retires every move up to ITS
+                // timestamp - so an ack sent between the request and the correction deletes the very
+                // move the correction is about to name (GetSavedMoveIndex, line 10256, returns
+                // INDEX_NONE for anything at or below LastAckedMove). Running the correction FIRST,
+                // on the same received move, is what closes that window to nothing.
+                //
+                // Leaving the correction to the next replication pass - which is where it used to
+                // run - left a window of one update tick, and the faster the client was moving the
+                // more traffic there was to lose the race to. That is exactly the reported symptom:
+                // getting out at speed sometimes left the player stuck in Driving.
+                if (fieldName.StartsWith("ServerMove", StringComparison.Ordinal)) {
+                    SendMovementCorrection();
+                    SendClientAckGoodMove();
+                }
             }
 
             bunch.Pos = fieldEnd;

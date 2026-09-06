@@ -237,18 +237,42 @@ internal static class NativeRepLayouts {
 
         Reserved("MultiItemPickupEntries", ERepPropertyKind.EmptyDynamicArray), // 37
 
-        // 38-47: PickupLocationData - see the doc comment for why none of it is sent.
-        Reserved("PickupLocationData.PickupTarget"),
-        Reserved("PickupLocationData.CombineTarget"),
-        Reserved("PickupLocationData.ItemOwner"),
+        // 38-47: PickupLocationData - the toss arc, and now the PICKUP arc too. The four that make
+        // an item fly to a player (38 target, 43 flight time, 44 direction, 47 sound) are the
+        // client's own ServerHandlePickup parameters echoed back; see AFortPickup.PickupTarget.
+        new() {                                                                    // 38
+            Name = "PickupLocationData.PickupTarget",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortPickup) obj).PickupTarget
+        },
+        Reserved("PickupLocationData.CombineTarget"),                              // 39
+        new() {                                                                    // 40
+            Name = "PickupLocationData.ItemOwner",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortPickup) obj).ItemOwner
+        },
         new() { Name = "PickupLocationData.LootInitialPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
         new() { Name = "PickupLocationData.LootFinalPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
-        Reserved("PickupLocationData.FlyTime", ERepPropertyKind.Float),
-        Reserved("PickupLocationData.StartDirection", ERepPropertyKind.StructAtomic),
+        new() {                                                                    // 43
+            Name = "PickupLocationData.FlyTime",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortPickup) obj).FlyTime
+        },
+        new() {                                                                    // 44
+            // FVector_NetQuantizeNormal, not one of the packed vectors - see
+            // ERepPropertyKind.VectorNormal for why they are not interchangeable.
+            Name = "PickupLocationData.StartDirection",
+            Kind = ERepPropertyKind.VectorNormal,
+            GetVectorValue = obj => ((AFortPickup) obj).StartDirection
+        },
         new() { Name = "PickupLocationData.FinalTossRestLocation", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
         // EFortPickupTossState_MAX = 3 -> CeilLogTwo(3) = 2 bits.
         new() { Name = "PickupLocationData.TossState", Kind = ERepPropertyKind.ByteEnum, EnumMaxValue = (int) EFortPickupTossState.EFortPickupTossState_MAX, GetByteValue = obj => (byte) ((AFortPickup) obj).TossState },
-        Reserved("PickupLocationData.bPlayPickupSound"),
+        new() {                                                                    // 47
+            Name = "PickupLocationData.bPlayPickupSound",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AFortPickup) obj).bPlayPickupSound ? 1 : 0)
+        },
 
         Reserved("OptionalOwnerID", ERepPropertyKind.Int32), // 48
         new() { Name = "bPickedUp", Kind = ERepPropertyKind.Bool, GetByteValue = obj => (byte) (((AFortPickup) obj).bPickedUp ? 1 : 0) },                            // 49
@@ -2057,6 +2081,92 @@ internal static class NativeRepLayouts {
     };
 
     /// <summary>
+    ///     ONE SEAT of a vehicle - FAthenaCarPlayerSlot flattened the way FRepLayout flattens the
+    ///     inner of a TArray, and therefore the DIVISOR for every element's handles. See
+    ///     ERepPropertyKind.StructArray: the handle for member j of element i is
+    ///     `i * 31 + j`, so this table being 31 entries long matters as much as any entry in it.
+    ///
+    ///     Derived from the Dumper-7 10.40 SDK, by InitFromProperty_r's rules
+    ///     (RepLayout.cpp:4655): every member EXCEPT the two CPF_RepSkip ones (Controller,
+    ///     EnterSeatTime), sorted by offset with the name as tie-break - which is why the seven
+    ///     bools packed into 0x60 sit here in alphabetical order rather than declaration order.
+    ///
+    ///     THE COUNTING RULES THAT ARE EASY TO GET WRONG, all of them worth one handle each:
+    ///       - an FVector is ONE handle, not three. RepLayout.cpp:4444 special-cases a struct named
+    ///         `Vector` before the recursion that would split it into X/Y/Z. Six vectors here, so
+    ///         getting this wrong would put the divisor at 43 and corrupt every seat after the first.
+    ///       - a TArray is ONE handle: its inner cmds live in a nested handle space of their own.
+    ///         ExitSockets is a TArray&lt;FName&gt;.
+    ///       - an FText is one handle of a type nothing here can write - see ERepPropertyKind.Text.
+    ///       - FAthenaVehicleShootingCone is NOT NetSerializeNative, so it RECURSES into its two
+    ///         floats and costs two.
+    ///
+    ///     Only `Player` carries a getter. That is the whole point of the exercise (see
+    ///     UFortVehicleSeatComponent): the other thirty are the Blueprint's own configuration, the
+    ///     client already holds them, and a member with no getter is left exactly as it was.
+    /// </summary>
+    private static readonly FRepPropertyDef[] VehicleSeatProps = {
+        Reserved("SeatSocket", ERepPropertyKind.Name),                       //  1, 0x0000
+        Reserved("SeatChoiceSocket", ERepPropertyKind.Name),                 //  2, 0x0008
+        Reserved("SeatIndicatorSocket", ERepPropertyKind.Name),              //  3, 0x0010
+        Reserved("SeatChoiceDisplayText", ERepPropertyKind.Text),            //  4, 0x0018
+        Reserved("SeatCollision", ERepPropertyKind.Name),                    //  5, 0x0030
+        Reserved("ExitSockets", ERepPropertyKind.EmptyDynamicArray),         //  6, 0x0038
+        Reserved("ShootingCone.YawConstraint", ERepPropertyKind.Float),      //  7, 0x0048
+        Reserved("ShootingCone.PitchConstraint", ERepPropertyKind.Float),    //  8, 0x004C
+        Reserved("SoundOnEnter", ERepPropertyKind.ObjectRef),                //  9, 0x0050
+        Reserved("SoundOnExit", ERepPropertyKind.ObjectRef),                 // 10, 0x0058
+        Reserved("bCanEmote"),                                               // 11, 0x0060 - the seven
+        Reserved("bForceCrouch"),                                            // 12, 0x0060   share one
+        Reserved("bIsSelectable"),                                           // 13, 0x0060   offset, so
+        Reserved("bPlayEnterSoundForTransition"),                            // 14, 0x0060   they sort
+        Reserved("bPlayExitSoundForTransition"),                             // 15, 0x0060   by name
+        Reserved("bUseGroundMotion"),                                        // 16, 0x0060
+        Reserved("bUseVehicleIsOnGround"),                                   // 17, 0x0060
+        Reserved("ActorSpaceCameraOffset", ERepPropertyKind.Vector),         // 18, 0x0064
+        Reserved("VehicleSpaceCameraOffset", ERepPropertyKind.Vector),       // 19, 0x0070
+        Reserved("SlopeCompensationCameraOffset", ERepPropertyKind.Float),   // 20, 0x007C
+        Reserved("StandingFiringOffset", ERepPropertyKind.Vector),           // 21, 0x0080
+        Reserved("CrouchingFiringOffset", ERepPropertyKind.Vector),          // 22, 0x008C
+        Reserved("EmoteOffset", ERepPropertyKind.Vector),                    // 23, 0x0098
+        new() {                                                              // 24, 0x00A8
+            // WHO IS IN THIS SEAT - the only member this server has an opinion about, and the one
+            // the client's exit and seat-change paths read.
+            Name = "Player",
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((FVehicleSeat) obj).Player
+        },
+        //                                       0x00B0 - Controller, RepSkip: no handle at all.
+        Reserved("PlayerEntryTime", ERepPropertyKind.Float),                 // 25, 0x00B8
+        //                                       0x00BC - EnterSeatTime, RepSkip.
+        Reserved("bConstrainPawnToSeatTransform"),                           // 26, 0x00C0
+        Reserved("bOffsetPlayerRelativeAttachLocation"),                     // 27, 0x00C1
+        Reserved("bUseExitTimer"),                                           // 28, 0x00C2
+        Reserved("WeaponComponent", ERepPropertyKind.ObjectRef),             // 29, 0x00C8
+        Reserved("CameraPitchConstraint", ERepPropertyKind.Float),           // 30, 0x00D0
+        Reserved("CameraYawConstraint", ERepPropertyKind.Float)              // 31, 0x00D4
+    };
+
+    /// <summary>
+    ///     UFortVehicleSeatComponent's RepLayout. Three handles, and only the third is ever sent.
+    ///
+    ///     DERIVED by `python Tools/RepHandles/rep_handles.py UFortVehicleSeatComponent`: handles 1
+    ///     and 2 are UActorComponent's own bReplicates/bIsActive (a super's ClassReps come first),
+    ///     and PlayerSlots is the component's ONLY `Net` property.
+    /// </summary>
+    private static readonly FRepPropertyDef[] VehicleSeatComponentProps = {
+        Reserved("bReplicates"),                                       // 1, 0x0084 - uint8
+        Reserved("bIsActive"),                                         // 2, 0x0086 - uint8
+        new() {
+            // 3, 0x00C8 - TArray<FAthenaCarPlayerSlot>, Net | RepNotify (OnRep_PlayerSlots).
+            Name = "PlayerSlots",
+            Kind = ERepPropertyKind.StructArray,
+            Children = VehicleSeatProps,
+            GetStructArrayValue = obj => ((UFortVehicleSeatComponent) obj).PlayerSlots
+        }
+    };
+
+    /// <summary>
     ///     UFortMovementSet's RepLayout, as far as SpeedMultiplier (handles 91-92).
     ///
     ///     A GameplayAttribute is NOT one handle - FFortGameplayAttributeData is a plain struct with
@@ -2492,11 +2602,21 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.QuantizedBuildingAttribute,
             GetFloatValue = obj => ((ABuildingActor) obj).BuildTime
         },
-        Reserved("MinimalReplicationProxy.RepairTime", ERepPropertyKind.QuantizedBuildingAttribute), // 60
+        new() {
+            // 60 - the repair window, same encoding as BuildTime beside it. Reserved until a live
+            // repair showed the build-up animation playing with no heal effect: a client told the
+            // repair takes zero seconds has no window to play one in.
+            Name = "MinimalReplicationProxy.RepairTime",
+            Kind = ERepPropertyKind.QuantizedBuildingAttribute,
+            GetFloatValue = obj => ((ABuildingActor) obj).RepairTime
+        },
         new() {
             Name = "MinimalReplicationProxy.Health",                              // 61
             Kind = ERepPropertyKind.Int16,
-            GetIntValue = obj => ((ABuildingActor) obj).CurrentHitPoints
+            // ReplicatedHitPoints, NOT CurrentHitPoints: the latter is recomputed every tick while
+            // a piece builds or repairs, and sending it would stream the ramp one hit point at a
+            // time. See ABuildingActor.SyncAttributeSet.
+            GetIntValue = obj => ((ABuildingActor) obj).ReplicatedHitPoints
         },
         new() {
             Name = "MinimalReplicationProxy.MaxHealth",                           // 62
@@ -2634,6 +2754,7 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout HealthSet = new(HealthSetProps);
 
     public static readonly FRepLayout AbilitySystemComponent = new(AbilitySystemComponentProps);
+    public static readonly FRepLayout VehicleSeatComponent = new(VehicleSeatComponentProps);
 
     public static readonly FRepLayout Actor = new(ActorProps);
     public static readonly FRepLayout Controller = new(ControllerProps);

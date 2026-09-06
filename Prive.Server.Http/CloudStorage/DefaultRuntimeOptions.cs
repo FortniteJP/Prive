@@ -30,6 +30,7 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 
                 new IniElementKeyValue("ExperimentalCohortPercent", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
 
+				#if !DEBUG
 				new IniElementKeyValue("DisabledFrontendNavigationTabs", "ClearArray") { Option = IniElementOption.RemoveIfExisting },
 				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaCompete", TabState = "EFortRuntimeOptionTabState::Hidden" } },
 				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaCareer", TabState = "EFortRuntimeOptionTabState::Hidden" } },
@@ -39,6 +40,7 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 				new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaDirectAcquisition", TabState = "EFortRuntimeOptionTabState::Hidden" } },
 				// new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "AthenaCustomize", TabState = "EFortRuntimeOptionTabState::Hidden" } },
 				// new IniDisabledFrontendNavigationTabs() { DisabledFrontendNavigationTab = new() { TabName = "Lobby", TabState = "EFortRuntimeOptionTabState::Hidden" } },
+				#endif
 
 				new IniElementKeyValue("bEnableAllRemoteClientInfos", "true"),
 				new IniElementKeyValue("bAllowPartySuggestions", "true"),

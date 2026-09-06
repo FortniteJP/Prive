@@ -23,4 +23,18 @@ public class UFortVehicleSkelMeshComponent : Core.Objects.UObject {
     ///     resolves the reference by matching this path under the vehicle.
     /// </summary>
     public const string SubObjectName = "SkeletalMeshComponent";
+
+    /// <summary>
+    ///     Same override, same reason, and it fixes a bug that had never been noticed: this
+    ///     component's outer is a runtime-spawned vehicle, so the default
+    ///     `IsFullNameStableForNetworking` rule refused it a NetGUID and every
+    ///     `ReplicatedBasedMovement.MovementBase` referencing it went out as the invalid guid 0.
+    ///
+    ///     That went unseen because the movement base is COND_SimulatedOnly - it never reaches the
+    ///     driver, only the other clients watching them - and there has only ever been one player in
+    ///     a vehicle at a time. The one report of it ("ReplicatedBasedMovement.MovementBase does not
+    ///     seem to be there") was read at the time as the property not being sent. It was being sent,
+    ///     pointing at nothing.
+    /// </summary>
+    public override bool IsSupportedForNetworking() => true;
 }

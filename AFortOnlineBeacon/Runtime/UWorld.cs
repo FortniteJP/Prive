@@ -125,6 +125,9 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // storm tick so a storm kill is reported on the same tick the damage landed.
         Net.FortDamageSystem.Tick(this, TimeSeconds);
 
+        // Collected pickups still flying to whoever took them - see FortPickupFlightSystem.
+        Net.FortPickupFlightSystem.Tick(this, TimeSeconds);
+
         // The storm. Off unless SAFEZONE_ENABLED=1 - see FortSafeZoneSystem for why it is opt-in.
         // Placed with the structural tick rather than after the NetDriver so a radius change and the
         // damage it causes go out on the same tick they happen.

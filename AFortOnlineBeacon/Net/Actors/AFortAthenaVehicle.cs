@@ -87,6 +87,49 @@ public class AFortAthenaVehicle : AActor {
     /// </summary>
     public bool bHasDriver => Driver != null;
 
+    /// <summary>
+    ///     The seat array the client reads its own seating from - see UFortVehicleSeatComponent.
+    ///     Built on demand for the same reason the mesh component is.
+    /// </summary>
+    public UFortVehicleSeatComponent? SeatComponent { get; private set; }
+
+    /// <summary>
+    ///     Whether this server knows this vehicle's seats. FALSE for a Blueprint Tools/VehicleSeats
+    ///     never baked, and that is a refusal rather than an approximation: an array sent with the
+    ///     wrong element count makes the client RESIZE its own, throwing away the sockets and camera
+    ///     offsets its Blueprint configured. Better no seat array than a shorter one.
+    /// </summary>
+    public bool HasSeatData => FortVehicleSeats.For(GetClass()?.GetFName().ToString()).Length > 0;
+
+    public UFortVehicleSeatComponent? GetOrCreateSeatComponent() {
+        if (SeatComponent != null) return SeatComponent;
+
+        var seats = FortVehicleSeats.For(GetClass()?.GetFName().ToString());
+        if (seats.Length == 0) return null;
+
+        SeatComponent = UObjectGlobals.NewObject<UFortVehicleSeatComponent>(
+            this,
+            GUClassArray.StaticClass<UFortVehicleSeatComponent>(),
+            new FName(UFortVehicleSeatComponent.SubObjectName),
+            EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject);
+
+        if (SeatComponent != null) SeatComponent.PlayerSlots = seats;
+
+        return SeatComponent;
+    }
+
+    /// <summary>
+    ///     Puts <paramref name="pawn" /> in seat <paramref name="seatIndex" /> (or, with -1, out of
+    ///     the vehicle) and reports whether that changed anything.
+    ///
+    ///     Deliberately does NOT touch <see cref="Driver" />, the movement base or VehicleStateRep:
+    ///     those three are what make someone ride, and this is what makes the client agree that they
+    ///     are riding. Keeping them separate is why the seat array could be added without disturbing
+    ///     a boarding path that already worked.
+    /// </summary>
+    public bool SeatPawn(APawn? pawn, int seatIndex, float entryTime) =>
+        GetOrCreateSeatComponent() is { } seats && seats.Seat(pawn, seatIndex, entryTime);
+
     public UFortVehicleSkelMeshComponent? GetOrCreateMeshComponent() {
         if (MeshComponent != null) return MeshComponent;
 

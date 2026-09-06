@@ -200,9 +200,34 @@ def main():
     ap.add_argument("--from", dest="lo", type=int, default=1)
     ap.add_argument("--to", dest="hi", type=int, default=10**9)
     ap.add_argument("--grep", default=None, help="only print handles whose label matches")
+    ap.add_argument("--struct", action="store_true",
+                    help="treat the argument as a STRUCT and expand it the way FRepLayout expands "
+                         "the inner of a TArray - the per-element handle space, whose LENGTH is the "
+                         "divisor for every element's handles (see ERepPropertyKind.StructArray)")
     a = ap.parse_args()
 
     sdk = Sdk(a.sdk)
+
+    if a.struct:
+        # InitFromProperty_r on ArrayProp->Inner starts at RelativeHandle 0, so an array element's
+        # handles are exactly this list, 1-based. Every non-RepSkip member counts, Net flag or not:
+        # the flag selects which top-level PROPERTIES replicate, never which members of a struct.
+        members = [m for m in sdk.all_props(a.cls) if not has_flag(m["flags"], "RepSkip")]
+        members.sort(key=sort_key)
+        rows = []
+        for m in members:
+            for j in range(m["dim"]):
+                idx = "" if m["dim"] == 1 else f"[{j}]"
+                out = []
+                expand(sdk, dict(m, name=m["name"] + idx), 0, out, "")
+                rows += [(label, kind, m["offset"]) for label, kind in out]
+
+        # Same column shape as the class mode below, so one parser reads both.
+        for i, (label, kind, off) in enumerate(rows, start=1):
+            if a.lo <= i <= a.hi and (not a.grep or a.grep.lower() in label.lower()):
+                print(f"{i:4}  0x{off:04X}  {a.cls:<28} {label:<52} {kind}")
+        return
+
     handles = []
     for t in sdk.chain(a.cls):
         own = [p for p in t["props"] if has_flag(p["flags"], "Net")]

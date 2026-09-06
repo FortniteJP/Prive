@@ -71,6 +71,10 @@ public class GUClassArray {
         // round: this server never receives anything on it, it hands it OUT as the driver's movement
         // base. See UFortVehicleSkelMeshComponent.
         [typeof(UFortVehicleSkelMeshComponent)] = "/Script/FortniteGame.FortVehicleSkelMeshComponent",
+        // A vehicle's VehicleSeatComponent - the seat array. Name-stable under the vehicle, so the
+        // client resolves it by path and never has to construct it from this class; registered
+        // because NewObject needs a UClass either way. See UFortVehicleSeatComponent.
+        [typeof(UFortVehicleSeatComponent)] = "/Script/FortniteGame.FortVehicleSeatComponent",
         // A placed building's health attribute set. Native, and it MUST be: unlike the PlayerState's
         // stably-named sets, this one is created at runtime and so travels as a sub-object content
         // block carrying its class, which the client has to be able to resolve to construct it - the

@@ -16,6 +16,13 @@ public class FVector {
         Z = ar.ReadFloat()
     };
 
+    /// <summary>The write side of <see cref="NetSerializeRead" /> - the same three raw floats.</summary>
+    public void NetSerializeWrite(FArchive ar) {
+        ar.WriteFloat(X);
+        ar.WriteFloat(Y);
+        ar.WriteFloat(Z);
+    }
+
     /// <summary>
     ///     Matches ReadPackedVector&lt;ScaleFactor, MaxBitsPerComponent&gt; (NetSerialization.h) - used
     ///     by FVector_NetQuantize/10/100 (scaleFactor/maxBitsPerComponent = 1/20, 10/24, 100/30

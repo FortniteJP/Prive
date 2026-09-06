@@ -265,6 +265,12 @@ public class AGameModeBase : AInfo {
 
     private readonly HashSet<UNetConnection> _boardedConnections = new();
 
+    /// <summary>
+    ///     Connections whose warmup pawn has just been destroyed and whose camera RPCs are waiting a
+    ///     beat - see where it is set for why.
+    /// </summary>
+    private readonly Dictionary<UNetConnection, float> _pendingBusCamera = new();
+
     /// <summary>Pawns already handed back to their client - see TickBoarding's second half.</summary>
     private readonly HashSet<APawn> _restartedPawns = new();
 
@@ -313,7 +319,12 @@ public class AGameModeBase : AInfo {
             if (connection.FindActorChannel(aircraft) is null) continue;
             if (connection.FindActorChannel(pc) is not { } pcChannel) continue;
 
-            _boardedConnections.Add(connection);
+            // ONE TICK BETWEEN DESTROYING THE PAWN AND MOVING THE CAMERA, when there is a pawn to
+            // destroy. See _pendingBusCamera.
+            if (_pendingBusCamera.TryGetValue(connection, out var readyAt)) {
+                if (world.TimeSeconds < readyAt) continue;
+                _pendingBusCamera.Remove(connection);
+            }
 
             // RIDE the bus. Set HERE rather than in SpawnAircraft for exactly the reason the camera
             // RPCs are sent here: AttachParent is an object reference, so the aircraft has to exist
@@ -372,11 +383,49 @@ public class AGameModeBase : AInfo {
 
                 Console.WriteLine($"AGameModeBase: destroyed {warmupPawn.GetFName()} for the bus - " +
                                   "the player is a spectator until they jump");
+
+                // ...AND COME BACK FOR THE CAMERA NEXT TICK.
+                //
+                // WHY, and this is a hypothesis with one specific piece of evidence behind it. A
+                // player who DIED on the warmup island gets a bus view that looks right; one who
+                // boards ALIVE gets a view sitting slightly too far back. The first guess was the
+                // camera mode, and BUS_CAMERA_MODE_NAME=0 disproved it - skipping
+                // ClientSetCameraMode entirely changed nothing.
+                //
+                // What is left is TIMING. In the death case the pawn has been gone for
+                // DEATH_LINGER_SECONDS by the time this code sends the camera RPCs; in the alive
+                // case the destroy and all three RPCs go out in the SAME frame, so the client is
+                // asked to point its camera at the aircraft while it is still processing the loss of
+                // the actor it was looking at. A camera manager mid-blend settling at the wrong
+                // offset fits "slightly pulled back" exactly.
+                //
+                // This project has paid for same-frame ordering against a client twice already (the
+                // view target sent at an aircraft the client had never heard of, and
+                // ClientOnPawnDied sent before the killer had a channel), and the fix both times was
+                // to wait. BUS_CAMERA_DELAY=0 turns the wait off again for comparison.
+                _pendingBusCamera[connection] =
+                    world.TimeSeconds + EnvFloat("BUS_CAMERA_DELAY", 0.25f);
+                continue;
             }
+
+            // NOW the connection has been served - marked here rather than at the top of the loop,
+            // because the camera deferral above returns without sending anything and a connection
+            // marked boarded is never looked at again.
+            _boardedConnections.Add(connection);
 
             // The capture's order, and it is not arbitrary: camera mode, then state, then view
             // target - see UActorChannel.SendClientGotoState.
-            pcChannel.SendClientSetCameraMode(EnvName("BUS_CAMERA_MODE_NAME", 204));   // Default
+            //
+            // BUS_CAMERA_MODE_NAME=0 skips the camera mode entirely. That was an experiment about
+            // the too-far-back bus view, and it CAME BACK NEGATIVE: skipping the call changed
+            // nothing, so ClientSetCameraMode is not what makes boarding alive look different from
+            // boarding after a death. The switch is kept because it is now a known-good negative
+            // result and re-running it costs one environment variable; the timing deferral above is
+            // what replaced the hypothesis.
+            if (EnvName("BUS_CAMERA_MODE_NAME", 204) is var cameraMode and not 0) {
+                pcChannel.SendClientSetCameraMode(cameraMode);                         // Default
+            }
+
             pcChannel.SendClientGotoState(EnvName("BUS_GOTO_STATE_NAME", 322));        // Spectating
             pcChannel.SendClientSetViewTarget(aircraft);
 

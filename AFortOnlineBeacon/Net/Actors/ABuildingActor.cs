@@ -269,8 +269,20 @@ public class ABuildingActor : AActor {
     public float BuildTime { get; private set; } = BuildInDurationDefault;
 
     /// <summary>
-    ///     The animation length sent on handle 59. Half a second, which is the value the client was
-    ///     observed to accept and animate; BUILD_IN_TIME overrides it.
+    ///     FortBuildingActorSet::RepairTime - wire handle 60, and the repair half of what handle 59
+    ///     is for a placement. See where it is assigned.
+    /// </summary>
+    public float RepairTime { get; private set; } = BuildInDurationDefault;
+
+    /// <summary>
+    ///     FALLBACK build time only, for a class FortBuildingAttributes has no row for. A piece the
+    ///     table knows gets its real per-class value, and the replicated <see cref="BuildTime" />
+    ///     (handle 59) is set to the same number the health ramp uses - see where HardenTime is
+    ///     assigned. BUILD_IN_TIME overrides this fallback.
+    ///
+    ///     0.5 was never a measured build time: it was the value a client was observed to accept
+    ///     back when the real table had not been resolved, and it stayed as the REPLICATED value for
+    ///     every piece long after the real one was known.
     /// </summary>
     private static readonly float BuildInDurationDefault = Env("BUILD_IN_TIME", 0.5f);
 
@@ -417,7 +429,32 @@ public class ABuildingActor : AActor {
     /// </summary>
     private void StartHardening(float timeSeconds, float duration, int targetHitPoints) {
         bUnderConstruction = true;
-        BuildingAnimation = EBuildingAnim.EBA_Building;
+
+        // EBA_Placement, not EBA_Building - a hypothesis, and the switch is here to settle it.
+        //
+        // The enum has both (verified against the 10.40 SDK, values identical to ours), and this
+        // has always sent EBA_Building. Reported twice: a freshly placed piece looks SOLID for an
+        // instant, then plays what reads as a crumbling animation, then finishes assembling. That
+        // is what EBA_Building is - Save The World's build-up, a piece coming together out of
+        // nothing - whereas Battle Royale places a wall with a quick pop, which is what EBA_Placement
+        // is named for and what this project has never once sent.
+        //
+        // The ordering fix that came before this (SetReplicates last, so no 150 HP is ever seen)
+        // was necessary and did not change the look, which is what points at the animation rather
+        // than the health. BUILD_PLACEMENT_ANIM=1 restores EBA_Building for a side-by-side.
+        //
+        // A REPAIR IS THE OTHER ONE. This method serves both entry points and used to give them the
+        // same animation, so a repaired piece got the placement pop - which is why repairing showed
+        // no build-up effect at all, only health climbing. bIsInitiallyBuilding already tells them
+        // apart (BeginConstruction sets it true, BeginRepair false) and was simply not being read
+        // here. EBA_Building is the assemble-out-of-nothing animation, which is what a piece
+        // regaining strength should play and what placement was wrongly using.
+        //
+        // No repair GameplayCue exists to send instead: the paks carry Fort_Build_RepairStart_Cue
+        // (a SOUND) and a HUD crosshair, and no GC_/GameplayCue asset for it. The building's only
+        // proxy cue property is ProxyGameplayCueDamagePhysical (handles 67/68) - damage, with no
+        // repair sibling. So the animation is the whole of the visible effect.
+        BuildingAnimation = bIsInitiallyBuilding ? (EBuildingAnim) PlacementAnim : (EBuildingAnim) RepairAnim;
 
         _constructionStartedAt = timeSeconds;
         _constructionEndsAt = timeSeconds + MathF.Max(0f, duration);
@@ -439,6 +476,8 @@ public class ABuildingActor : AActor {
     public bool TickConstruction(float timeSeconds) {
         if (!bUnderConstruction) return false;
 
+        _lastPublishTime = timeSeconds;
+
         if (timeSeconds >= _constructionEndsAt) {
             bUnderConstruction = false;
             bIsInitiallyBuilding = false;
@@ -453,7 +492,17 @@ public class ABuildingActor : AActor {
         var health = _constructionStartHealth + (_constructionTargetHealth - _constructionStartHealth) * progress;
 
         CurrentHitPoints = Math.Clamp((int) health, 1, MaxHitPoints);
-        SyncAttributeSet();
+
+        // PUBLISHED, BUT THROTTLED - and the interval is measured, not chosen. Replicating every
+        // tick made the client count 90, 91, 92 ... 150 one hit point at a time; not replicating the
+        // ramp at all was the other extreme and equally wrong. PR3.0 was watched placing a wall and
+        // updates roughly twice a second, which for a 4-second wood build is about eight steps of
+        // ~7 HP - visibly a climb, nowhere near a per-tick stream.
+        //
+        // Damage is unaffected: ApplyDamage publishes directly, so a hit still lands instantly even
+        // in the middle of an interval.
+        if (timeSeconds - _lastHealthPublishAt >= HealthPublishInterval) SyncAttributeSet();
+
         return true;
     }
 
@@ -494,6 +543,35 @@ public class ABuildingActor : AActor {
             : attributes.BuildTime > 0f ? attributes.BuildTime
             : BuildInDurationDefault;
 
+        // AND THE REPLICATED ONE IS THE SAME NUMBER. It never used to be: BuildTime stayed at the
+        // 0.5s default for every piece while the health ramp ran for the real 4/12/25, so the client
+        // was told the build finished half a second in and then watched the health go on climbing
+        // for up to another twenty-five seconds. That is the "health at placement and the way it
+        // increases are a bit off" this had left.
+        //
+        // They are the same number in the game data too, which is what makes this a fix rather than
+        // a tuning choice: handle 59 replicates `FortBuildingActorSet.BuildTime`, and that is the
+        // exact attribute FortBuildingAttributes resolves per class through AttributeInitKeys. The
+        // old 0.5 predates that table - it was the value a client was seen to accept back when the
+        // real one was unknown.
+        BuildTime = HardenTime;
+
+        // AND THE REPAIR WINDOW, handle 60, which had been Reserved since this class was written -
+        // declared, correctly numbered, never sent. So a client was told a repair takes ZERO
+        // seconds, and there is no window in which to play anything: the build-up animation
+        // appeared (that rides BuildingAnimation) while the heal part of the effect did not.
+        // Exactly the bug BuildTime had, in the property immediately beside it.
+        //
+        // Equal to BuildTime, and that is READ rather than assumed. AthenaAttributesBuildingSection
+        // carries `<category>.FortBuildingActorSet.RepairTime` next to the BuildTime row this
+        // already uses, and for every material a player can build with they are the same number:
+        //
+        //     Wood 4/4    Stone 12/12    Metal 25/25    (Permanite 4/20 - not player-buildable)
+        //
+        // So one value serves both here. If Permanite ever becomes reachable, this needs its own
+        // baked column.
+        RepairTime = HardenTime;
+
         BuildingAttributeSet = UObjectGlobals.NewObject<UFortBuildingActorSet>(
             this, GUClassArray.StaticClass<UFortBuildingActorSet>(), new FName("BuildingAttributeSet"),
             EObjectFlags.RF_Transient);
@@ -517,10 +595,63 @@ public class ABuildingActor : AActor {
 
     /// <summary>Mirrors this piece's authoritative int HP into the float attribute set the client reads. Called on every change, so the ordinary shadow-state comparison picks it up - no MarkPropertyDirty needed, the value genuinely differs.</summary>
     private void SyncAttributeSet() {
+        // THE RAMP IS NOT REPLICATED ONE HIT POINT AT A TIME. CurrentHitPoints is recomputed every
+        // tick while a piece builds or repairs, so mirroring it here put a new health value on the
+        // wire ~60 times a second and the client counted up 90, 91, 92 ... 150 over four seconds.
+        //
+        // The other extreme - publishing only on events and letting the client draw its own ramp -
+        // was tried and is ALSO wrong: PR3.0 was watched placing a wall and it updates roughly twice
+        // a second, so a real server does send the climb, just not every tick. TickConstruction
+        // therefore calls this on a throttle (HealthPublishInterval) while every EVENT - placement,
+        // damage, repair, completion, destruction - calls it directly and lands immediately.
+        //
+        // Both replicated paths read ReplicatedHitPoints, so they cannot disagree with each other.
+        ReplicatedHitPoints = CurrentHitPoints;
+        _lastHealthPublishAt = _lastPublishTime;
+
         if (BuildingAttributeSet == null) return;
-        BuildingAttributeSet.Health = CurrentHitPoints;
+        BuildingAttributeSet.Health = ReplicatedHitPoints;
         BuildingAttributeSet.MaxHealth = MaxHitPoints;
     }
+
+    /// <summary>
+    ///     The health this piece REPLICATES - see SyncAttributeSet for why it is not simply
+    ///     <see cref="CurrentHitPoints" />. Wire handle 61.
+    /// </summary>
+    public int ReplicatedHitPoints { get; private set; } = DefaultHitPoints;
+
+    private float _lastHealthPublishAt = float.NegativeInfinity;
+
+    /// <summary>
+    ///     World time as of the last ramp tick, so SyncAttributeSet can stamp the throttle without
+    ///     every one of its six callers having to pass a clock it does not otherwise need.
+    /// </summary>
+    private float _lastPublishTime;
+
+    /// <summary>
+    ///     How often the harden ramp may put a new health value on the wire. MEASURED against PR3.0,
+    ///     which updates a building it is placing about twice a second - not a comfort setting.
+    ///     BUILD_HEALTH_PUBLISH_INTERVAL overrides it.
+    /// </summary>
+    private static readonly float HealthPublishInterval = Env("BUILD_HEALTH_PUBLISH_INTERVAL", 0.5f);
+
+    /// <summary>
+    ///     Which EBuildingAnim a piece plays while it builds in. 4 = EBA_Placement (the default now),
+    ///     1 = EBA_Building. See StartHardening for why this is a switch rather than a constant.
+    /// </summary>
+    private static readonly byte PlacementAnim =
+        byte.TryParse(Environment.GetEnvironmentVariable("BUILD_PLACEMENT_ANIM"), out var anim)
+            ? anim
+            : (byte) EBuildingAnim.EBA_Placement;
+
+    /// <summary>
+    ///     Which EBuildingAnim a REPAIR plays. 1 = EBA_Building, the assemble-out-of-nothing
+    ///     build-up - see StartHardening. BUILD_REPAIR_ANIM overrides it.
+    /// </summary>
+    private static readonly byte RepairAnim =
+        byte.TryParse(Environment.GetEnvironmentVariable("BUILD_REPAIR_ANIM"), out var repair)
+            ? repair
+            : (byte) EBuildingAnim.EBA_Building;
 
     /// <summary>
     ///     Applies damage and returns true once this drops the piece to 0. Never goes negative and
@@ -531,6 +662,24 @@ public class ABuildingActor : AActor {
     public bool ApplyDamage(int amount) {
         if (CurrentHitPoints <= 0 || amount <= 0) return false;
         CurrentHitPoints = Math.Max(0, CurrentHitPoints - amount);
+
+        // DAMAGE TAKEN DURING A RAMP HAS TO MOVE THE RAMP, or the next tick undoes it.
+        //
+        // TickConstruction does not decrement health, it RECOMPUTES it from two remembered endpoints
+        // and the elapsed fraction - which is exactly what lets a partial repair reuse the same
+        // code. The consequence is that anything else writing CurrentHitPoints while
+        // bUnderConstruction is true survives only until the next tick, and then the ramp puts its
+        // own value back. Live symptom, reported precisely: "health updates in real time EXCEPT
+        // while it is building or being repaired".
+        //
+        // Both endpoints move by the damage, not just the start: lowering only the start would let
+        // the ramp climb back to a target that no longer reflects the hit, so shooting a wall while
+        // it built would cost the shooter nothing at all once the ramp finished.
+        if (bUnderConstruction) {
+            _constructionStartHealth = Math.Max(0, _constructionStartHealth - amount);
+            _constructionTargetHealth = Math.Max(1, _constructionTargetHealth - amount);
+        }
+
         SyncAttributeSet();
         return CurrentHitPoints <= 0;
     }

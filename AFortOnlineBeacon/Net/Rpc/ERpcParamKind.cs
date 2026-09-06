@@ -65,6 +65,16 @@ public enum ERpcParamKind {
     /// </summary>
     AssetPath,
 
+    /// <summary>
+    ///     An FName parameter - UNameProperty::NetSerializeItem defers to
+    ///     UPackageMap::StaticSerializeName, the same encoding a Name PROPERTY uses.
+    ///
+    ///     Exists for ACharacter::ServerMove's `ClientBaseBoneName`, which sits between the movement
+    ///     base and the movement mode. Nothing needs the bone name itself; it needs to be READ so
+    ///     that the parameter after it can be.
+    /// </summary>
+    Name,
+
     Float,
     Vector,
 

@@ -89,6 +89,11 @@ public abstract class UNetDriver {
         // the first few lines of the log, not buried after a join. See its doc comment.
         NativeClassNetCache.EnsureVerified();
         UActorChannel.VerifyLifetimeConditions();
+
+        // ...and that every RPC table actually built. See VerifyRpcTables for what goes wrong when a
+        // shared parameter list is declared below the dictionary that uses it, and why finding out
+        // at startup is worth a reflection walk.
+        Rpc.NativeRpcHandlers.VerifyRpcTables();
         BuildingStructuralSupportSystem.VerifyCollisionGeometry();
         return true;
     }
