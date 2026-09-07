@@ -128,6 +128,10 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // Collected pickups still flying to whoever took them - see FortPickupFlightSystem.
         Net.FortPickupFlightSystem.Tick(this, TimeSeconds);
 
+        // WELCOME_MESSAGE resends, so a HUD that is not up yet can be told apart from a channel
+        // nobody reads. No-op unless that variable is set - see FortWelcomeMessage.
+        Net.FortWelcomeMessage.Tick(this, TimeSeconds);
+
         // The storm. Off unless SAFEZONE_ENABLED=1 - see FortSafeZoneSystem for why it is opt-in.
         // Placed with the structural tick rather than after the NetDriver so a radius change and the
         // damage it causes go out on the same tick they happen.

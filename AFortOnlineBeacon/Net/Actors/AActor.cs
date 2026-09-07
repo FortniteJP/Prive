@@ -298,6 +298,59 @@ public class AActor : UObject {
     protected virtual void Destroyed() {}
 
     /// <summary>
+    ///     AActor::bTearOff - "stop replicating me, and let every client KEEP what it has".
+    ///
+    ///     THE THIRD WAY AN ACTOR CAN LEAVE THE NETWORK, and the one this project did not have. A
+    ///     destroy closes the channel with EChannelCloseReason::Destroyed and the client deletes the
+    ///     actor; dormancy closes it with ::Dormancy and the client keeps a live actor it expects to
+    ///     hear about again; a TEAR-OFF closes it with ::TearOff and the client keeps the actor as a
+    ///     purely local one, never to be updated again. UActorChannel::CleanUp's dormancy branch
+    ///     tests `!GetTearOff()` precisely to keep the three apart.
+    ///
+    ///     A DEAD PLAYER'S PAWN IS THE CASE IT EXISTS FOR, and the 0906 capture is unambiguous:
+    ///
+    ///         13:08:20.960  Sent RPC: ...::ClientOnPawnDied
+    ///         13:08:20.970  UActorChannel::Close: ChIndex: 7, Actor: PlayerPawn_Athena_C_2147462182,
+    ///                       Reason: TearOff
+    ///
+    ///     Ten milliseconds, and the reason is TearOff. The corpse stays on the client because the
+    ///     client owns it now; the server is simply done with it.
+    /// </summary>
+    public bool bTearOff { get; private set; }
+
+    /// <summary>
+    ///     AActor::TearOff. Takes effect on the next replication pass, where UNetDriver closes this
+    ///     actor's channels with EChannelCloseReason::TearOff and drops it from the network list.
+    /// </summary>
+    public void TearOff() {
+        if (bTearOff) return;
+
+        bTearOff = true;
+        Console.WriteLine($"AActor.TearOff: {GetFName()} - clients keep it, the server stops replicating it");
+    }
+
+    /// <summary>
+    ///     Drops a torn-off actor out of the replication list, once its close has been sent.
+    ///
+    ///     THE CLOSE ALONE IS NOT ENOUGH, and the first version of this leaked a reliable bunch every
+    ///     tick because of it. Destroy() removes the actor from the network list on the spot, so
+    ///     nothing reopens a channel for it; a tear-off deliberately does not destroy, so the actor
+    ///     stayed relevant, `OpenChannelsForNewlyRelevantActors` gave it a fresh channel on the very
+    ///     next pass, and the close pass closed that one too - forever. The live log is unambiguous:
+    ///     `UChannel.Close: ChIndex=16 reason=TearOff` repeating at a steady interval for as long as
+    ///     the session lasted, each one a RELIABLE bunch that the connection has to carry.
+    ///
+    ///     Called by UNetDriver after the close goes out rather than from TearOff() itself, because
+    ///     the property push that carries bTearOff=true has to happen first - and that push only
+    ///     happens while the actor is still in the list.
+    /// </summary>
+    public void FinishTearOff() {
+        GetWorld()?.NetDriver?.RemoveNetworkActor(this);
+        Console.WriteLine($"AActor.FinishTearOff: {GetFName()} left the replication list - no channel " +
+                          "will be opened for it again");
+    }
+
+    /// <summary>
     ///     AActor::Owner - wire handle 13, live-probe-confirmed. Replicated as a plain ObjectRef, so
     ///     the client can rebuild the same ownership link the server has. It matters beyond
     ///     bookkeeping: real UE derives an actor's net relevancy and its owning connection from this

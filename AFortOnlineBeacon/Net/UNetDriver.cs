@@ -156,6 +156,19 @@ public abstract class UNetDriver {
         }
     }
 
+    /// <summary>
+    ///     The same activation WITH an event payload, for an ability authored with "Activate Ability
+    ///     From Event" - see UActorChannel.SendClientActivateAbilitySucceedWithEventData.
+    /// </summary>
+    public void SendClientActivateAbilitySucceedWithEventData(AActor owner, UObject abilitySystem, int abilityHandle,
+                                                              FPredictionKey predictionKey,
+                                                              AActor? instigator, AActor? target) {
+        foreach (var connection in ClientConnections) {
+            connection.FindActorChannel(owner)?.SendClientActivateAbilitySucceedWithEventData(
+                abilitySystem, abilityHandle, predictionKey, instigator, target);
+        }
+    }
+
     /// <summary>The end of the same handshake - see UActorChannel.SendClientEndAbility.</summary>
     public void SendClientEndAbility(AActor owner, UObject abilitySystem, int abilityHandle,
                                      FPredictionKey predictionKey) {
@@ -302,6 +315,25 @@ public abstract class UNetDriver {
                 // marking it destroyed server-side is invisible on its own.
                 if (actor.IsPendingKillPending() && !actorChannel.Closing) {
                     actorChannel.Close(EChannelCloseReason.Destroyed);
+                    updated++;
+                    continue;
+                }
+
+                // TORN OFF. Same shape as the destroy above and the opposite outcome on the client:
+                // the channel closes with ::TearOff and the actor STAYS, as a purely local one that
+                // will never be updated again. A dead player's corpse is what this is for - see
+                // AActor.TearOff and the capture line it quotes. Ordered after the destroy so an
+                // actor that is both simply gets destroyed, which is the stronger statement.
+                if (actor.bTearOff && !actorChannel.Closing) {
+                    actorChannel.Close(EChannelCloseReason.TearOff);
+
+                    // AND THEN OUT OF THE LIST, or the next pass opens a fresh channel for an actor
+                    // that is still relevant and this closes that one too - a reliable bunch per
+                    // tick, forever. See AActor.FinishTearOff for the live log that showed it. The
+                    // ReplicateActorUpdate above has already carried bTearOff=true, which is the
+                    // half that has to happen while the actor is still in the list.
+                    actor.FinishTearOff();
+
                     updated++;
                     continue;
                 }

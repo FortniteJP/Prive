@@ -98,7 +98,25 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.Bool,
             GetByteValue = obj => (byte) (((AActor) obj).bReplicateMovement ? 1 : 0)
         },
-        Reserved("bTearOff"),
+        new() {
+            // 3. AActor::bTearOff - and it is the PROPERTY, not the close reason, that makes a
+            // tear-off work. Closing the channel with EChannelCloseReason::TearOff is only half of
+            // it: UActorChannel::CleanUp asks the CLIENT'S OWN COPY of the actor whether it is torn
+            // off, and an actor whose bTearOff is still false falls through to
+            // DestroyActorAndComponents() no matter what reason the close carried.
+            //
+            // That is exactly what happened live: dead players' bodies vanished INSTANTLY - worse
+            // than the four-second stand-then-vanish it replaced - because this was Reserved(...)
+            // and so nothing was ever sent. The client was told "close, reason TearOff" about an
+            // actor it believed was an ordinary replicated one, and did the ordinary thing.
+            //
+            // It has to arrive BEFORE the close, which it does: UNetDriver's pass calls
+            // ReplicateActorUpdate() and only then looks at whether to close, the same ordering the
+            // destroy path documents ("closed AFTER its last property update").
+            Name = "bTearOff",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AActor) obj).bTearOff ? 1 : 0)
+        },
         Reserved("bCanBeDamaged"),
         new() {
             // NOT swapped on send: SendProperties_r (RepLayout.cpp) reads RepState->SavedRole /
@@ -1883,7 +1901,20 @@ internal static class NativeRepLayouts {
         },
         Reserved("TeamScorePlacement"), // 231, 0x0DB4 - int32
         Reserved("TeamScore"), // 232, 0x0DB8 - int32
-        Reserved("Place"), // 233, 0x0DBC - int32
+        new() {
+            // 233, 0x0DBC. WHERE YOU FINISHED, and the number Battle Royale's death screen is built
+            // around - "#12" is the whole headline of it. It was Reserved(...), so the client has
+            // been reading zero for every death this server has ever reported, and a placement of
+            // zero is not a placement.
+            //
+            // That is a hypothesis about the missing death UI, not a proven cause. It is worth
+            // trying first because it is one getter, it is obviously wrong as it stands, and today
+            // has already turned up five other features that did nothing for exactly this reason -
+            // see the Reserved(...) tally in [[afortonlinebeacon-status]].
+            Name = "Place",
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((APlayerState) obj).Place
+        },
         Reserved("DownScore"), // 234, 0x0DC0 - int32
         Reserved("KillScore"), // 235, 0x0DC4 - int32
         Reserved("NumChestsOpened"), // 236, 0x0DDC - int32

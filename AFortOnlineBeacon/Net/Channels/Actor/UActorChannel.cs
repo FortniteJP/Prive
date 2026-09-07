@@ -298,6 +298,10 @@ public class UActorChannel : UChannel {
             // serializer here and an empty container is what an ordinary death carries anyway.
             "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
             "DeathInfo.Distance", "DeathInfo.bInitialized",
+            // Handle 233 - where the player finished, which Battle Royale's death screen is built
+            // around. Zero until they die, and it was Reserved(...) until 2026-09-07, so the client
+            // has been told "#0" for every death this server ever reported.
+            "Place",
             "TeamIndex", "SquadId",
             // Handle 69 - this player's team-private actor. See FortManagementActors.cs.
             "PlayerTeamPrivate",
@@ -380,6 +384,10 @@ public class UActorChannel : UChannel {
         // with no controller and no player state.
         APawn pawnActor => WithBasedMovement(WithPawnAttachment(new HashSet<string> {
             "RemoteRole", "Role", "Owner", "PlayerState", "Controller",
+            // Handle 3, and only ever true for a corpse. Without it in this walk list the property
+            // is never compared and can never start being sent, which is precisely how dead bodies
+            // came to vanish on the instant - see NativeRepLayouts' entry for it.
+            "bTearOff",
             // Handles 2 and 6 - where everyone ELSE sees this pawn. Without them a remote player is
             // frozen at the position their actor-spawn header carried; see Core.Math.FRepMovement.
             "bReplicateMovement", "ReplicatedMovement",
@@ -950,7 +958,10 @@ public class UActorChannel : UChannel {
     private static readonly HashSet<string> NeverSentAtOpen = new() {
         "bIsDying", "LastReplicatedEmoteExecuted",
         "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
-        "DeathInfo.Distance", "DeathInfo.bInitialized"
+        "DeathInfo.Distance", "DeathInfo.bInitialized",
+        // Zero until the player is eliminated, and zero IS the client's default - so it belongs
+        // here rather than in the opening burst, and the per-tick diff still walks it.
+        "Place"
     };
 
     /// <summary>
@@ -2777,9 +2788,118 @@ public class UActorChannel : UChannel {
             writer.WriteBit(false);         // 0x28 bit 0 bDroppedBackpack
             writer.WriteBit(notifyUI);      // 0x28 bit 1 bNotifyUI
 
-            // 0x30 Tags - an empty FGameplayTagContainer. See above for the six bits.
-            var tagCount = 0u;
-            writer.SerializeInt(&tagCount, 1u << 6);
+            // 0x30 Tags - an empty FGameplayTagContainer, which is ONE BIT SET, not six zeroes.
+            //
+            // THIS WAS WRONG, and wrong in the way that hurts: `FGameplayTagContainer::NetSerialize`
+            // (GameplayTagContainer.cpp:968) opens with "1st bit to indicate empty tag container or
+            // not (empty tag containers are frequently replicated). Early out if empty." Writing six
+            // zeroes told the client the container was NOT empty and then handed it a count field,
+            // so it read 1 + NumBitsForContainerSize = 7 bits where six were written and ran off the
+            // end of the RPC. Found while reading the same function for FGameplayEventData - see
+            // Core/FGameplayTypes.
+            FGameplayTypes.WriteEmptyTagContainer(writer);
+        });
+
+    /// <summary>
+    ///     AFortPlayerController::ClientSendMessage(FText Message, USoundBase* StartSound) - an
+    ///     arbitrary string to one client, with an optional sound.
+    ///
+    ///     THE FIRST FText THIS PROJECT HAS EVER WRITTEN. See Core/FText for the format and where it
+    ///     is read from; the short version is that an FText parameter has no NetSerializeItem, so it
+    ///     takes the ordinary archive path, and a literal built the way a server builds one is
+    ///     culture-invariant and therefore skips all the FTextHistory machinery.
+    ///
+    ///     WHAT IT IS FOR, and what it is NOT. It is not the elimination feed: that feed's text is
+    ///     composed CLIENT-SIDE from the two PlayerStates' names, and
+    ///     `AFortGameStateAthena::KillFeedEntry` - a TArray&lt;FText&gt; that looks like exactly the right
+    ///     hook - is not a replicated property at all (rep_handles has the GameState going from
+    ///     WinningPlayerState at 0x1358 straight past it). This is the channel that does carry a
+    ///     server-chosen string.
+    ///
+    ///     The sound is sent as a null object reference. A real SoundBase would have to be a
+    ///     name-stable asset the client can resolve, which is a separate piece of work and not what
+    ///     the message is for.
+    ///
+    ///     UNTESTED against a live client.
+    /// </summary>
+    /// <summary>
+    ///     APlayerController::ClientTeamMessage(APlayerState* SenderPlayerState, FString S, FName Type,
+    ///     float MsgLifeTime) - UE's own chat/message path, and the OTHER half of an experiment.
+    ///
+    ///     WHY BOTH THIS AND ClientSendMessage. The FText one went out cleanly - the log shows
+    ///     `ClientSendMessage fieldIndex=139 numPayloadBits=196` and the session carried on normally,
+    ///     which a corrupt FString length inside it would very likely not have survived - and yet
+    ///     nothing appeared on screen. Two explanations remain and they need separating:
+    ///
+    ///       * the FText encoding is subtly wrong, or
+    ///       * ClientSendMessage has no in-match UI bound to it at all. Its neighbours in the field
+    ///         list are ClientSendConfirmationMessage and ClientRequestReadyCheck, which are frontend
+    ///         and party things, so this is quite likely.
+    ///
+    ///     This RPC carries its text as an **FString**, which this project has been writing correctly
+    ///     for a long time (FUniqueNetIdRepl and NMT_BeaconJoin both depend on it). So: if this one
+    ///     shows text and the FText one does not, the encoding is exonerated and the answer is which
+    ///     UI is listening. If NEITHER shows anything, the FText writer is not the suspect either and
+    ///     the question becomes which channel Fortnite's HUD actually draws.
+    ///
+    ///     `Type` is sent as the hardcoded EName `None` (index 0), which is what
+    ///     APlayerController::ClientMessage itself defaults to and what the HUD then substitutes its
+    ///     own default for. `Say` is NOT a hardcoded EName in 4.23 - UnrealNames.inl has no entry for
+    ///     it - so sending it would mean the string form of an FName, which is a separate encoding
+    ///     and not worth mixing into an experiment about text. MsgLifeTime 0 means "HUD default".
+    ///
+    ///     UNTESTED against a live client.
+    /// </summary>
+    public void SendClientTeamMessage(UObject? sender, string message, uint typeNameIndex, float lifeTime = 0f) =>
+        SendRpc("ClientTeamMessage", writer => {
+            writer.WriteBit(true);
+            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, sender);
+
+            writer.WriteBit(true);
+            writer.WriteString(message);
+
+            writer.WriteBit(true);
+            WriteHardcodedName(writer, typeNameIndex);
+
+            writer.WriteBit(true);
+            writer.WriteFloat(lifeTime);
+        });
+
+    public void SendClientSendMessage(string message) =>
+        SendRpc("ClientSendMessage", writer => {
+            writer.WriteBit(true);                       // Message is present
+            Core.FText.Serialize(writer, message);
+
+            writer.WriteBit(true);                       // StartSound is present...
+            ((UPackageMapClient) writer.PackageMap!).SerializeObject(writer, null);   // ...as null
+        });
+
+    /// <summary>
+    ///     AFortPlayerControllerPvP::ClientReceiveKillNotification(AFortPlayerStateZone* Killer,
+    ///     AFortPlayerStateZone* Killed) - the elimination feed entry.
+    ///
+    ///     THE SIGNATURE IS READ, NOT INFERRED FROM THE SIZE. The 0906 capture shows this RPC going
+    ///     out 1 ms after ClientOnPawnDied at 5.6 bytes, and a byte count is not a signature - it was
+    ///     left unimplemented for exactly that reason until the SDK could be asked
+    ///     (`FN_FortniteGame_classes.hpp:8522`). Two object references, and the parameter rule this
+    ///     project already proved with ClientReportDamagedResourceBuilding applies: one presence bit
+    ///     each, then the value.
+    ///
+    ///     A SOLO DEATH HAS NO KILLER, and null is the honest thing to send - the storm and a fall
+    ///     eliminate you without anyone doing it. Whether the client draws a feed line for a null
+    ///     killer is its business; a fabricated killer would be a lie that shows up in the feed.
+    ///
+    ///     UNTESTED against a live client.
+    /// </summary>
+    public void SendClientReceiveKillNotification(UObject? killer, UObject? killed) =>
+        SendRpc("ClientReceiveKillNotification", writer => {
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+            writer.WriteBit(true);
+            packageMap.SerializeObject(writer, killer);
+
+            writer.WriteBit(true);
+            packageMap.SerializeObject(writer, killed);
         });
 
     /// <summary>
@@ -2990,6 +3110,40 @@ public class UActorChannel : UChannel {
 
                 writer.WriteBit(true);              // PredictionKey is present
                 FPredictionKey.Write(writer, predictionKey);
+            });
+
+    /// <summary>
+    ///     UAbilitySystemComponent::ClientActivateAbilitySucceedWithEventData(FGameplayAbilitySpecHandle,
+    ///     FPredictionKey, FGameplayEventData) - the same activation, carrying the payload an ability
+    ///     authored with "Activate Ability From Event" cannot run without.
+    ///
+    ///     THE CLIENT ASKED FOR THIS BY NAME. Activating GA_DefaultPlayer_Death with the plain
+    ///     variant above produced, in its own log, in the same millisecond:
+    ///
+    ///         GA_DefaultPlayer_Death_C_2147464760 Activated
+    ///         Warning: Ability ... expects event data but none is being supplied.
+    ///         GA_DefaultPlayer_Death_C_2147464760 EndAbility
+    ///
+    ///     which is why the capture uses this variant [147.9 bytes] and not the other one. See
+    ///     Core/FGameplayTypes for every sub-format in the payload and where each was read from.
+    ///
+    ///     UNTESTED against a live client.
+    /// </summary>
+    public void SendClientActivateAbilitySucceedWithEventData(UObject abilitySystem, int abilityHandle,
+                                                              FPredictionKey predictionKey,
+                                                              AActor? instigator, AActor? target,
+                                                              float magnitude = 0f) =>
+        SendSubObjectRpc(abilitySystem, NativeClassNetCache.FortAbilitySystemComponentCache,
+            "ClientActivateAbilitySucceedWithEventData", writer => {
+                writer.WriteBit(true);              // AbilityToActivate
+                writer.WriteInt32(abilityHandle);
+
+                writer.WriteBit(true);              // PredictionKey
+                FPredictionKey.Write(writer, predictionKey);
+
+                writer.WriteBit(true);              // TriggerEventData
+                Core.FGameplayTypes.WriteEventData(writer, (UPackageMapClient) writer.PackageMap!,
+                                                   instigator, target, magnitude);
             });
 
     /// <summary>

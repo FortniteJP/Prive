@@ -795,7 +795,19 @@ internal static class FortProjectileSystem {
                         break;
                     }
 
-                    FortDamageSystem.ApplyDamage(victim, playerDamage, EDeathCause.Grenade);
+                    // THE THROWER IS THE KILLER, and this used to leave that out. The instigator was
+                    // already resolved above and used for logging, and ApplyDamage's fourth
+                    // parameter is optional, so the omission was invisible: grenade kills reported
+                    // `killer=none`, and everything downstream that needs a killer got nothing -
+                    // DeathInfo.FinisherOrDowner, ClientOnPawnDied's killer references, and
+                    // ClientReceiveKillNotification, whose whole content is (Killer, Killed).
+                    //
+                    // Found by trying to test the elimination feed: the user blew themselves up on
+                    // purpose to produce a death WITH a killer, and it still logged killer=none.
+                    // A self-elimination is a real killer, and Fortnite reports it as one.
+                    var killer = instigator?.PlayerState ?? instigator?.Controller?.PlayerState;
+
+                    FortDamageSystem.ApplyDamage(victim, playerDamage, EDeathCause.Grenade, killer);
                     pawnsHit++;
                     if (pawn == instigator)
                         Console.WriteLine("FortProjectileSystem:   ...including the thrower - the real ability does not exclude them either.");

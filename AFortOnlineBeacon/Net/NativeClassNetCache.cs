@@ -680,6 +680,7 @@ internal static class NativeClassNetCache {
         if (mismatches.Count == 0 && unknown.Count == 0) {
             Console.WriteLine($"NativeClassNetCache: all {CaptureFieldIndices.Length} capture-known " +
                               "FieldNetIndex values match (PlayerController and Pawn chains).");
+            ReportUnverifiedSenders();
             return;
         }
 
@@ -688,6 +689,32 @@ internal static class NativeClassNetCache {
                           "field tables before trusting anything else. (VERIFY_NET_FIELDS=0 silences this.)");
         foreach (var line in mismatches) Console.WriteLine($"  MISMATCH {line}");
         foreach (var name in unknown) Console.WriteLine($"  MISSING  {name}: in the capture, in neither of our field tables");
+    }
+
+    /// <summary>
+    ///     RPCs this server SENDS whose FieldNetIndex the capture cannot confirm, printed with the
+    ///     index we computed for them.
+    ///
+    ///     WHY THIS IS WORTH A LINE IN EVERY LOG. The check above verifies 51 indices against a real
+    ///     capture, which is exactly the ones the capture happened to contain. An RPC outside that
+    ///     set rests entirely on this project's model of the class-field ordering, and that model has
+    ///     already been a poor predictor once in this very range: between bHasServerFinishedLoading
+    ///     and DelayedQuickBarActions only 5 entries separate them by declaration while a live client
+    ///     places 26 handles in between (see NativeRepLayouts.PlayerControllerProps).
+    ///
+    ///     A wrong index does not throw. The client reads the RPC as some OTHER UFunction on the
+    ///     chain, or as none, and the feature silently does nothing - the same failure shape as a
+    ///     Reserved(...) property. Printing the number lets a live client log settle it in one line
+    ///     instead of a decoding session, which is the cheaper instrument every time
+    ///     (see [[feedback-live-probe-over-dump-inference]]).
+    /// </summary>
+    private static void ReportUnverifiedSenders() {
+        foreach (var name in new[] { "ClientReceiveKillNotification" }) {
+            var index = PlayerControllerCache.GetFromName(name)?.FieldNetIndex;
+            Console.WriteLine($"NativeClassNetCache: {name} is NOT among the capture-verified indices - " +
+                              $"we compute FieldNetIndex={index?.ToString() ?? "MISSING"}. If the elimination " +
+                              "feed does not appear, this number is the first thing to doubt.");
+        }
     }
 
     /// <summary>

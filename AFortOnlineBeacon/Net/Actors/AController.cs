@@ -93,6 +93,18 @@ public class AController : AActor {
         "/Script/FortniteGame.Default__FortGameplayAbility_Sprint",
         "/Script/FortniteGame.Default__FortGameplayAbility_RangedWeapon",
         "/Game/Abilities/Player/Generic/Traits/DefaultPlayer/GA_DefaultPlayer_InteractSearch.Default__GA_DefaultPlayer_InteractSearch_C",
+        // THE DEATH ABILITY, and the reason it is granted at spawn rather than at death: an
+        // activation naming a spec the client has never been told about is one it parks and retries,
+        // and a death is over long before OnRep_ActivateAbilities gets around to it. Real servers
+        // grant it on spawn too - it is third in the capture's list, right after Jump and Sprint.
+        //
+        // This is the last structural difference between this server's death and the capture's.
+        // The capture sends ClientActivateAbilitySucceedWithEventData [147.9 bytes] in the same
+        // frame just before ClientOnPawnDied, and this server has never activated ANY client ability
+        // for a death. See FortDamageSystem.Tick, which activates it with the plain (no event data)
+        // variant first - that RPC already works here for emotes, and whether the ability needs a
+        // payload is exactly what the cheap attempt finds out.
+        "/Game/Abilities/Player/Generic/Traits/DefaultPlayer/GA_DefaultPlayer_Death.Default__GA_DefaultPlayer_Death_C",
         // Jumping out of the battle bus crashes the client about a second into the skydive, and
         // this is id 12 of the 21 abilities a real server grants - none of 3..21 were granted here.
         // A missing ability normally means "nothing happens" rather than a crash, so this is a

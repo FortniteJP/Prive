@@ -298,8 +298,15 @@ public static class FortDamageSystem {
 
             // One fewer player alive. This is what the HUD's "N left" reads (handle 116), and it is
             // also the number the match-over check will want when there is one.
-            if (controller.GetWorld()?.GameState is { } gameState && gameState.PlayersLeft > 0) {
-                gameState.PlayersLeft--;
+            //
+            // AND WHERE THIS PLAYER FINISHED, taken BEFORE the decrement because the count still
+            // includes them: die when six are left and you placed sixth. Handle 233 was Reserved(...)
+            // until now, so every death this server has reported carried a placement of zero - see
+            // NativeRepLayouts' entry for it, and note this is a lead on the missing death screen
+            // rather than a confirmed fix.
+            if (controller.GetWorld()?.GameState is { } gameState) {
+                victim.Place = Math.Max(1, gameState.PlayersLeft);
+                if (gameState.PlayersLeft > 0) gameState.PlayersLeft--;
             }
         }
 
@@ -321,12 +328,26 @@ public static class FortDamageSystem {
     private static readonly List<FPendingDeath> Pending = new();
 
     /// <summary>
-    ///     How long the body stays before it is taken away and the player becomes a spectator. Long
-    ///     enough for the client to have played its own death handling; short enough not to leave a
-    ///     corpse standing about. Not a sourced number.
+    ///     How long after ClientOnPawnDied the pawn is torn off and the player becomes a spectator.
+    ///
+    ///     MEASURED NOW, at 0.01s. This was 4 seconds and its comment said "Not a sourced number" -
+    ///     it was a guess about how long a client needs to play its own death handling. The 0906
+    ///     capture's one death answers it: ClientOnPawnDied at 13:08:20.960, the pawn's channel
+    ///     closing at 13:08:20.970. TEN MILLISECONDS - one frame.
+    ///
+    ///     Four seconds was not merely too long, it was too long IN THE WRONG DIRECTION. The old
+    ///     code destroyed the body at the end of it, so the corpse stood about for four seconds and
+    ///     then vanished; the real server tears it off immediately and the corpse stays for good. The
+    ///     linger was compensating for the wrong teardown, which is why shortening it only makes
+    ///     sense together with AActor.TearOff.
+    ///
+    ///     Kept as a small delay rather than folded into the same frame on purpose: this project has
+    ///     paid three times for sending an RPC in the same frame as the actor change it refers to
+    ///     (see [[bus-camera-mode-hypothesis]]), and one tick of separation costs nothing.
+    ///     DEATH_LINGER_SECONDS still overrides it.
     /// </summary>
     private static float LingerSeconds =>
-        float.TryParse(Environment.GetEnvironmentVariable("DEATH_LINGER_SECONDS"), out var v) ? v : 4f;
+        float.TryParse(Environment.GetEnvironmentVariable("DEATH_LINGER_SECONDS"), out var v) ? v : 0.01f;
 
     /// <summary>
     ///     Finishes every death that <see cref="Kill"/> started. Two beats, both deferred for reasons
@@ -364,8 +385,19 @@ public static class FortDamageSystem {
                 if (death.KillerPawn != null && connection.FindActorChannel(death.KillerPawn) == null) continue;
                 if (death.Killer != null && connection.FindActorChannel(death.Killer) == null) continue;
 
+                // THE DEATH ABILITY FIRST, which is the order the capture uses: the activation goes
+                // out in the same frame, a few milliseconds AHEAD of ClientOnPawnDied.
+                ActivateDeathAbility(world, death.Controller);
+
                 pcChannel.SendClientOnPawnDied(death.Killer, death.KillerPawn, death.KillerPawn,
                                                lethalDamage: death.Controller.PlayerState?.HealthSet?.MaxHealth ?? 100f);
+
+                // THE ELIMINATION FEED, 1 ms after ClientOnPawnDied in the capture and sent in the
+                // same breath here for the same reason the death report is: both name the killer's
+                // PlayerState, and the guard above has already established that it is resolvable on
+                // this connection. See SendClientReceiveKillNotification for the signature's source.
+                pcChannel.SendClientReceiveKillNotification(death.Killer, death.Controller.PlayerState);
+
                 death.ReportedAt = now;
 
                 Console.WriteLine($"FortDamageSystem: sent ClientOnPawnDied to {death.Controller.GetFName()} " +
@@ -377,6 +409,17 @@ public static class FortDamageSystem {
             Pending.RemoveAt(i);
 
             if (death.Pawn == null || Environment.GetEnvironmentVariable("DEATH_KEEP_BODY") is "1") continue;
+
+            // THE BODY IS TORN OFF, NOT DESTROYED - measured, and it is the whole difference between
+            // a corpse and a body that pops out of existence. The 0906 capture's one death reads:
+            //
+            //     13:08:20.960  Sent RPC: ...::ClientOnPawnDied
+            //     13:08:20.970  UActorChannel::Close: ChIndex: 7, PlayerPawn_Athena_C_2147462182,
+            //                   Reason: TearOff
+            //
+            // Ten milliseconds later, with reason TearOff. See AActor.TearOff for what the client
+            // does with each of the three close reasons. DEATH_TEAR_OFF=0 restores the destroy.
+            var tearOff = Environment.GetEnvironmentVariable("DEATH_TEAR_OFF") is not "0";
 
             // WHERE THE CAMERA GOES. The killer's pawn is what a real match uses; failing that, any
             // other living player, which is what a real match falls back to when the killer has
@@ -393,16 +436,92 @@ public static class FortDamageSystem {
             // The teardown order the battle bus already proved - see the doc comment.
             death.Pawn.UnequipCurrentWeapon();
             death.Controller.UnPossess();
-            death.Pawn.Destroy();
+
+            if (tearOff) death.Pawn.TearOff();
+            else death.Pawn.Destroy();
+
             if (death.Controller.PlayerState?.AbilitySystemComponent is { } asc) asc.AvatarActor = null;
 
-            pcChannel.SendClientGotoState(322);   // NAME_Spectating - a spectator has no pawn
+            // NO ClientGotoState - and that is a correction, not an omission. This sent
+            // ClientGotoState(322 = NAME_Spectating) on the reasoning that a spectator has no pawn,
+            // which the battle bus does need. A real DEATH does not: sixty thousand log lines after
+            // the capture's death contain no ClientGotoState of any kind. The client leaves its own
+            // playing state off the back of ClientOnPawnDied - it answers within 126 ms with
+            // ServerClientPawnLoaded and ServerClientIsReadyToRespawn without ever being told to.
+            // DEATH_GOTO_STATE=1 sends it again for comparison.
+            if (Environment.GetEnvironmentVariable("DEATH_GOTO_STATE") is "1") pcChannel.SendClientGotoState(322);
+
             if (spectate != null) pcChannel.SendClientSetViewTarget(spectate);
 
-            Console.WriteLine($"FortDamageSystem: {death.Controller.GetFName()}'s body was removed; " +
-                              $"now spectating {(spectate == null ? "where it died" : spectate.GetFName().ToString())}");
+            Console.WriteLine($"FortDamageSystem: {death.Controller.GetFName()}'s body was " +
+                              $"{(tearOff ? "torn off (the corpse stays)" : "destroyed")}; now spectating " +
+                              $"{(spectate == null ? "where it died" : spectate.GetFName().ToString())}");
         }
     }
+
+    /// <summary>
+    ///     Tells the client to run GA_DefaultPlayer_Death on itself.
+    ///
+    ///     THE LAST STRUCTURAL DIFFERENCE between this server's death and a real one. The 0906
+    ///     capture's death frame carries `ClientActivateAbilitySucceedWithEventData` [147.9 bytes]
+    ///     just before ClientOnPawnDied, and this server has never activated any client ability for
+    ///     a death at all. Everything else in that frame is now matched: the report, the kill
+    ///     notification, the view target, the tear-off.
+    ///
+    ///     IT IS WORTH TRYING BECAUSE OF WHAT THE CLIENT STOPS DOING. After a death here the client
+    ///     sends ServerClientPawnLoaded and then nothing; the capture's client goes on to
+    ///     ServerClientIsReadyToRespawn 126 ms later. Something in its death flow never starts, and
+    ///     an unactivated death ability is the one candidate left standing.
+    ///
+    ///     THE PLAIN VARIANT, NOT WithEventData, deliberately. `SendClientActivateAbilitySucceed`
+    ///     already works on this server - it is what makes emotes play - whereas the event-data
+    ///     variant needs an FGameplayEventData payload nothing here can write yet. If the ability
+    ///     runs without a payload this is the whole fix; if it does not, that is a real answer too,
+    ///     and a much smaller thing to have found out than to have built the payload first.
+    ///     DEATH_ABILITY=0 skips it.
+    /// </summary>
+    private static void ActivateDeathAbility(UWorld world, APlayerController controller) {
+        if (Environment.GetEnvironmentVariable("DEATH_ABILITY") is "0") return;
+        if (controller.PlayerState is not { AbilitySystemComponent: { } abilitySystem } playerState) return;
+
+        var spec = abilitySystem.ActivatableAbilities.Items
+            .FirstOrDefault(s => s.Ability.GetFName().ToString()
+                .Contains("GA_DefaultPlayer_Death", StringComparison.OrdinalIgnoreCase));
+
+        if (spec == null) {
+            Console.WriteLine("FortDamageSystem: no GA_DefaultPlayer_Death spec granted, so there is no death " +
+                              "ability to activate - see AController.DefaultAbilities.");
+            return;
+        }
+
+        var predictionKey = new FPredictionKey {
+            bValidKeyForConnection = true,
+            bIsServerInitiated = true,
+            Current = _nextDeathPredictionKey++
+        };
+
+        // WITH EVENT DATA, because the client said so. The plain variant reached the ability and
+        // the ability refused it: "expects event data but none is being supplied. Use Activate
+        // Ability instead of Activate Ability From Event." DEATH_ABILITY_EVENT_DATA=0 sends the
+        // plain one again, which is what reproduces that warning.
+        if (Environment.GetEnvironmentVariable("DEATH_ABILITY_EVENT_DATA") is "0") {
+            world.NetDriver?.SendClientActivateAbilitySucceed(playerState, abilitySystem, spec.Handle, predictionKey);
+        } else {
+            world.NetDriver?.SendClientActivateAbilitySucceedWithEventData(
+                playerState, abilitySystem, spec.Handle, predictionKey,
+                instigator: controller.Pawn, target: controller.Pawn);
+        }
+
+        Console.WriteLine($"FortDamageSystem: activated GA_DefaultPlayer_Death on {controller.GetFName()} " +
+                          $"as spec handle {spec.Handle} (server prediction key {predictionKey.Current})");
+    }
+
+    /// <summary>
+    ///     Server-initiated prediction keys for the death activation. Its own counter rather than
+    ///     FortEmoteSystem's, because the two are unrelated activations and sharing a counter would
+    ///     mean one system's numbering depended on how much the other had done.
+    /// </summary>
+    private static short _nextDeathPredictionKey = 1;
 
     /// <summary>Straight-line distance between two pawns, or 0 when there is no killer to measure to.</summary>
     private static float DistanceBetween(APawn? victim, APawn? killer) {

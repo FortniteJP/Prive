@@ -70,6 +70,16 @@ public class APlayerState : AInfo {
     public bool bIsDead { get; set; }
 
     /// <summary>
+    ///     AFortPlayerStateAthena::Place (handle 233) - where this player finished, counting from 1
+    ///     for the winner. Zero until they are eliminated, which is what the client reads for a
+    ///     player still in the match.
+    ///
+    ///     Set by FortDamageSystem.Kill from the number of players still alive INCLUDING this one,
+    ///     which is the definition: die when six are left and you placed sixth.
+    /// </summary>
+    public int Place { get; set; }
+
+    /// <summary>
     ///     APlayerState::GetOwningController - `Cast&lt;AController&gt;(GetOwner())`. Real UE sets
     ///     that owner in AController::InitPlayerState; this project does the same in
     ///     AGameModeBase.Login, which is also what makes the PlayerState replicate to the right

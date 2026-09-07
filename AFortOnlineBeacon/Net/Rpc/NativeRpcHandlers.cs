@@ -1169,6 +1169,36 @@ internal static class NativeRpcHandlers {
 
                 pc.bLoadingScreenDropped = true;
                 Console.WriteLine($"NativeRpcHandlers: ServerLoadingScreenDropped - {pc.GetFName()} can see the world");
+
+                // WELCOME_MESSAGE is how the FText writer gets tested at all. ClientSendMessage is
+                // the only arbitrary-text channel this server has, and it has never been sent, so
+                // there needs to be a way to fire one on demand - and this is the first moment the
+                // player can actually read anything. Unset by default: an unprompted message in
+                // every session would be noise, and this exists to answer one question.
+                if (Environment.GetEnvironmentVariable("WELCOME_MESSAGE") is { Length: > 0 } message
+                    && pc.GetWorld()?.NetDriver?.ClientConnections
+                        .FirstOrDefault(c => c.PlayerController == pc)?.FindActorChannel(pc) is { } channel) {
+                    // BOTH CHANNELS, because one of them showing and the other not is the answer.
+                    // ClientSendMessage carries an FText, ClientTeamMessage carries an FString this
+                    // project has been writing correctly for months. If only the FString one appears,
+                    // the FText encoding is the bug; if neither does, neither RPC has an in-match UI
+                    // bound to it and the search moves to which channel Fortnite's HUD listens on.
+                    // See UActorChannel.SendClientTeamMessage.
+                    // TAGGED SO THE CONSOLE SAYS WHICH ONE ARRIVED. The text turned up in the
+                    // client's console at join - so it decodes and the channel is live - but both
+                    // RPCs were carrying the identical string, which cannot say whether the FText
+                    // one, the FString one, or both got through. One word of suffix settles it.
+                    channel.SendClientSendMessage(message + " [FText/ClientSendMessage]");
+                    channel.SendClientTeamMessage(pc.PlayerState, message + " [FString/ClientTeamMessage]",
+                                                  typeNameIndex: 0);
+
+                    FortWelcomeMessage.Schedule(pc, (float) (pc.GetWorld()?.TimeSeconds ?? 0d));
+
+                    Console.WriteLine($"NativeRpcHandlers: sent ClientSendMessage(\"{message}\") as an FText AND " +
+                                      "ClientTeamMessage as an FString, with resends queued. Which of the two " +
+                                      "appears - and whether a LATER one does - separates a wrong encoding from " +
+                                      "a channel nobody reads from a HUD that was not up yet.");
+                }
             }
         ),
         ["ServerReturnToMainMenu"] = NoParams("ServerReturnToMainMenu"),
@@ -1351,6 +1381,19 @@ internal static class NativeRpcHandlers {
     private const float TossHeight = 40.0f;
 
     /// <summary>
+    ///     How hard a dropped item is thrown, forward and upward, in uu/s.
+    ///
+    ///     Bounded by the MaxSpeed Tools/ProjectileReplay measured off real dropped pickups (503.7,
+    ///     IQR 12.2): a drop is a gentle lob, not a throw, and asking for more than the clamp just
+    ///     gets clamped. These two are NOT measured - the capture records where tossed items went,
+    ///     not the velocity they left with - so unlike everything in FortPickupToss they are chosen,
+    ///     to put the item roughly where TossDistance used to place it outright.
+    /// </summary>
+    private const float TossSpeed = 260.0f;
+
+    private const float TossUpSpeed = 180.0f;
+
+    /// <summary>
     ///     internal rather than private since Round 47: FortHarvestResources.Grant calls this
     ///     directly for a resource stack that has no more room (drop the overflow instead of
     ///     discarding it) - the exact same "put it on the ground as a real pickup" mechanism an
@@ -1382,18 +1425,32 @@ internal static class NativeRpcHandlers {
 
         if (pickup == null) return;
 
-        // In front of the player, not inside them. Real UE tosses the item along an arc; with no
-        // toss to simulate, the least this server can do is not bury the pickup in the pawn's own
-        // capsule, where the client's interaction query cannot see it and the player cannot walk
-        // onto it. Yaw comes from the last move the client sent (APawn.LastClientViewRotation) -
-        // the pawn's own Rotation is never updated, so that is the only heading available.
+        // In front of the player, not inside them, and then TOSSED. Yaw comes from the last move the
+        // client sent (APawn.LastClientViewRotation) - the pawn's own Rotation is never updated, so
+        // that is the only heading available.
+        //
+        // THE ARC IS SIMULATED NOW. This used to end at the line below, leaving every dropped item
+        // hanging at a fixed offset from the player: standing on a ramp, at the edge of a build or on
+        // any slope, it floated or sank into geometry, and a pickup the client's interaction query
+        // cannot reach is a pickup that is gone. The comment here used to say as much - "with no toss
+        // to simulate, the least this server can do is not bury the pickup in the pawn's own
+        // capsule". There is a toss to simulate now, measured off a real server: see FortPickupToss,
+        // and Tools/ProjectileReplay for where each of its constants comes from.
         var yawRadians = (pawn.LastClientViewRotation?.Yaw ?? 0.0f) * MathF.PI / 180.0f;
         var origin = pawn.GetActorLocation();
-        var restLocation = at ?? new FVector {
+        var launch = at ?? new FVector {
             X = origin.X + MathF.Cos(yawRadians) * TossDistance,
             Y = origin.Y + MathF.Sin(yawRadians) * TossDistance,
             Z = origin.Z + TossHeight
         };
+
+        // A caller that named an exact spot (`at`) meant it - container loot has its own authored
+        // placement - so only a player's own drop gets thrown. It still falls either way.
+        var tossVelocity = at != null
+            ? new FVector()
+            : new FVector { X = MathF.Cos(yawRadians) * TossSpeed, Y = MathF.Sin(yawRadians) * TossSpeed, Z = TossUpSpeed };
+
+        var restLocation = FortPickupToss.Settle(launch, tossVelocity);
 
         pickup.SetActorLocation(restLocation);
         pickup.RestLocation = restLocation;

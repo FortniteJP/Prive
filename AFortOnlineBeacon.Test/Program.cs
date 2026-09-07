@@ -23,6 +23,7 @@ class Program {
         if (args.Contains("--structarray-selftest")) return AFortOnlineBeacon.Net.Replication.StructArraySelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--weaponstats-selftest")) return AFortOnlineBeacon.Net.Actors.FortWeaponStatsSelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--inventoryslots-selftest")) return AFortOnlineBeacon.Net.Actors.FortInventorySlotSelfTest.RunSelfTest() ? 0 : 1;
+        if (args.Contains("--ftext-selftest")) return AFortOnlineBeacon.Core.FTextSelfTest.RunSelfTest() ? 0 : 1;
 
         var worldUrl = new FUrl {
             Map = "/Game/Athena/Maps/Athena_Terrain",
