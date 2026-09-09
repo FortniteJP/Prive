@@ -88,6 +88,16 @@ public enum ERepPropertyKind {
     VectorQuantize10,
 
     /// <summary>
+    ///     An FVector_NetQuantize leaf - the UNSUFFIXED one, WritePackedVector&lt;1, 20&gt;: whole
+    ///     units, twenty bits. Distinct from the 10 and 100 kinds beside it, and not interchangeable
+    ///     with them - a vector written at the wrong scale is not slightly off, it misreads every
+    ///     later handle in the bunch.
+    ///
+    ///     AFortPawn::PushMomentum is one of these.
+    /// </summary>
+    VectorQuantize,
+
+    /// <summary>
     ///     FVector_NetQuantize100 - the same packed encoding as
     ///     <see cref="ERepPropertyKind.VectorQuantize10"/> with a finer scale factor (100/30 rather
     ///     than 10/24), and atomic for the same reason. `ABuildingSMActor::ReplicatedDrawScale3D` is

@@ -20,7 +20,41 @@ public class APawn : AActor {
     ///     so the server knows which way the player is facing - a dropped item has to land in front
     ///     of them to be reachable, and the pawn's own Rotation is never updated by the move RPCs.
     /// </summary>
+    /// <summary>
+    ///     AFortPawn::PushMomentum - wire handle 65, an FVector_NetQuantize with OnRep_PushMomentum.
+    ///     Zero means "not being pushed"; see FortProjectileSystem's knockback for who sets it and
+    ///     why it has to be set back.
+    /// </summary>
+    public FVector PushMomentum { get; private set; } = new();
+
+    public void SetPushMomentum(FVector momentum) => PushMomentum = momentum;
+
     public FRotator? LastClientViewRotation { get; set; }
+
+    /// <summary>
+    ///     APawn::RemoteViewPitch - wire handle 16, and THE ONLY WAY ANYONE ELSE SEES YOU LOOK UP OR
+    ///     DOWN. A pawn's own rotation carries yaw alone (a capsule does not pitch), so an onlooker
+    ///     has no other source for where a player is aiming vertically; real UE fills this in
+    ///     APawn::Tick from the control rotation and replicates it COND_SkipOwner - the owner already
+    ///     knows where it is looking.
+    ///
+    ///     It was `Reserved` here - declared, correctly numbered, never sent - which is exactly the
+    ///     silent-property failure [[rep-handle-derivation]] is about: yaw looked right, so nothing
+    ///     seemed wrong, and every other player's head stayed level no matter where they aimed.
+    ///
+    ///     A uint8 over the full turn: `(uint8)(Pitch * 255.f / 360.f)`, straight from Pawn.cpp. The
+    ///     client's inverse is the same scale, so a wrap at 255 -> 0 is a wrap at 360 -> 0 and needs
+    ///     no special case.
+    /// </summary>
+    public byte RemoteViewPitch { get; private set; }
+
+    /// <summary>Records the view pitch a client reported, in the uint8 form the wire wants.</summary>
+    public void SetRemoteViewPitch(float pitchDegrees) {
+        var wrapped = pitchDegrees % 360f;
+        if (wrapped < 0f) wrapped += 360f;
+
+        RemoteViewPitch = (byte) (int) MathF.Round(wrapped * 255f / 360f);
+    }
 
     /// <summary>
     ///     The building actor class path the client's own ServerSetPlayerBuildableClass last named
@@ -67,6 +101,61 @@ public class APawn : AActor {
     ///     same emote twice in a row is still two changes, and therefore two OnReps.
     /// </summary>
     public UObject? LastReplicatedEmoteExecuted { get; set; }
+
+    /// <summary>
+    ///     AFortPlayerPawn::RepAnimMontageInfo (0x1F58) - wire handles 176-186, and THE ONLY WAY AN
+    ///     ONLOOKER SEES AN EMOTE.
+    ///
+    ///     Handle 70 above serves the emoting player's own client; a simulated proxy's OnRep does
+    ///     nothing with it (measured: on the second client only the LOCAL pawn ever plays an emote
+    ///     montage). GAS shows a montage to everyone else through this struct, which a real server
+    ///     fills as a side effect of PlayMontage inside the activated ability - see
+    ///     NativeRepLayouts' entry for the whole account.
+    ///
+    ///     The montage itself is the emote definition's `Animation`, baked in FortEmoteAssets.
+    /// </summary>
+    public UObject? EmoteMontage { get; set; }
+
+    /// <summary>
+    ///     Handle 177, and it starts at ZERO because THE CLIENT'S DOES.
+    ///
+    ///     `FGameplayAbilityRepAnimMontage`'s constructor (GameplayAbilityTypes.h:217-226) is
+    ///     `PlayRate(0.f), Position(0.f), BlendTime(0.f), IsStopped(true)`. A server-side default of
+    ///     1.0 looks harmless and is not: these members are in NeverSentAtOpen, so the shadow is
+    ///     SEEDED with our value without it ever going on the wire, and a value that then never
+    ///     changes is never sent at all. The client kept its own 0 and played the montage at rate
+    ///     ZERO - which is a character standing perfectly still while every other part of the emote
+    ///     arrives, exactly as reported.
+    ///
+    ///     THE RULE: a property this server declines to send at open must default to what the CLIENT
+    ///     defaults to, or the two disagree silently and forever. FortEmoteSystem sets the real
+    ///     values when an emote starts, and the diff carries them because they differ from these.
+    /// </summary>
+    public float EmoteMontagePlayRate { get; set; }
+
+    public float EmoteMontagePosition { get; set; }
+
+    /// <summary>Handle 179. Zero for the same reason as PlayRate - see above.</summary>
+    public float EmoteMontageBlendTime { get; set; }
+
+    /// <summary>
+    ///     Handle 181, and the reason the same emote twice works here where handle 70 needed a null
+    ///     pushed between the two. The engine TOGGLES this on every fresh PlayMontage precisely so a
+    ///     repeat is still a change; a value that only ever goes A -> A is invisible to a RepNotify.
+    /// </summary>
+    public bool EmoteMontageForcePlayBit { get; set; }
+
+    /// <summary>Handle 183 - true once the emote is over, which is how the onlooker stops it.</summary>
+    public bool EmoteMontageIsStopped { get; set; } = true;
+
+    /// <summary>
+    ///     Handle 184. False by default because the CLIENT'S is, true while an emote runs.
+    ///
+    ///     It opts the onlooker out of GAS's position correction, which this server cannot feed:
+    ///     that block clears the montage's next section (making the emote stop after one loop) and
+    ///     drags the animation back to our constant Position of 0. See NativeRepLayouts.
+    /// </summary>
+    public bool EmoteMontageSkipPositionCorrection { get; set; }
 
     /// <summary>
     ///     The FGameplayAbilitySpec handle of the emote ability currently granted to this pawn's
@@ -594,6 +683,24 @@ public class APawn : AActor {
     private float? _fallPeakZ;
 
     /// <summary>
+    ///     No fall damage until this world time - what a SHOCKWAVE grenade grants and an impulse
+    ///     grenade does not (`Default.ShockwaveGrenade.AllPlayersTakeFallDamage` is 0 against the
+    ///     impulse's 1). Being thrown a hundred metres and then dying to the landing is not what the
+    ///     item does.
+    /// </summary>
+    private float _fallDamageImmuneUntil = float.NegativeInfinity;
+
+    /// <summary>
+    ///     Starts the immunity window. The LENGTH is not a row - the table says only whether fall
+    ///     damage applies, not for how long - so it is long enough to cover the throw and the landing
+    ///     and no longer. SHOCKWAVE_IMMUNITY_SECONDS overrides it.
+    /// </summary>
+    public void GrantFallDamageImmunity(float timeSeconds) =>
+        _fallDamageImmuneUntil = timeSeconds + ShockwaveImmunitySeconds;
+
+    private static readonly float ShockwaveImmunitySeconds = Env("SHOCKWAVE_IMMUNITY_SECONDS", 8.0f);
+
+    /// <summary>
     ///     Fall damage, worked out from the movement mode and location every client move carries.
     ///
     ///     This is the FIRST damage source this server has that needs no second player, which is the
@@ -627,6 +734,15 @@ public class APawn : AActor {
 
         var dropped = peak - location.Z;
         if (dropped <= FallDamageMinDistance) return;
+
+        // A SHOCKWAVE'S victim lands unhurt however far it threw them - see GrantFallDamageImmunity.
+        // Checked after the peak is cleared so the immunity consumes the fall rather than leaving it
+        // pending for the next landing.
+        if (GetWorld() is { } world && world.TimeSeconds < _fallDamageImmuneUntil) {
+            Console.WriteLine($"APawn.TrackFallDamage: {GetFName()} fell {dropped:F0}uu but is " +
+                              "shockwave-immune - no damage.");
+            return;
+        }
 
         var damage = (dropped - FallDamageMinDistance) / StoreyHeight * FallDamagePerStorey;
 

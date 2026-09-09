@@ -194,10 +194,10 @@ internal static partial class FortWeaponActorClasses {
     public static UClass? BuildingActorClassFor(UObject? itemDefinition) {
         if (itemDefinition == null) return null;
         var path = BuildingActorClassTable.GetValueOrDefault(itemDefinition.GetFName().ToString());
-        // Same pattern as ClassFor above - must use the SAME C# type (ABuildingActor) that resolves
-        // this path everywhere else, or the same content path would export as two different NetGUIDs
-        // to the client depending on which lookup found it first (StaticClassForPath is cached per
-        // (Type, path) key - see its own doc comment).
-        return path == null ? null : GUClassArray.StaticClassForPath<ABuildingActor>(path);
+        // Through ABuildingActor.ClassForPath, like every other building-path lookup - the same
+        // content path resolved as two different C# types would make two UClass objects and export as
+        // two different NetGUIDs depending on which lookup ran first (StaticClassForPath is cached
+        // per (Type, path) key). That method is also where "a wall is an ABuildingWall" is decided.
+        return path == null ? null : ABuildingActor.ClassForPath(path);
     }
 }

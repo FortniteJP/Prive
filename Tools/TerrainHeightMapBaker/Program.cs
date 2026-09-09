@@ -1,4 +1,4 @@
-using CUE4Parse.Encryption.Aes;
+﻿using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Actor;
@@ -233,6 +233,16 @@ foreach (var vfs in provider.UnloadedVfs.ToList()) {
 }
 
 Console.WriteLine($"Mounted files: {provider.Files.Count}");
+
+// A SECOND BAKE OUT OF THE SAME PROVIDER: the collision shapes of the PLAYER BUILDING pieces.
+//
+// It lives here rather than in Tools/PakReader for one reason - BuildHulls, at the bottom of this
+// file, is the routine that turns an asset's convex vertex soup into half-space planes, and it is
+// not worth having twice. Everything else about the two bakes differs: this one reads Blueprint
+// CDOs rather than levels, and emits a per-CLASS table rather than a placed world.
+if (args.Length > 3 && args[3].Equals("--buildpieces", StringComparison.OrdinalIgnoreCase)) {
+    return BakeBuildPieces(provider, outputPath, args.Length > 4 ? args[4] : "FortniteGame/Content/Building/ActorBlueprints/Player/");
+}
 
 // A composed world-space placement: translation + rotation + per-axis scale, no shear. Every level
 // of the hierarchy (sublevel LevelTransform, actor placement, component's own RelativeLocation) is
@@ -1515,6 +1525,199 @@ static int RunSelfTest(string path) {
 // C# requires type declarations in a top-level-statements file to come after all top-level
 // statements (CS8803), so this can't sit next to the functions that use it despite being logically
 // grouped with them.
+/// <summary>
+///     Bakes the real collision shape of every PLAYER BUILDING class into a C# table.
+///
+///     WHY. The server's own idea of a built piece was one axis-aligned box per piece TYPE: a wall
+///     was a slab, a stair was a solid cell, and every variant of a type shared it. So a doorway was
+///     solid whether the door was open or shut, a window was solid glass, and editing a piece into
+///     another shape changed nothing at all - which is exactly the list of things reported as
+///     missing.
+///
+///     The game itself does not approximate any of that, and neither does it need parsing effort to
+///     recover: these meshes carry SIMPLE collision and are flagged CTF_UseSimpleAsComplex, so the
+///     convex hulls in the asset ARE the collision the client traces against. PBW_W1_DoorC has
+///     THREE (two posts and a lintel - the doorway is a real hole), PBW_W1_WindowC has FOUR, a plain
+///     wall has one, and the door LEAF is a separate mesh with one more.
+///
+///     That last split is what makes an openable door work: the wall's own hulls always apply, and
+///     the leaf's hull is added only while the door is shut.
+///
+///     A cooked Blueprint stores only what it OVERRIDES, so the mesh is looked up through the super
+///     chain - the same trap that has caught attribute keys and cosmetic parts in this project
+///     before.
+/// </summary>
+static int BakeBuildPieces(DefaultFileProvider provider, string outPath, string prefix) {
+    var classes = provider.Files.Keys
+        .Where(f => f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                    f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    Console.WriteLine($"buildpieces: {classes.Count} class asset(s) under {prefix}");
+
+    var meshCache = new Dictionary<string, (List<float[]> Hulls, (FVector Min, FVector Max) Bounds)>(
+        StringComparer.OrdinalIgnoreCase);
+
+    // className -> (body hulls, door-leaf hulls, the pair's local-space bounds)
+    var rows = new SortedDictionary<string, (List<float[]> Body, List<float[]> Door, FVector Min, FVector Max)>(
+        StringComparer.OrdinalIgnoreCase);
+
+    (List<float[]>, (FVector, FVector)) HullsOf(UStaticMesh mesh) {
+        if (meshCache.TryGetValue(mesh.Name, out var known)) return (known.Hulls, known.Bounds);
+        var built = BuildHulls(mesh);
+        meshCache[mesh.Name] = built;
+        return (built.Hulls, built.Bounds);
+    }
+
+    // The property, looked up through the SUPER CHAIN. A cooked Blueprint serialises only its
+    // overrides, so a variant that inherits its mesh has no such property of its own.
+    UStaticMesh? MeshProperty(UObject cdo, CUE4Parse.UE4.Assets.IPackage package, string name, int depth = 0) {
+        if (depth > 8) return null;
+        if (cdo.GetOrDefault<UStaticMesh?>(name, null) is { } direct) return direct;
+
+        // Up to the PARENT class. Reached through the package's own BlueprintGeneratedClass export
+        // rather than through cdo.Class, which resolves to a ResolvedObject that cannot be pattern
+        // matched to a UStruct - the same walk `pakreader supers` does.
+        var generated = package.GetExports()
+            .OfType<UStruct>()
+            .FirstOrDefault(e => e.Name.Equals(cdo.Name["Default__".Length..], StringComparison.Ordinal));
+
+        if (generated?.SuperStruct is not { IsNull: false } superRef) return null;
+        if (superRef.Load<UStruct>() is not { Owner: { } superPackage } superClass) return null;
+
+        var superCdo = superPackage.GetExports()
+            .FirstOrDefault(e => e.Name.Equals("Default__" + superClass.Name, StringComparison.Ordinal));
+
+        return superCdo == null ? null : MeshProperty(superCdo, superPackage, name, depth + 1);
+    }
+
+    var withBody = 0;
+    var withDoor = 0;
+
+    foreach (var path in classes) {
+        if (!provider.TryLoadPackage(path, out var package)) continue;
+
+        foreach (var export in package.GetExports()) {
+            if (!export.Name.StartsWith("Default__", StringComparison.Ordinal)) continue;
+
+            var className = export.Name["Default__".Length..];
+            if (rows.ContainsKey(className)) continue;
+
+            List<float[]> body = new(), door = new();
+            var min = new FVector(float.MaxValue, float.MaxValue, float.MaxValue);
+            var max = new FVector(float.MinValue, float.MinValue, float.MinValue);
+
+            void Widen((FVector Min, FVector Max) b) {
+                min = new FVector(MathF.Min(min.X, b.Min.X), MathF.Min(min.Y, b.Min.Y), MathF.Min(min.Z, b.Min.Z));
+                max = new FVector(MathF.Max(max.X, b.Max.X), MathF.Max(max.Y, b.Max.Y), MathF.Max(max.Z, b.Max.Z));
+            }
+
+            try {
+                if (MeshProperty(export, package, "StaticMesh") is { } bodyMesh) {
+                    var built = HullsOf(bodyMesh);
+                    body = built.Item1;
+                    if (body.Count > 0) Widen(built.Item2);
+                }
+
+                // The LEAF, MOVED INTO THE WALL'S FRAME. A door mesh is authored in its own space
+                // with the HINGE at the origin - PBW_W1_Door runs X 0..144 - while the doorway it
+                // fills is centred on the wall's origin (PBW_W1_DoorC's posts leave X -72..72 open,
+                // exactly 144 wide). The wall creates the DoorComponent natively and places it, so
+                // there is no relative transform in the asset to read; what there is instead is that
+                // exact correspondence, which fixes the offset with nothing left to guess: shifting
+                // the leaf so its own X extent is centred puts it precisely in the hole.
+                //
+                // Left unshifted the leaf sits half over the doorway and half inside a post, which
+                // is neither open nor shut.
+                if (MeshProperty(export, package, "DoorMesh") is { } doorMesh) {
+                    var built = HullsOf(doorMesh);
+                    door = built.Item1;
+
+                    if (door.Count > 0) {
+                        var (leafMin, leafMax) = built.Item2;
+                        var shift = -(leafMin.X + leafMax.X) / 2f;
+
+                        // COPIED BEFORE SHIFTING, because the mesh cache hands out the same arrays to
+                        // every class that uses this leaf - and 46 classes share a handful of door
+                        // meshes. Mutating them in place applied the shift once PER CLASS: the leaf
+                        // came out at X -360..-216 instead of -72..72, five doors' worth of drift.
+                        door = door.Select(hull => {
+                            var moved = (float[]) hull.Clone();
+                            // A plane (N, D) translated along X by `shift` keeps N and gains N.x*shift.
+                            for (var i = 0; i + 3 < moved.Length; i += 4) moved[i + 3] += moved[i] * shift;
+                            return moved;
+                        }).ToList();
+
+                        Widen((new FVector(leafMin.X + shift, leafMin.Y, leafMin.Z),
+                               new FVector(leafMax.X + shift, leafMax.Y, leafMax.Z)));
+                    }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"buildpieces: {className}: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            if (body.Count == 0 && door.Count == 0) continue;
+
+            rows[className] = (body, door, min, max);
+            if (body.Count > 0) withBody++;
+            if (door.Count > 0) withDoor++;
+        }
+    }
+
+    var planeCount = rows.Sum(r => r.Value.Body.Sum(h => h.Length / 4) + r.Value.Door.Sum(h => h.Length / 4));
+    Console.WriteLine($"buildpieces: {rows.Count} class(es) - {withBody} with a body mesh, {withDoor} with a " +
+                      $"door leaf, {planeCount:N0} plane(s) total");
+
+    using var w = new StreamWriter(outPath, false, new System.Text.UTF8Encoding(true));
+
+    w.WriteLine("// <auto-generated> Tools/TerrainHeightMapBaker --buildpieces - do not edit by hand. </auto-generated>");
+    w.WriteLine("//");
+    w.WriteLine("// The REAL collision shape of every player-buildable piece, as half-space planes in the piece's");
+    w.WriteLine($"// own local space: {rows.Count} classes, {planeCount:N0} planes.");
+    w.WriteLine("//");
+    w.WriteLine("// These are the game's OWN shapes, not an approximation of them. The meshes carry simple");
+    w.WriteLine("// collision and are flagged CTF_UseSimpleAsComplex, so what the client traces against is exactly");
+    w.WriteLine("// these convex hulls. A doorway and a window are real HOLES in them - PBW_W1_DoorC is three hulls");
+    w.WriteLine("// (two posts and a lintel) and PBW_W1_WindowC is four - which is what a single per-type box could");
+    w.WriteLine("// never express.");
+    w.WriteLine("//");
+    w.WriteLine("// DOOR is the leaf, kept apart from the body on purpose: it is collision only while the door is");
+    w.WriteLine("// SHUT. See BuildingStructuralSupportSystem.");
+    w.WriteLine("//");
+    w.WriteLine("// A plane is (Nx, Ny, Nz, D) with the inside at Nx*x + Ny*y + Nz*z <= D, four floats per plane,");
+    w.WriteLine("// hulls concatenated - the same encoding TerrainHeightMap.hulls.bin uses for the map.");
+    w.WriteLine();
+    w.WriteLine("namespace AFortOnlineBeacon.Net.Actors;");
+    w.WriteLine();
+    w.WriteLine("public static partial class FortBuildingHulls {");
+    w.WriteLine("    /// <summary>");
+    w.WriteLine("    ///     Class name -> its hulls, the door leaf's hulls when it has one, and the local-space");
+    w.WriteLine("    ///     bounds of both together - the broad phase needs the bounds and the exact test the hulls.");
+    w.WriteLine("    /// </summary>");
+    w.WriteLine("    private static readonly (string Class, float[][] Body, float[][] Door," +
+                " float MinX, float MinY, float MinZ, float MaxX, float MaxY, float MaxZ)[] Pieces = {");
+
+    string Hulls(List<float[]> hulls) => hulls.Count == 0
+        ? "System.Array.Empty<float[]>()"
+        : "new[] { " + string.Join(", ", hulls.Select(h =>
+            "new[] { " + string.Join(", ", h.Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "f")) + " }")) + " }";
+
+    string F(float v) => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "f";
+
+    foreach (var (className, shape) in rows) {
+        w.WriteLine($"        (\"{className}\", {Hulls(shape.Body)}, {Hulls(shape.Door)}, " +
+                    $"{F(shape.Min.X)}, {F(shape.Min.Y)}, {F(shape.Min.Z)}, " +
+                    $"{F(shape.Max.X)}, {F(shape.Max.Y)}, {F(shape.Max.Z)}),");
+    }
+
+    w.WriteLine("    };");
+    w.WriteLine("}");
+
+    Console.WriteLine($"buildpieces: wrote {outPath}");
+    return 0;
+}
+
 readonly record struct Placement(FVector Translation, FQuat Rotation, FVector Scale) {
     public static readonly Placement Identity = new(new FVector(0, 0, 0), FQuat.Identity, new FVector(1, 1, 1));
 

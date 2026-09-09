@@ -95,7 +95,40 @@ public abstract class UNetDriver {
         // at startup is worth a reflection walk.
         Rpc.NativeRpcHandlers.VerifyRpcTables();
         BuildingStructuralSupportSystem.VerifyCollisionGeometry();
+        Actors.FortBuildingHulls.VerifyDoorway();
+        WarmCollisionData();
         return true;
+    }
+
+    /// <summary>
+    ///     Reads the big collision bakes NOW, at startup, instead of leaving them to whichever tick
+    ///     first asks a geometry question.
+    ///
+    ///     THEY ARE LAZY ON PURPOSE - a tool run or a self-test should not pay for a 24 MB height
+    ///     grid it will never query - but "lazy" means the cost lands wherever the first query
+    ///     happens, and that is inside a tick, with players connected: the whole server stops for as
+    ///     long as the read takes. The log line that gave it away is the giveaway itself, because it
+    ///     appears mid-match rather than at boot:
+    ///
+    ///         TerrainHeightMap: loaded 3920x3061 landscape heightmap cells ... from TerrainHeightMap.bin
+    ///
+    ///     Init is the right place: it runs before a socket is listening, so the time is spent where
+    ///     nothing is waiting on it, and every later query finds the data already there. Each read is
+    ///     timed so the log says what it cost rather than leaving it to be guessed at.
+    ///
+    ///     Touching the `Loaded` flags is what triggers each loader; there is nothing else to call.
+    /// </summary>
+    private static void WarmCollisionData() {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+
+        var landscape = TerrainHeightMap.LandscapeLoaded;
+        var meshes = TerrainHeightMap.HasMeshGrid;
+        var hulls = WorldCollision.Loaded;
+        var pieces = Actors.FortBuildingHulls.Ready;
+
+        Console.WriteLine($"UNetDriver: collision data warmed in {started.ElapsedMilliseconds} ms " +
+                          $"(landscape={landscape}, placed-mesh grid={meshes}, world hulls={hulls}, " +
+                          $"build pieces={pieces}) - none of it will stall a tick now.");
     }
     
     /// <summary>
@@ -151,9 +184,42 @@ public abstract class UNetDriver {
     /// </summary>
     public void SendClientActivateAbilitySucceed(AActor owner, UObject abilitySystem, int abilityHandle,
                                                  FPredictionKey predictionKey) {
-        foreach (var connection in ClientConnections) {
+        foreach (var connection in OwningConnectionsOf(owner, nameof(SendClientActivateAbilitySucceed))) {
             connection.FindActorChannel(owner)?.SendClientActivateAbilitySucceed(abilitySystem, abilityHandle, predictionKey);
         }
+    }
+
+    /// <summary>
+    ///     The connections an OWNER-ONLY (`UFUNCTION(Client, ...)`) RPC may go to - one, or none.
+    ///
+    ///     THIS EXISTS BECAUSE THE THREE CALLERS BELOW USED TO BROADCAST, and with a single player
+    ///     that is indistinguishable from correct: the only connection with a channel for a
+    ///     PlayerState IS its owner. The moment a second player joins, everyone who can SEE that
+    ///     PlayerState has a channel for it too - and `ClientActivateAbilitySucceed`,
+    ///     `ClientActivateAbilitySucceedWithEventData` and `ClientEndAbility` are all
+    ///     `UFUNCTION(Client, reliable)` in UE's own GAS, which means the owning connection and
+    ///     nobody else. Broadcasting them tells every other client to activate an ability on a
+    ///     PlayerState it merely observes, against a spec handle that is only meaningful in the
+    ///     owner's copy of that ASC.
+    ///
+    ///     Ownership is asked four ways because a PlayerState's Owner is not reliably set here: the
+    ///     connection's controller, its PlayerState, its Pawn, and finally UE's own IsOwnedBy.
+    ///
+    ///     DEGRADES TO A BROADCAST rather than to silence, with a loud line, on the reasoning in
+    ///     [[feedback-guards-degrade-dont-refuse]]: sending to everyone is what this did for months
+    ///     and is survivable, whereas sending to nobody is a feature that silently stops working.
+    /// </summary>
+    private IEnumerable<UNetConnection> OwningConnectionsOf(AActor owner, string what) {
+        var owning = ClientConnections.Where(connection =>
+            connection.PlayerController is { } pc
+            && (owner == pc || owner == pc.PlayerState || owner == pc.Pawn || owner.IsOwnedBy(pc))).ToArray();
+
+        if (owning.Length > 0) return owning;
+
+        Console.WriteLine($"UNetDriver.{what}: no connection OWNS {owner.GetFName()} " +
+                          $"({owner.GetType().Name}) - falling back to every connection that can see it. " +
+                          "An owner-only ability RPC is about to reach clients that only observe this actor.");
+        return ClientConnections;
     }
 
     /// <summary>
@@ -163,7 +229,7 @@ public abstract class UNetDriver {
     public void SendClientActivateAbilitySucceedWithEventData(AActor owner, UObject abilitySystem, int abilityHandle,
                                                               FPredictionKey predictionKey,
                                                               AActor? instigator, AActor? target) {
-        foreach (var connection in ClientConnections) {
+        foreach (var connection in OwningConnectionsOf(owner, nameof(SendClientActivateAbilitySucceedWithEventData))) {
             connection.FindActorChannel(owner)?.SendClientActivateAbilitySucceedWithEventData(
                 abilitySystem, abilityHandle, predictionKey, instigator, target);
         }
@@ -172,7 +238,7 @@ public abstract class UNetDriver {
     /// <summary>The end of the same handshake - see UActorChannel.SendClientEndAbility.</summary>
     public void SendClientEndAbility(AActor owner, UObject abilitySystem, int abilityHandle,
                                      FPredictionKey predictionKey) {
-        foreach (var connection in ClientConnections) {
+        foreach (var connection in OwningConnectionsOf(owner, nameof(SendClientEndAbility))) {
             connection.FindActorChannel(owner)?.SendClientEndAbility(abilitySystem, abilityHandle, predictionKey);
         }
     }
@@ -183,6 +249,21 @@ public abstract class UNetDriver {
     ///     SendClientActivateAbilitySucceed is: a component's traffic rides its owner's channel, and
     ///     only the driver knows which connections have one. See UActorChannel.FlushAbilitySystemComponent.
     /// </summary>
+    /// <summary>
+    ///     Pushes <paramref name="actor"/>'s changed properties on every connection NOW, ignoring its
+    ///     NetUpdateFrequency.
+    ///
+    ///     For a value whose whole meaning is that it CHANGED. A RepNotify fires on the client only
+    ///     when the received value differs from the one it holds, so a property that goes A -> null
+    ///     -> A inside one replication interval collapses to no change at all and the client is never
+    ///     told anything. Setting it back is not enough; the null has to be a bunch of its own.
+    /// </summary>
+    public void FlushActorProperties(AActor actor) {
+        foreach (var connection in ClientConnections) {
+            connection.FindActorChannel(actor)?.ReplicateActorUpdate(force: true);
+        }
+    }
+
     public void FlushAbilitySystemComponent(AActor owner) {
         foreach (var connection in ClientConnections) {
             connection.FindActorChannel(owner)?.FlushAbilitySystemComponent();

@@ -164,7 +164,21 @@ class Sdk:
 
 
 def sort_key(p):
-    return (p["offset"], p["name"])
+    """FCompareUFieldOffsets: offset ascending, then `A.GetName() < B.GetName()`.
+
+    THE TIE-BREAK IS CASE-INSENSITIVE, and that is not a detail. `FString::operator<` is
+    `FPlatformString::Stricmp(...) < 0` (UnrealString.h:940), so at a shared offset the order is
+    case-folded alphabetical. This tool sorted case-SENSITIVELY, which puts every lowercase-`b`
+    boolean last instead of first - and same-offset members are exactly what BITFIELDS are.
+
+    It cost a whole feature. `FGameplayAbilityRepAnimMontage` packs bSkipPlayRate, ForcePlayBit,
+    IsStopped and SkipPositionCorrection into offset 0x15; case-sensitively that reads
+    ForcePlayBit/IsStopped/SkipPositionCorrection/bSkipPlayRate, and correctly it reads
+    bSkipPlayRate/ForcePlayBit/IsStopped/SkipPositionCorrection - a one-handle shift that sent our
+    ForcePlayBit into bSkipPlayRate and left IsStopped never sent, i.e. stuck at its default of
+    TRUE. Onlookers were told the montage had already stopped.
+    """
+    return (p["offset"], p["name"].casefold())
 
 
 def expand(sdk, prop, depth, out, path):

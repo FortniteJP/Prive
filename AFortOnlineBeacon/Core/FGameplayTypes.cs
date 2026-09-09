@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Net;
 
 namespace AFortOnlineBeacon.Core;
 
@@ -30,7 +30,7 @@ public static class FGameplayTypes {
     /// <summary>
     ///     An FGameplayTag, as its net index.
     ///
-    ///     THIRTEEN BITS FLAT, and the flatness is the part worth explaining.
+    ///     FOURTEEN BITS FLAT, and the flatness is the part worth explaining.
     ///     `FGameplayTag::NetSerialize_Packed` normally writes a first segment plus a "more" bit -
     ///     but `SerializeTagNetIndexPacked` (GameplayTagContainer.cpp:42) short-circuits to a plain
     ///     `MaxBits` field when `NetIndexFirstBitSegment >= MaxBits`, and
@@ -39,37 +39,65 @@ public static class FGameplayTypes {
     ///     (GameplayTagsManager.cpp:473). So the packed path never actually packs, and a tag is one
     ///     field of `NetIndexTrueBitNum` bits.
     ///
-    ///     WHERE 13 COMES FROM. `NetIndexTrueBitNum = CeilToInt(Log2(NodeCount + 1))`.
-    ///     Fortnite's `DefaultGameplayTags.ini` carries **4203** tags, which expand to **6061**
-    ///     hierarchy nodes (every "A.B.C" also contributes "A" and "A.B"), and 6062 needs 13 bits.
-    ///     The band for 13 is 4096..8191, so there is room for ~2100 more nodes from the 37 tag
-    ///     DataTables before it would become 14 - and those tables are largely the source the ini
-    ///     was imported from (`ImportTagsFromConfig=True`), so they overlap rather than add.
+    ///     WHERE 14 COMES FROM, AND IT IS MEASURED NOW RATHER THAN ESTIMATED.
+    ///     `NetIndexTrueBitNum = CeilToInt(Log2(NodeCount + 1))`, so the whole question is the node
+    ///     count - every tag plus every ancestor prefix, since "A.B.C" also contributes "A" and
+    ///     "A.B". THE CLIENT'S OWN COUNT IS 13502, read straight out of the memory dump:
+    ///     UGameplayTagsManager keeps `NetworkGameplayTagNodeIndex` (a TArray of node pointers)
+    ///     immediately before `NetworkGameplayTagNodeIndexHash`, and searching the dump for that
+    ///     hash's known value (0x79b9274c, which both the client and the reference server log at
+    ///     startup) lands on exactly one place with a TArray beside it: 13502 entries, each node's
+    ///     own NetIndex member equal to its position (checked at 0, 1, 2 and 13501).
+    ///     Log2(13503) = 13.72, so FOURTEEN.
     ///
-    ///     IT IS AN ESTIMATE, and `TAG_NET_INDEX_BITS` exists because of that. The one number that
-    ///     would settle it exactly is the node count, and neither log prints it - both the client
-    ///     and the reference server print only `NetworkGameplayTagNodeIndexHash is 79b9274c`, which
-    ///     confirms the two agree without saying how many. If tag-bearing traffic misbehaves, 12 and
-    ///     14 are the only other candidates worth trying.
+    ///     THIS WAS 13 AND THAT WAS WRONG - an estimate from the ini's 4203 tags alone, which misses
+    ///     the 37 tag DataTables and the five Config/Tags/*.ini files (Tools/GameplayTags now reads
+    ///     all of them and reproduces the client's tag tree to the hash). Everything this server has
+    ///     ever sent through WriteTag was therefore one bit short, and a short field does not just
+    ///     lose the tag - it shifts every following bit of that RPC. The only caller so far is
+    ///     WriteEventData, i.e. ClientActivateAbilitySucceedWithEventData, which is the death
+    ///     ability's payload.
+    ///
+    ///     `TAG_NET_INDEX_BITS` still overrides it, but 14 is no longer a guess.
     /// </summary>
     public static unsafe void WriteTag(FBitWriter writer, uint netIndex) {
         var value = netIndex;
         writer.SerializeInt(&value, 1u << TagNetIndexBits);
     }
 
+    /// <summary>
+    ///     The same thing BY NAME, which is what every caller actually has.
+    ///     An unknown tag degrades to the empty one and says so once - see FortGameplayTags.IndexOrWarn.
+    /// </summary>
+    public static void WriteTag(FBitWriter writer, string tagName) =>
+        WriteTag(writer, Net.Abilities.FortGameplayTags.IndexOrWarn(tagName));
+
     /// <summary>See <see cref="WriteTag" />. TAG_NET_INDEX_BITS overrides it.</summary>
     private static readonly int TagNetIndexBits =
         int.TryParse(Environment.GetEnvironmentVariable("TAG_NET_INDEX_BITS"), out var bits) && bits > 0
             ? bits
-            : 13;
+            : Net.Abilities.FortGameplayTags.NetIndexBits;
 
     /// <summary>
-    ///     INVALID_TAGNETINDEX - the empty tag. Zero, and it is the engine's own constant rather
-    ///     than `UGameplayTagsManager::InvalidTagNetIndex`, which is NodeCount+1 and therefore a
-    ///     number only the tag table knows. `NetSerialize_Packed` writes 0 for anything it cannot
-    ///     name, precisely so the two sides need not agree on that.
+    ///     The EMPTY tag on the wire: `UGameplayTagsManager::InvalidTagNetIndex`, which is
+    ///     NodeCount + 1 = **13503**.
+    ///
+    ///     THIS WAS 0 AND THAT WAS A REAL BUG, not a harmless placeholder. Index 0 is not "no tag" -
+    ///     it is the FIRST TAG in the sorted table, a perfectly real one. The saving half of
+    ///     `FGameplayTag::NetSerialize_Packed` (GameplayTagContainer.cpp:1285) writes
+    ///     `GetNetIndexFromTag(*this)`, and that returns `InvalidTagNetIndex` - NodeCount + 1 - for a
+    ///     tag it cannot find, which is exactly the empty tag's case. The reading half
+    ///     (`GetTagNameFromNetIndex`) turns anything >= NodeCount into NAME_None and everything below
+    ///     it into a real tag. So writing 0 told the client "the first tag in your table", silently.
+    ///
+    ///     The INVALID_TAGNETINDEX macro (MAX_uint16) is a different constant and belongs to the
+    ///     REPLAY path only, where the index is a packed int into a net field export group rather
+    ///     than a bounded field. That is what the 0 here was conflating.
+    ///
+    ///     13503 comes from the client's own node count - see <see cref="WriteTag" /> for how it was
+    ///     measured out of the memory dump - so it moves if the tag table ever does.
     /// </summary>
-    public const uint InvalidTagNetIndex = 0;
+    public const uint InvalidTagNetIndex = Net.Abilities.FortGameplayTags.InvalidNetIndex;
 
     /// <summary>
     ///     An INVALID FGameplayEffectContextHandle: one bit, CLEAR.

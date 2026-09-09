@@ -50,6 +50,92 @@ public static class FortEmoteSystem {
     private const string SprayAbilityPath = "/Game/Abilities/Sprays/GAB_Spray_Generic.Default__GAB_Spray_Generic_C";
 
     /// <summary>
+    ///     The GameplayCue that actually shows an emoji.
+    ///
+    ///     Found by searching every one of the 325,881 packages in the install for
+    ///     `ConfigureParticleSystem` (`pakreader nameref`), the one native function on
+    ///     UAthenaEmojiItemDefinition that could put a particular emoji on a particle system. Three
+    ///     packages call it and all three are GameplayCue notifies: OnDisplayEmoji, OnPreviewEmoji
+    ///     (the wheel) and OnDisplayChatEmoji (the squad-chat one). This is the in-world one; its
+    ///     notify attaches P_Emote_Show_Emoji to the pawn's root and throws it upward.
+    ///
+    ///     Nothing in any Blueprint executes it - the same search finds the tag in exactly two
+    ///     packages, the notify itself and the tag table - so the cue comes from the client's C++ on
+    ///     the authority side, and an out-of-process server has to send it.
+    /// </summary>
+    private const string EmojiCueTag = "GameplayCue.Abilities.Emotes.DisplayEmoji";
+
+    /// <summary>
+    ///     0.65 SECONDS, and it is read off the animation rather than tuned by eye.
+    ///
+    ///     A real server does not decide when the emoji appears - the MONTAGE does. Toss_Emoji (all
+    ///     153 emojis share it) carries exactly one notify, `FortPlayEmojiItem`, an absolute link at
+    ///     LinkValue **0.65** into its 1.333-second segment, and it is marked
+    ///     `bTriggerOnDedicatedServer: true`. That flag is the whole answer to "who fires the cue and
+    ///     when": the authority plays the montage, the notify fires on it 0.65s in - as the hand
+    ///     releases - and the cue goes out from there.
+    ///
+    ///     This server cannot play a montage, so it waits the same 0.65s instead. Sending on the
+    ///     frame the emote starts is what made the first working build show the emoji EARLY, before
+    ///     the throw.
+    ///
+    ///     Scaled by nothing, because EmoteMontagePlayRate is set to 1. EMOJI_CUE_DELAY overrides it;
+    ///     0 restores the immediate send.
+    /// </summary>
+    private static float EmojiCueDelay =>
+        float.TryParse(Environment.GetEnvironmentVariable("EMOJI_CUE_DELAY"), out var seconds)
+            ? seconds
+            : 0.65f;
+
+    private readonly record struct FPendingEmojiCue(APawn Pawn, UObject EmoteAsset, float DueAt);
+
+    private static readonly List<FPendingEmojiCue> _pendingEmojiCues = new();
+
+    /// <summary>
+    ///     Sends the emoji cues whose moment in the throw animation has arrived - the stand-in for
+    ///     the montage notify this server cannot run. See <see cref="EmojiCueDelay" />.
+    ///
+    ///     A queued cue is DROPPED rather than sent late if the pawn stopped emoting that emoji in
+    ///     the meantime: cancelling an emote interrupts the montage, so the real notify would never
+    ///     have fired either. `LastReplicatedEmoteExecuted` is the same value StopEmote nulls, which
+    ///     makes it the exact test - a different emoji started in between replaces the entry's asset
+    ///     and correctly cancels this one.
+    /// </summary>
+    public static void Tick(UWorld world, float timeSeconds) {
+        if (_pendingEmojiCues.Count == 0) return;
+
+        for (var i = _pendingEmojiCues.Count - 1; i >= 0; i--) {
+            var pending = _pendingEmojiCues[i];
+            if (timeSeconds < pending.DueAt) continue;
+
+            _pendingEmojiCues.RemoveAt(i);
+
+            if (pending.Pawn.bIsDying ||
+                !ReferenceEquals(pending.Pawn.LastReplicatedEmoteExecuted, pending.EmoteAsset)) {
+                Console.WriteLine("FortEmoteSystem: the emoji throw was interrupted before it left the hand - " +
+                                  "cue dropped, which is what the montage notify would have done.");
+                continue;
+            }
+
+            // EVERY connection, not just the emoting one. This is a MULTICAST: the engine fans it
+            // out to every client with the pawn's channel open, and an emoji only the thrower can
+            // see is the same bug as an emote only the thrower can see. The damage cues in
+            // FortDamageSystem send to ONE connection on purpose - they drive that player's own HUD
+            // - which is why this does not copy their shape.
+            var sent = 0;
+            foreach (var connection in world.NetDriver?.ClientConnections ?? Enumerable.Empty<UNetConnection>()) {
+                if (connection.FindActorChannel(pending.Pawn) is not { } pawnChannel) continue;
+                pawnChannel.SendNetMulticastInvokeGameplayCueExecutedWithParams(EmojiCueTag, pending.EmoteAsset);
+                sent++;
+            }
+
+            Console.WriteLine($"FortEmoteSystem: emoji cue {EmojiCueTag} -> {sent} client(s), " +
+                              $"SourceObject={pending.EmoteAsset.GetFName()}" +
+                              (sent == 0 ? " (nobody has the pawn's channel open - nothing will be seen)" : ""));
+        }
+    }
+
+    /// <summary>
     ///     Real UE's FPredictionKey::GenerateNewPredictionKey - a process-wide counter starting at 1,
     ///     stamped bIsServerInitiated for a key the SERVER created
     ///     (FPredictionKey::CreateNewServerInitiatedKey, GameplayPrediction.cpp). The capture's very
@@ -62,8 +148,10 @@ public static class FortEmoteSystem {
     ///
     ///     This used to switch on the path containing /Sprays/ or /Toys/, because the item's real
     ///     UClass is not on the wire and the asset could not be read. FortEmoteAssets.Generated.cs
-    ///     now carries the class AND the per-item ability for all 437 cosmetics, baked out of the
-    ///     paks, so both guesses can go:
+    ///     now carries the class AND the per-item ability for all 590 cosmetics (263 dances, 156
+    ///     sprays, 18 toys, 153 EMOJIS - the last of which were absent until 2026-09-08, because
+    ///     they live in a SUBFOLDER of Dances and the dump filtered on the EID_ prefix), baked out
+    ///     of the paks, so both guesses can go:
     ///
     ///       * A TOY has no generic ability to fall back on - its
     ///         UAthenaToyItemDefinition::ToySpawnAbility is a different class per toy - which is why
@@ -91,6 +179,15 @@ public static class FortEmoteSystem {
                 // A toy with no ToySpawnAbility is one this server cannot play - the same refusal as
                 // before, but now on the asset's own evidence rather than on its folder name.
                 FortEmoteAssets.EEmoteKind.Toy => null,
+                // Dance AND Emoji. UAthenaEmojiItemDefinition derives from
+                // UAthenaDanceItemDefinition and plays an ordinary montage (Toss_Emoji), so an emoji
+                // needs no ability of its own.
+                //
+                // THE SPRITE IS NOT PART OF THAT, and this comment used to say it was ("entirely
+                // client-side, a UFortAnimNotify_PlayEmojiItem inside the montage"). It is a
+                // GAMEPLAY CUE the SERVER executes - see EmojiCueTag below and
+                // UActorChannel.SendNetMulticastInvokeGameplayCueExecutedWithParams. That is why the
+                // throwing hand animated and nothing was ever thrown.
                 _ => EmoteAbilityPath
             };
         }
@@ -139,13 +236,30 @@ public static class FortEmoteSystem {
         // The old spec has to go first: real UE's GiveAbilityAndActivateOnce sets RemoveAfterActivation
         // on the spec it grants, so a second emote never stacks on the first.
         //
-        // Note this nulls LastReplicatedEmoteExecuted and the line below immediately sets it again,
-        // so a replay of the SAME emote inside one replication interval collapses to no change and
-        // no RepNotify for onlookers. That is a real gap and deliberately not papered over: the
-        // window is one tick, a human cannot re-trigger an emote inside it, and closing it would
-        // mean forcing an out-of-band pawn push whose only job is to send a value the client is
-        // about to be told to replace.
+        // THE SAME EMOTE TWICE IS THE COMMON CASE, not a corner one - which is what this comment
+        // used to get wrong. It said the A -> null -> A window was "one tick, a human cannot
+        // re-trigger an emote inside it", and dismissed the fix as "an out-of-band pawn push whose
+        // only job is to send a value the client is about to be told to replace".
+        //
+        // The window is not one tick, it is one REPLICATION INTERVAL, and both writes happen inside
+        // this one RPC handler no matter how long the player waited. StopEmote nulls handle 70 and
+        // the line below sets it straight back, so the per-connection diff sees no change, sends
+        // nothing, and no onlooker's OnRep_LastReplicatedEmoteExecuted ever fires. Pressing the same
+        // emote a second time is invisible to everyone else - which is exactly what a two-client
+        // test of the onlooker path reported.
+        //
+        // Sending the null on its own is not waste: it IS the change. A RepNotify fires on the
+        // client only when the arriving value differs from the one it holds.
+        var previousEmote = controller.Pawn?.LastReplicatedEmoteExecuted;
+
         StopEmote(controller, "a new emote started");
+
+        if (previousEmote != null && controller.Pawn is { } emotingPawn
+            && ReferenceEquals(previousEmote, UAssetRegistry.GetOrCreate(emoteAssetPath))) {
+            controller.GetWorld()?.NetDriver?.FlushActorProperties(emotingPawn);
+            Console.WriteLine($"FortEmoteSystem: the same emote again - pushed handle 70's null on its " +
+                              "own so onlookers get a change to notify on.");
+        }
 
         var emoteAsset = UAssetRegistry.GetOrCreate(emoteAssetPath);
         var spec = abilitySystem.GrantAbility(UAssetRegistry.GetOrCreate(abilityPath), sourceObject: emoteAsset);
@@ -172,6 +286,48 @@ public static class FortEmoteSystem {
         }
 
         pawn.LastReplicatedEmoteExecuted = emoteAsset;
+
+        // AN EMOJI IS THROWN FROM HERE, for the same reason a spray is painted from here: the
+        // visible half is the server's job. GCNS_GM_OnDisplayEmoji is bound to this tag and reads
+        // the cue's SourceObject - the emoji item definition, which is the same object the ability
+        // spec above already carries - to pick which sprite goes on P_Emote_Show_Emoji.
+        if (FortEmoteAssets.For(emoteAssetPath[(emoteAssetPath.LastIndexOf('.') + 1)..])
+                is { Kind: FortEmoteAssets.EEmoteKind.Emoji }) {
+            // QUEUED, NOT SENT - the throw has to leave the hand first. See EmojiCueDelay.
+            _pendingEmojiCues.Add(new FPendingEmojiCue(
+                pawn, emoteAsset, (controller.GetWorld()?.TimeSeconds ?? 0f) + EmojiCueDelay));
+        }
+
+        // A SPRAY PAINTS FROM HERE, because nothing else can. GAB_Spray_Generic's whole body is
+        // behind IsServer, so the client's copy of the ability plays the montage and stops; the
+        // decal is a replicated actor the authority spawns. See FortSpraySystem.
+        if (abilityPath == SprayAbilityPath) FortSpraySystem.Paint(controller, emoteAsset);
+
+        // AND THE MONTAGE, which is what everyone ELSE plays - see APawn.EmoteMontage and the
+        // RepAnimMontageInfo block in NativeRepLayouts. ForcePlayBit TOGGLES rather than being set,
+        // because the engine's own PlayMontage does: a repeat of the same emote has to look like a
+        // change or no OnRep fires, and that is the same trap handle 70 needs a null push for.
+        if (FortEmoteAssets.For(emoteAssetPath[(emoteAssetPath.LastIndexOf('.') + 1)..]) is { Montage: { Length: > 0 } montagePath }) {
+            pawn.EmoteMontage = UAssetRegistry.GetOrCreate(montagePath);
+            pawn.EmoteMontagePosition = 0f;
+
+            // EXPLICIT, because the client's own default is 0 and a montage at rate zero is a
+            // character standing still - see APawn.EmoteMontagePlayRate. 0.25 is the ordinary
+            // montage blend-in; the struct's own default for it is 0 as well.
+            pawn.EmoteMontagePlayRate = 1f;
+            pawn.EmoteMontageBlendTime = 0.25f;
+            pawn.EmoteMontageIsStopped = false;
+            pawn.EmoteMontageSkipPositionCorrection = true;
+            pawn.EmoteMontageForcePlayBit = !pawn.EmoteMontageForcePlayBit;
+
+            Console.WriteLine($"FortEmoteSystem: onlookers get montage {montagePath[(montagePath.LastIndexOf('.') + 1)..]} " +
+                              $"(ForcePlayBit now {pawn.EmoteMontageForcePlayBit})");
+        } else {
+            // No baked montage - a spray or a toy, which has no Animation of its own. Leave the
+            // struct stopped rather than pointing at the previous emote's montage.
+            pawn.EmoteMontage = null;
+            pawn.EmoteMontageIsStopped = true;
+        }
 
         var netDriver = controller.GetWorld()?.NetDriver;
         if (netDriver == null) return;
@@ -221,12 +377,30 @@ public static class FortEmoteSystem {
     ///     Both are ordinary dirty-state changes; the next replication tick carries them. There is
     ///     deliberately no ClientEndAbility sent back: the client is the one that ended it.
     /// </summary>
+    /// <summary>
+    ///     Ends whatever emote is running, from outside. Damage is the caller that matters.
+    ///
+    ///     TAKING A HIT CANCELS AN EMOTE IN REAL FORTNITE, and until this existed the two ends
+    ///     disagreed about that: the client stopped the montage locally while the server went on
+    ///     saying `IsStopped = false` with the same ForcePlayBit, so the next thing that made an
+    ///     onlooker re-read the struct replayed the emote FROM ITS FIRST FRAME. The server's console
+    ///     is what ruled out its own involvement - no `RepAnimMontageInfo.*` in any
+    ///     ReplicateActorUpdate at the moment of damage, and no ServerPlayEmoteItem either - which
+    ///     leaves a purely local cancel, and the fix is to agree with it.
+    /// </summary>
+    public static void CancelEmote(APlayerController controller, string reason) => StopEmote(controller, reason);
+
     private static void StopEmote(APlayerController controller, string reason) {
         if (controller.Pawn is not { ActiveEmoteAbilityHandle: not 0 } pawn) return;
 
         var handle = pawn.ActiveEmoteAbilityHandle;
         pawn.ActiveEmoteAbilityHandle = 0;
         pawn.LastReplicatedEmoteExecuted = null;
+
+        // IsStopped is what an onlooker's OnRep_ReplicatedAnimMontage reads to stop the montage.
+        // The asset stays put deliberately: the client needs to know WHICH montage stopped, and
+        // nulling it in the same update would take that away.
+        pawn.EmoteMontageIsStopped = true;
 
         // Cleared with the emote, or the pawn would keep walking at a dance's speed after it ended.
         pawn.bMovingEmote = false;

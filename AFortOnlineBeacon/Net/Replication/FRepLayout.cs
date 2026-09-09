@@ -133,6 +133,7 @@ public sealed class FRepLayout {
                 // Same reason again - and FRepMovement.ToString is written to be exactly this
                 // snapshot, so a pawn that has not moved compares equal and sends nothing.
                 return def.GetRepMovementValue == null ? NotComparable : def.GetRepMovementValue(instance).ToString();
+            case ERepPropertyKind.VectorQuantize:
             case ERepPropertyKind.VectorQuantize10:
             case ERepPropertyKind.VectorQuantize100:
             case ERepPropertyKind.VectorNormal:
@@ -163,7 +164,8 @@ public sealed class FRepLayout {
         ERepPropertyKind.Float => def.GetFloatValue!(element).ToString("R"),
         ERepPropertyKind.Name => def.GetNameValue!(element).ToString(),
         ERepPropertyKind.String => def.GetStringValue!(element),
-        ERepPropertyKind.Vector or ERepPropertyKind.VectorQuantize10 or ERepPropertyKind.VectorQuantize100 =>
+        ERepPropertyKind.Vector or ERepPropertyKind.VectorQuantize or ERepPropertyKind.VectorQuantize10
+            or ERepPropertyKind.VectorQuantize100 =>
             def.GetVectorValue!(element).ToString(),
 
         // Deliberately not a fallback value: a Kind that reaches here is one WriteStructArray would
@@ -376,16 +378,20 @@ public sealed class FRepLayout {
             return;
         }
 
-        if (def.Kind is ERepPropertyKind.VectorQuantize10 or ERepPropertyKind.VectorQuantize100) {
+        if (def.Kind is ERepPropertyKind.VectorQuantize or ERepPropertyKind.VectorQuantize10
+                     or ERepPropertyKind.VectorQuantize100) {
             if (def.GetVectorValue == null) {
                 throw new InvalidOperationException($"FRepLayout: '{def.Name}' has no vector value serializer yet, can't be in a changed set.");
             }
 
-            // The two differ only in the packed encoding's scale/width - 10/24 vs 100/30, the
-            // engine's own FVector_NetQuantize10 and FVector_NetQuantize100 template arguments.
-            var (scaleFactor, maxBits) = def.Kind == ERepPropertyKind.VectorQuantize10
-                ? (10u, 24u)
-                : (100u, 30u);
+            // The three differ only in the packed encoding's scale/width - 1/20, 10/24 and 100/30,
+            // the engine's own FVector_NetQuantize, _NetQuantize10 and _NetQuantize100 template
+            // arguments.
+            var (scaleFactor, maxBits) = def.Kind switch {
+                ERepPropertyKind.VectorQuantize => (1u, 20u),
+                ERepPropertyKind.VectorQuantize10 => (10u, 24u),
+                _ => (100u, 30u)
+            };
 
             def.GetVectorValue(instance).NetSerializeWriteQuantized(payload, scaleFactor, maxBits);
             return;

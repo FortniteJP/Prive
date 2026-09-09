@@ -269,7 +269,9 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((AFortPickup) obj).ItemOwner
         },
-        new() { Name = "PickupLocationData.LootInitialPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
+        // 41 - where the toss STARTED, which is only different from where it ends once something
+        // actually tosses the item. See AFortPickup.TossStartLocation.
+        new() { Name = "PickupLocationData.LootInitialPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).TossStartLocation },
         new() { Name = "PickupLocationData.LootFinalPosition", Kind = ERepPropertyKind.VectorQuantize10, GetVectorValue = obj => ((AFortPickup) obj).RestLocation },
         new() {                                                                    // 43
             Name = "PickupLocationData.FlyTime",
@@ -567,7 +569,19 @@ internal static class NativeRepLayouts {
     ///     LocalSpin, so only the Cmd expansion was ever wrong.
     /// </summary>
     private static readonly FRepPropertyDef[] PawnProps = ActorProps.Concat(new[] {
-        Reserved("RemoteViewPitch"), // 16
+        new FRepPropertyDef {
+            // 16, 0x022A. A plain uint8, so 8 raw bits - the same ByteEnum/256 shape
+            // CharacterData.WasPartReplicatedFlags uses. See APawn.RemoteViewPitch for why this
+            // stopped being Reserved: without it nobody can see anybody else look up or down.
+            //
+            // NOT added to VehicleProps, which declares the same handle: a vehicle is not an APawn
+            // on this server (its layout is AActor's on purpose - see NativeClassNetCache.Get), so
+            // the cast below would throw for one.
+            Name = "RemoteViewPitch",
+            Kind = ERepPropertyKind.ByteEnum,
+            EnumMaxValue = 256,
+            GetByteValue = obj => ((APawn) obj).RemoteViewPitch
+        },
         new FRepPropertyDef {
             Name = "PlayerState", // 17
             Kind = ERepPropertyKind.ObjectRef,
@@ -701,7 +715,21 @@ internal static class NativeRepLayouts {
 
         Reserved("SpawnImmunityTime", ERepPropertyKind.Float),       // 63, 0x0760 - float
         Reserved("bIsStunned"),                                      // 64, 0x0788 - bool
-        Reserved("PushMomentum", ERepPropertyKind.StructAtomic),     // 65, 0x0798 - atomic FVector_NetQuantize
+        new() {
+            // 65, 0x0798 - AFortPawn::PushMomentum, an atomic FVector_NetQuantize with its own
+            // OnRep_PushMomentum on the client. This is how a SHOCKWAVE GRENADE throws somebody:
+            // the server has no way to call LaunchCharacter on a pawn it does not simulate, and the
+            // client's own copy of the projectile Blueprint only launches the pawn it owns - so what
+            // reaches everyone else is this property.
+            //
+            // StartPushMomentum(NewPushMomentum, Duration) and StopPushMomentum sit beside it in the
+            // SDK, which says the client treats it as a push held for a time rather than a one-off
+            // impulse; the server therefore has to clear it again, which FortProjectileSystem does
+            // after PushMomentumSeconds.
+            Name = "PushMomentum",
+            Kind = ERepPropertyKind.VectorQuantize,
+            GetVectorValue = obj => ((APawn) obj).PushMomentum
+        },
         Reserved("LocalSpin", ERepPropertyKind.Float),               // 66, 0x07A8 - float
         Reserved("DamageZoneActiveBitMask", ERepPropertyKind.ByteEnum), // 67, 0x08F8 - uint8
         Reserved("JumpFlashCountPacked", ERepPropertyKind.ByteEnum),    // 68, 0x0900 - uint8
@@ -894,7 +922,131 @@ internal static class NativeRepLayouts {
             Name = "CosmeticLoadout.Glider",
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((APawn) obj).CosmeticGlider
-        }
+        },
+        // ---- The rest of CosmeticLoadout, 146-165 - numbered so 176 can be reached ----
+        Reserved("CosmeticLoadout.Pickaxe"),                   // 146
+        Reserved("CosmeticLoadout.bIsDefaultCharacter"),       // 147
+        Reserved("CosmeticLoadout.Character"),                 // 148
+        Reserved("CosmeticLoadout.CharacterVariantChannels"),  // 149 - TArray
+        Reserved("CosmeticLoadout.bForceUpdateVariants"),      // 150
+        Reserved("CosmeticLoadout.Hat"),                       // 151
+        Reserved("CosmeticLoadout.Backpack"),                  // 152
+        Reserved("CosmeticLoadout.LoadingScreen"),             // 153
+        Reserved("CosmeticLoadout.BattleBus"),                 // 154
+        Reserved("CosmeticLoadout.VehicleDecoration"),         // 155
+        Reserved("CosmeticLoadout.CallingCard"),               // 156
+        Reserved("CosmeticLoadout.MapMarker"),                 // 157
+        Reserved("CosmeticLoadout.Dances"),                    // 158 - TArray
+        Reserved("CosmeticLoadout.VictoryPose"),               // 159
+        Reserved("CosmeticLoadout.MusicPack"),                 // 160
+        Reserved("CosmeticLoadout.ItemWrapOverride"),          // 161
+        Reserved("CosmeticLoadout.ItemWraps"),                 // 162 - TArray
+        Reserved("CosmeticLoadout.CharmOverride"),             // 163
+        Reserved("CosmeticLoadout.Charms"),                    // 164 - TArray
+        Reserved("CosmeticLoadout.PetSkin"),                   // 165
+        Reserved("RepCharPartAnimMontageInfo.CharPartMontages"), // 166, 0x1A58 - TArray
+        Reserved("RepCharPartAnimMontageInfo.PawnMontage"),      // 167
+        Reserved("RepCharPartAnimMontageInfo.bPlayBit"),         // 168
+        Reserved("ClientObservedStats.MyStatManager"),           // 169, 0x1A78
+        Reserved("ClientObservedStats.ObservedStats"),           // 170 - TArray
+        Reserved("AnimBPOverride"),                             // 171, 0x1BC8
+        Reserved("FootstepBankOverride"),                       // 172, 0x1BE8
+        Reserved("PackedReplicatedSlopeAngles"),                // 173, 0x1EC8 - uint16
+        Reserved("PlayerStatus"),                               // 174, 0x1F50 - uint32
+        Reserved("AccelerationPack"),                           // 175, 0x1F54 - uint16
+
+        // ============================ RepAnimMontageInfo, 176-186 ============================
+        //
+        // HOW AN ONLOOKER SEES AN EMOTE, and the half this project was missing entirely.
+        //
+        // `LastReplicatedEmoteExecuted` (handle 70) is the EMOTING PLAYER'S OWN view: the onlooker's
+        // client receives it for a simulated proxy and does nothing with it, which was measured
+        // directly - on the second client only the LOCAL pawn (zero `Role 1` lines) ever plays an
+        // emote montage, while the remote pawn (1291 `Role 1` lines) never does.
+        //
+        // GAS's answer for simulated proxies is this struct. A real server never fills it by hand:
+        // it activates the ability, the ability calls UAbilitySystemComponent::PlayMontage, and that
+        // writes RepAnimMontageInfo as a side effect - which is exactly all Project-Reboot-3.0 does
+        // (`GiveAbilityAndActivateOnce` and nothing else, FortPlayerController.cpp:1117-1210). An
+        // out-of-process server has no ability to activate, so it has to write the struct itself.
+        //
+        // The montage asset comes from the emote definition's `Animation` (FortEmoteAssets, baked
+        // for all 263 dances). Note AnimationFemaleOverride exists and is deliberately NOT used:
+        // the client picks the variant for the character it is rendering.
+        new() {
+            Name = "RepAnimMontageInfo.AnimMontage", // 176, 0x1F58 - class UAnimMontage*
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((APawn) obj).EmoteMontage
+        },
+        new() {
+            Name = "RepAnimMontageInfo.PlayRate", // 177
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APawn) obj).EmoteMontagePlayRate
+        },
+        new() {
+            Name = "RepAnimMontageInfo.Position", // 178
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APawn) obj).EmoteMontagePosition
+        },
+        new() {
+            Name = "RepAnimMontageInfo.BlendTime", // 179
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((APawn) obj).EmoteMontageBlendTime
+        },
+        Reserved("RepAnimMontageInfo.NextSectionID"), // 180 - uint8, only meaningful for sectioned montages
+
+        // THE NEXT FOUR ARE BITFIELDS AT ONE OFFSET (0x15), AND THEIR ORDER IS NOT DECLARATION
+        // ORDER. FRepLayout sorts a recursed struct's members with FCompareUFieldOffsets, whose
+        // tie-break at equal offsets is `A.GetName() < B.GetName()` - and FString's operator< is
+        // `FPlatformString::Stricmp(...) < 0`, i.e. CASE-INSENSITIVE (UnrealString.h:940). So the
+        // lowercase-b member sorts FIRST, not last:
+        //
+        //      181 bSkipPlayRate   182 ForcePlayBit   183 IsStopped   184 SkipPositionCorrection
+        //
+        // Getting this wrong is what made onlooker emotes do nothing: the first attempt sorted
+        // case-sensitively, so ForcePlayBit went out as bSkipPlayRate, IsStopped went out as
+        // ForcePlayBit, and the real IsStopped was never sent at all - leaving it at its
+        // constructor default of TRUE, which tells the client the montage has already stopped.
+        // Tools/RepHandles/rep_handles.py had the same bug and has been fixed with it.
+        Reserved("RepAnimMontageInfo.bSkipPlayRate"), // 181 - false; sending it would only tell the
+                                                     // client to assume PlayRate is 1, and 177 is real
+        new() {
+            // 182 - the BIT THAT MAKES IT PLAY. UAbilitySystemComponent flips it on every fresh
+            // PlayMontage so that replaying the same montage is still a change the client notices -
+            // the same problem handle 70 has with a repeated emote, solved by the engine with a
+            // toggle rather than a null.
+            Name = "RepAnimMontageInfo.ForcePlayBit",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).EmoteMontageForcePlayBit ? 1 : 0)
+        },
+        new() {
+            Name = "RepAnimMontageInfo.IsStopped", // 183 - set when the emote ends
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).EmoteMontageIsStopped ? 1 : 0)
+        },
+        new() {
+            // 184, AND IT IS WHAT MAKES THE EMOTE LOOP. With it false the onlooker runs GAS's
+            // position-correction block (AbilitySystemComponent_Abilities.cpp:2589-2624), which does
+            // two things this server cannot survive:
+            //
+            //   * `RepNextSectionID = int32(NextSectionID) - 1`, so our un-sent NextSectionID of 0
+            //     becomes INDEX_NONE and the client calls Montage_SetNextSection(section0, NONE) -
+            //     it CLEARS the loop and the montage stops at the end of the first section, which is
+            //     exactly "it reverts to standing at the loop point";
+            //   * it fast-forwards the montage to RepAnimMontageInfo.Position whenever the two
+            //     differ by more than 0.1s - and our Position is a constant 0, so every later OnRep
+            //     yanks the animation back to its first frame.
+            //
+            // A real server streams Position every tick (UAbilitySystemComponent::Tick runs while
+            // IsStopped is false) and a real NextSectionID with it. This one has neither, and
+            // SkipPositionCorrection is the engine's own opt-out for exactly that: the client then
+            // plays the montage with its OWN authored sections, which is what loops it.
+            Name = "RepAnimMontageInfo.SkipPositionCorrection",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).EmoteMontageSkipPositionCorrection ? 1 : 0)
+        },
+        Reserved("RepAnimMontageInfo.PredictionKey"),          // 185 - atomic FPredictionKey
+        Reserved("RepAnimMontageStartSection")                 // 186, 0x1F88 - int32
     }).ToArray();
 
     /// <summary>
@@ -2712,6 +2864,32 @@ internal static class NativeRepLayouts {
     }).ToArray();
 
     /// <summary>
+    ///     AFortSprayDecalInstance (BP_SprayDecal_C) - a spray on a wall. Another ABuildingSMActor
+    ///     subclass, so it inherits every building handle unchanged and adds ONE replicated property
+    ///     of its own: SprayInfo, an FFortSprayDecalRepPayload with no native NetSerialize, so
+    ///     RepLayout flattens its four members into handles 69-72.
+    ///
+    ///     Handle 68 is DECLARED and never sent, for the same positional reason BuildingContainerProps
+    ///     declares it: BuildingActorProps stops at 67 and skipping 68 would renumber all four of
+    ///     these by one.
+    ///
+    ///     Only 69 is ever filled. The client reads the picture (DecalMaterial / DecalTexture) off the
+    ///     SPID asset itself, so naming the asset is the whole message; the banner fields exist for
+    ///     the sprays that draw the player's own banner, which this server has none of.
+    /// </summary>
+    private static readonly FRepPropertyDef[] SprayDecalProps = BuildingActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("ProxyGameplayCueDamagePhysical.EffectContext", ERepPropertyKind.StructAtomic), // 68
+        new() {
+            Name = "SprayInfo.SprayAsset",                                        // 69, 0x0AD0
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortSprayDecalInstance) obj).SprayAsset
+        },
+        Reserved("SprayInfo.BannerName", ERepPropertyKind.Name),                  // 70
+        Reserved("SprayInfo.BannerColor", ERepPropertyKind.Name),                 // 71
+        Reserved("SprayInfo.SavedStatValue", ERepPropertyKind.Int32)              // 72
+    }).ToArray();
+
+    /// <summary>
     ///     AAthenaSupplyDrop_Llama_C - a supply llama. THE FIRST TABLE IN THIS FILE THAT BRANCHES OFF
     ///     ABuildingActor RATHER THAN EXTENDING BuildingActorProps, and the Take(37) is the whole
     ///     point of it.
@@ -2845,6 +3023,7 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout Projectile = new(ProjectileProps);
 
     public static readonly FRepLayout BuildingActor = new(BuildingActorProps);
+    public static readonly FRepLayout SprayDecal = new(SprayDecalProps);
     public static readonly FRepLayout BuildingContainer = new(BuildingContainerProps);
     public static readonly FRepLayout SupplyDropLlama = new(SupplyDropLlamaProps);
     public static readonly FRepLayout BuildingWall = new(BuildingWallProps);
@@ -2889,6 +3068,8 @@ internal static class NativeRepLayouts {
         ABuildingContainer => BuildingContainer,
         // Likewise - a llama derives from ABuildingActor but has its OWN handles from 38 on.
         AFortAthenaSupplyDropLlama => SupplyDropLlama,
+        // Also before ABuildingActor: a spray decal IS one, and adds handles 69-72.
+        AFortSprayDecalInstance => SprayDecal,
         ABuildingWall => BuildingWall,
         ABuildingActor => BuildingActor,
         AFortAthenaAircraft => Aircraft,

@@ -51,6 +51,10 @@ TABLES = [
     # covers belongs to ABuildingActor, which sits above it - checking against the derived class is
     # the stricter of the two, since it would also catch anything wrongly inserted in between.
     ("BuildingActorProps", ["ActorProps"], "ABuildingSMActor"),
+    # A spray decal. Listed because its FOUR handles sit on top of BuildingActorProps' 67, so every
+    # one of them moves if anything below is inserted or removed - exactly the silent renumbering
+    # this script exists for. ActorProps first, then BuildingActorProps' own entries, then its own.
+    ("SprayDecalProps", ["ActorProps", "BuildingActorProps"], "AFortSprayDecalInstance"),
     ("VehicleSeatComponentProps", [], "UFortVehicleSeatComponent"),
     # A STRUCT, not a class: FAthenaCarPlayerSlot is the inner of UFortVehicleSeatComponent's
     # PlayerSlots, and this table is the per-element handle space. Its LENGTH is load-bearing in a
@@ -93,6 +97,20 @@ def same(got, exp):
     ("DelayedQuickBarActions.Items"). Same single handle either way."""
     if leaf(got) == leaf(exp):
         return True
+
+    # THE PARENT-ONLY FALLBACK ONLY APPLIES WHEN ONE SIDE NAMES NO MEMBER. It was written for a
+    # custom-delta struct the C# table names by its parent alone; letting it match when BOTH sides
+    # name a member makes any two members of one struct compare equal - which is exactly how a
+    # same-offset BITFIELD reorder inside FGameplayAbilityRepAnimMontage went unnoticed while the
+    # server sent ForcePlayBit into bSkipPlayRate and never sent IsStopped at all.
+    # A wrapper struct with a single member is the same one handle either way -
+    # FGameplayAbilitySpecHandle is just `int32 Handle`, so naming it by the wrapper is exact.
+    if exp == got + ".Handle":
+        return True
+
+    if "." in got and "." in exp:
+        return False
+
     return got.split(".")[0] == exp.split(".")[0]
 
 

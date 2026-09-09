@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Core.Math;
 using AFortOnlineBeacon.Core.Objects;
 using AFortOnlineBeacon.Net.Actors;
 using AFortOnlineBeacon.Runtime;
@@ -177,7 +177,11 @@ internal static class FortProjectileSystem {
         // also why the pitch matters: the client sends -9 to -14 degrees, i.e. slightly upward, and
         // that is the entire arc of the throw.
         var forward = direction.GetForwardVector();
-        projectile.Velocity = new FVector { X = forward.X * Speed, Y = forward.Y * Speed, Z = forward.Z * Speed };
+        // THE ITEM'S OWN SPEED, not the frag grenade's. Nine abilities override the family's 4000
+        // and the difference is visible: a firework mortar throws at 2500 and used to sail past
+        // whatever it was aimed at, a clinger throws at 6000. See FortThrowSpeeds.
+        var speed = FortThrowSpeeds.For(itemName, Speed);
+        projectile.Velocity = new FVector { X = forward.X * speed, Y = forward.Y * speed, Z = forward.Z * speed };
         if (ReplicateMovement) projectile.ReplicatedMovement.LinearVelocity = projectile.Velocity;
 
         // WHOSE grenade this is. Instigator (handle 15) is already known to be load-bearing on this
@@ -455,11 +459,18 @@ internal static class FortProjectileSystem {
                 };
             } else {
                 projectile.BounceCount++;
-                projectile.Velocity = new FVector {
-                    X = projectile.Velocity.X * (1f - BounceFriction),
-                    Y = projectile.Velocity.Y * (1f - BounceFriction),
-                    Z = rebound
-                };
+
+                // ARMED FIRST, BOUNCED SECOND - and the order is the whole of it. This call used to
+                // sit above the assignment below, so the deploying projectile's velocity was set to
+                // zero and then immediately overwritten by the rebound: an impulse grenade stopped
+                // and carried on bouncing anyway, which is exactly what was reported.
+                projectile.Velocity = ArmOnHitDelay(world, projectile)
+                    ? new FVector()
+                    : new FVector {
+                        X = projectile.Velocity.X * (1f - BounceFriction),
+                        Y = projectile.Velocity.Y * (1f - BounceFriction),
+                        Z = rebound
+                    };
             }
         }
 
@@ -514,12 +525,18 @@ internal static class FortProjectileSystem {
             // A rebound too small to matter is a SLIDE rather than one of the five bounces that
             // detonate a grenade.
             var sliding = reboundSpeed * Bounciness < SlideSpeed;
-            if (!sliding) projectile.BounceCount++;
+            var deploying = false;
+            if (!sliding) {
+                projectile.BounceCount++;
+                deploying = ArmOnHitDelay(world, projectile);
+            }
 
             var tangentScale = sliding ? MathF.Pow(1f - BounceFriction, dt) : 1f - BounceFriction;
             var bounce = sliding ? 0f : Bounciness;
 
-            projectile.Velocity = new FVector {
+            // A piece that has landed to deploy does not bounce off whatever it landed on - same as
+            // the ground case above.
+            projectile.Velocity = deploying ? new FVector() : new FVector {
                 X = (v.X + projected.X) * tangentScale + projected.X * bounce,
                 Y = (v.Y + projected.Y) * tangentScale + projected.Y * bounce,
                 Z = (v.Z + projected.Z) * tangentScale + projected.Z * bounce
@@ -722,7 +739,13 @@ internal static class FortProjectileSystem {
     /// </summary>
     private static void Explode(UWorld world, AFortProjectileBase projectile) {
         var origin = projectile.SimulatedLocation;
-        var radiusSquared = ExplosionRadius * ExplosionRadius;
+
+        // THE ITEM'S OWN RADIUS. A shockwave grenade's is 500 (Default.KnockGrenade.Radius) and a
+        // stink bomb's cloud is 512, where the frag's constant is what everything used to use. The
+        // constant remains the fallback for an item with no row.
+        var effect = FortGrenadeEffects.For(projectile.SourceItemName);
+        var blastRadius = effect is { Radius: > 0f } ? effect.Value.Radius : ExplosionRadius;
+        var radiusSquared = blastRadius * blastRadius;
 
         // THE ITEM'S OWN NUMBERS, not the frag grenade's. Everything thrown used to explode for
         // 100/375 because that is the one ability whose values had been read - so a shockwave
@@ -733,10 +756,25 @@ internal static class FortProjectileSystem {
         var playerDamage = stats?.Player ?? PlayerDamage;
         var environmentDamage = stats?.Environment ?? EnvironmentDamage;
 
+        // AND ZERO WHEN THE ITEM DOES NOT DAMAGE, which the stat row cannot tell you: a boogie
+        // bomb's own WeaponStatHandle names the FRAG's row (100/375), so it exploded for 100 and
+        // killed whoever it was meant to make dance. An impulse grenade, a shockwave, a smoke and a
+        // stink bomb are all the same shape of wrong - the stink bomb damages through its CLOUD, not
+        // its blast. See the generator for why this is spelled out rather than read.
+        if (effect is { Damages: false }) {
+            playerDamage = 0f;
+            environmentDamage = 0f;
+        }
+
         if (stats is null && projectile.SourceItemName is { Length: > 0 } unknown)
             Console.WriteLine($"FortProjectileSystem: '{unknown}' has no row in FortProjectileStats - " +
                               $"exploding for the frag grenade's {PlayerDamage:F0}/{EnvironmentDamage:F0}.");
         var instigator = projectile.GetInstigator();
+
+        // Everyone the blast reached, for the NON-damage half. Collected rather than acted on
+        // inline because the effects need the whole set (and because a boogie bomb's victims are the
+        // people it damaged for zero).
+        var caught = new List<APawn>();
 
         var pawnsHit = 0;
         var buildingsHit = 0;
@@ -749,7 +787,17 @@ internal static class FortProjectileSystem {
             // anywhere near the world origin would damage every one of them at once, which is the
             // same trap the distance culling hit (see AActor.bHasKnownLocation).
             if (!actor.bHasKnownLocation) continue;
-            if (FVector.DistSquared(origin, actor.GetActorLocation()) > radiusSquared) continue;
+
+            // NAMED, not just skipped. An actor with no usable position is a bug somewhere else, and
+            // this loop is where it surfaced - as a NullReferenceException that took the server down
+            // mid-match with a stack naming only DistSquared. See AActor.SetActorLocation.
+            if (actor.GetActorLocation() is not { } actorLocation) {
+                Console.WriteLine($"FortProjectileSystem: {actor.GetFName()} says it knows where it is but " +
+                                  "has no location - skipped for this explosion.");
+                continue;
+            }
+
+            if (FVector.DistSquared(origin, actorLocation) > radiusSquared) continue;
 
             // LINE OF SIGHT, against player builds AND the map itself. The real ability sets
             // bExcludeObstructedByWorld and picks between GE_Damage_Explosive_LineOfSight and
@@ -808,6 +856,7 @@ internal static class FortProjectileSystem {
                     var killer = instigator?.PlayerState ?? instigator?.Controller?.PlayerState;
 
                     FortDamageSystem.ApplyDamage(victim, playerDamage, EDeathCause.Grenade, killer);
+                    caught.Add(pawn);
                     pawnsHit++;
                     if (pawn == instigator)
                         Console.WriteLine("FortProjectileSystem:   ...including the thrower - the real ability does not exclude them either.");
@@ -816,10 +865,12 @@ internal static class FortProjectileSystem {
         }
 
         Console.WriteLine($"FortProjectileSystem: explosion of {projectile.SourceItemName ?? "?"} at {origin} " +
-                          $"radius {ExplosionRadius:F0} hit " +
+                          $"radius {blastRadius:F0} hit " +
                           $"{pawnsHit} pawn(s) for {playerDamage:F0} and {buildingsHit} building(s) for {environmentDamage:F0}" +
                           $"{(blocked > 0 ? $", {blocked} shielded by player builds" : "")}" +
                           $"{(blockedByWorld > 0 ? $", {blockedByWorld} shielded by the map" : "")}.");
+
+        if (effect is { } grenade) ApplyGrenadeEffect(world, projectile, origin, grenade, caught);
 
         // WHY THE THROWER WAS OR WAS NOT HIT, unconditionally. "0 pawns" has three completely
         // different causes - too far, not in the net driver's list at all, or no known location -
@@ -831,7 +882,7 @@ internal static class FortProjectileSystem {
             var baked = TerrainHeightMap.GetGroundHeight(origin.X, origin.Y);
             Console.WriteLine($"FortProjectileSystem:   thrower '{instigator.GetFName()}' at " +
                               $"{instigator.GetActorLocation()} is {distance:F0} units away " +
-                              $"(radius {ExplosionRadius:F0}), inNetworkObjectList={inList}, " +
+                              $"(radius {blastRadius:F0}), inNetworkObjectList={inList}, " +
                               $"knownLocation={instigator.bHasKnownLocation}; " +
                               $"{BuildingStructuralSupportSystem.PiecesWithin(origin, 1000f)} build(s) within 1000 " +
                               $"of the blast, {BuildingStructuralSupportSystem.PiecesWithin(instigator.GetActorLocation(), 1000f)} " +
@@ -844,6 +895,12 @@ internal static class FortProjectileSystem {
 
     /// <summary>One throw waiting for its ability to be told it is over.</summary>
     private sealed class FPendingAbilityEnd {
+        /// <summary>
+        ///     The pawn whose emote montage this end should also stop - a boogie bomb's victim.
+        ///     Null for a throw, which has no montage of its own to stop.
+        /// </summary>
+        public APawn? StopEmoteMontage;
+
         public required APlayerState PlayerState;
         public required UFortAbilitySystemComponent AbilitySystem;
         public required int Handle;
@@ -863,11 +920,37 @@ internal static class FortProjectileSystem {
     private static readonly List<FPendingAbilityEnd> PendingEnds = new();
 
     public static void Tick(UWorld world) {
+        // The lingering half of the thrown items: a knockback that has to be taken back off, and a
+        // stink bomb's cloud that keeps biting. See TickGrenadeEffects.
+        TickGrenadeEffects(world, world.TimeSeconds);
+
         for (var i = PendingEnds.Count - 1; i >= 0; i--) {
             var pending = PendingEnds[i];
             if (world.TimeSeconds < pending.EndsAtWorldTime) continue;
 
             PendingEnds.RemoveAt(i);
+
+            if (pending.StopEmoteMontage is { } dancer) {
+                dancer.EmoteMontageIsStopped = true;
+                dancer.EmoteMontage = null;
+                world.NetDriver?.FlushActorProperties(dancer);
+
+                // AND CLEAR THE SPEC, because ClientEndAbility on its own does not end anything on
+                // this client - that is not a guess, it is what the comment on the re-grant below
+                // has recorded since the throw handshake was worked out: the payload is right, the
+                // client keeps running the ability anyway, and a FRESH SPEC is the only thing that
+                // has ever freed one. The throw path clears and re-grants because it needs to throw
+                // again; a boogie bomb's victim only needs the clearing half.
+                //
+                // This is why the first attempt at stopping the dance changed nothing: it sent the
+                // end and stopped there.
+                pending.AbilitySystem.ClearAbility(pending.Handle);
+                world.NetDriver?.FlushAbilitySystemComponent(pending.PlayerState);
+
+                Console.WriteLine($"FortProjectileSystem: {pending.PlayerState.GetFName()} stops dancing - " +
+                                  $"spec {pending.Handle} cleared and the montage stopped.");
+            }
+
             world.NetDriver?.SendClientEndAbility(pending.PlayerState, pending.AbilitySystem,
                                                   pending.Handle, pending.PredictionKey);
 
@@ -945,4 +1028,293 @@ internal static class FortProjectileSystem {
             projectile.Destroy();
         }
     }
+
+
+    /// <summary>
+    ///     The half of a thrown item that is not damage: the throw, the dance, the cloud.
+    ///
+    ///     WHY IT IS SEPARATE FROM THE DAMAGE LOOP. A boogie bomb damages for zero, so "who did this
+    ///     affect" cannot be read off the damage; and the effects need a set rather than one victim
+    ///     at a time (a gas cloud lingers over everyone who walks into it, not only who was standing
+    ///     there when it landed). The damage loop collects, this applies.
+    /// </summary>
+    private static void ApplyGrenadeEffect(
+        UWorld world, AFortProjectileBase projectile, FVector origin,
+        (EGrenadeEffect Kind, float Radius, float LaunchVelocity, float AddToZ,
+         float Duration, float Period, float HitDelay, bool FriendlyFire,
+         bool Damages, bool FallDamage) effect,
+        List<APawn> caught) {
+
+        switch (effect.Kind) {
+            case EGrenadeEffect.Knockback:
+            case EGrenadeEffect.Chill:
+                foreach (var pawn in caught) {
+                    var launch = FortGrenadeEffects.LaunchVelocityFor(origin, pawn.GetActorLocation(),
+                                                                     effect.LaunchVelocity, effect.AddToZ);
+                    pawn.SetPushMomentum(launch);
+                    world.NetDriver?.FlushActorProperties(pawn);
+
+                    // THE "LOW GRAVITY" HALF OF A SHOCKWAVE, which in the data is not gravity at all:
+                    // `Default.ShockwaveGrenade.AllPlayersTakeFallDamage` is 0 and the impulse
+                    // grenade's row leaves it at 1. So a shockwave throws you across the map and you
+                    // land unhurt, while an impulse throw is an ordinary fall - which is the whole
+                    // difference between the two in play.
+                    if (!effect.FallDamage) {
+                        pawn.GrantFallDamageImmunity(world.TimeSeconds);
+                        SendLowGravityCues(world, pawn);
+                    }
+
+                    // Set back after a moment. PushMomentum is a HELD push on the client
+                    // (StartPushMomentum takes a duration, StopPushMomentum exists), so a value left
+                    // standing is a pawn that never stops being shoved - and the next shockwave would
+                    // see no change on the wire and send nothing at all.
+                    _pushesToClear.Add((pawn, world.TimeSeconds + PushMomentumSeconds));
+                }
+
+                Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} threw {caught.Count} pawn(s) " +
+                                  $"at {effect.LaunchVelocity:F0} uu/s (+{effect.AddToZ:F0} Z before normalising)" +
+                                  (effect.FallDamage ? "" : " - and they land unhurt") +
+                                  (effect.Kind == EGrenadeEffect.Chill
+                                      ? " - the slippery-feet half is the client's own and is not sent."
+                                      : "."));
+                break;
+
+            case EGrenadeEffect.Dance:
+                foreach (var pawn in caught) BoogieBomb(world, pawn, effect.Duration);
+                Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} set {caught.Count} pawn(s) " +
+                                  $"dancing for {effect.Duration:F0}s.");
+                break;
+
+            case EGrenadeEffect.Gas:
+                _gasClouds.Add((origin, effect.Radius, world.TimeSeconds + effect.Duration,
+                                world.TimeSeconds + effect.Period, effect.Period,
+                                projectile.GetInstigator()));
+                Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} left a cloud at {origin} " +
+                                  $"(radius {effect.Radius:F0}, {effect.Duration:F0}s, a tick every {effect.Period:F1}s).");
+                break;
+        }
+    }
+
+    /// <summary>
+    ///     Makes one pawn dance, the way a boogie bomb does: by running the game's OWN stun ability on
+    ///     them.
+    ///
+    ///     `GA_DanceGrenade_Stun_C` is ServerInitiated, which is the one property that lets this
+    ///     server start an ability on a client at all - so the boogie bomb needs no new wire
+    ///     mechanism, only the emote recipe pointed at a different ability
+    ///     (FortEmoteSystem.PlayEmoteItem is the same three steps). The montage goes on the pawn
+    ///     beside it so ONLOOKERS see the dance too; without it only the victim's own client would.
+    ///
+    ///     The five seconds are the ability's, not ours: it ends itself, and the server does not have
+    ///     to time anything. Duration is logged so a mismatch with Default.DanceGrenade.Duration is
+    ///     visible if the ability ever stops agreeing.
+    /// </summary>
+    private static void BoogieBomb(UWorld world, APawn pawn, float duration) {
+        if (pawn.PlayerState is not { AbilitySystemComponent: { } abilitySystem } playerState) return;
+        if (world.NetDriver is not { } netDriver) return;
+
+        var spec = abilitySystem.GrantAbility(UAssetRegistry.GetOrCreate(FortGrenadeEffects.DanceStunAbilityPath));
+
+        // What everybody else sees. Same handles the emote system drives, and the same ForcePlayBit
+        // toggle: a repeat has to look like a change or no OnRep fires on an onlooker's client.
+        pawn.EmoteMontage = UAssetRegistry.GetOrCreate(FortGrenadeEffects.DanceStunMontagePath);
+        pawn.EmoteMontagePosition = 0f;
+        pawn.EmoteMontagePlayRate = 1f;
+        pawn.EmoteMontageBlendTime = 0.25f;
+        pawn.EmoteMontageIsStopped = false;
+        pawn.EmoteMontageSkipPositionCorrection = true;
+        pawn.EmoteMontageForcePlayBit = !pawn.EmoteMontageForcePlayBit;
+
+        netDriver.FlushAbilitySystemComponent(playerState);
+
+        // THE SAME KEY HAS TO COME BACK ON THE END, and passing a blank one is why the first attempt
+        // at stopping the dance did nothing: ClientEndAbility is matched against the activation, and
+        // an end carrying a different prediction key is not an end to anything the client is running.
+        // The throw path has always kept its key for exactly this reason; the boogie bomb did not.
+        var danceKey = new FPredictionKey {
+            bValidKeyForConnection = true,
+            bIsServerInitiated = true,
+            Current = _nextDancePredictionKey++
+        };
+
+        netDriver.SendClientActivateAbilitySucceed(playerState, abilitySystem, spec.Handle, danceKey);
+
+        // AND IT HAS TO BE ENDED, or the victim dances for the rest of the match. In the real game
+        // the ability is held up by GE_DanceStun's five seconds and ends when that expires - this
+        // server never applies the effect, so nothing was ever going to stop it. The same
+        // ClientEndAbility handshake the throw itself uses does the job; the montage is stopped in
+        // the same breath so onlookers see the dance finish too.
+        PendingEnds.Add(new FPendingAbilityEnd {
+            PlayerState = playerState,
+            AbilitySystem = abilitySystem,
+            Handle = spec.Handle,
+            PredictionKey = danceKey,
+            EndsAtWorldTime = world.TimeSeconds + duration,
+            AbilityClass = spec.Ability,
+            StopEmoteMontage = pawn
+        });
+
+        Console.WriteLine($"FortProjectileSystem: {playerState.GetFName()} is boogie-bombed for {duration:F0}s " +
+                          $"(spec handle {spec.Handle}).");
+    }
+
+    /// <summary>
+    ///     A server-initiated prediction key counter, exactly like the emote system's and for the
+    ///     same reason - see FPredictionKey::CreateNewServerInitiatedKey. Separate because the two
+    ///     are independent streams and sharing a counter would only couple them.
+    /// </summary>
+    private static short _nextDancePredictionKey = 1;
+
+    /// <summary>
+    ///     How long a knockback's PushMomentum stays set before it is cleared.
+    ///
+    ///     NOT A ROW - AthenaGameData has no duration for it, and the client's own
+    ///     StartPushMomentum(vector, duration) suggests the duration lives at the call site rather
+    ///     than in the table. Long enough for the push to be applied and short enough that the next
+    ///     one is a fresh CHANGE on the wire. PUSH_MOMENTUM_SECONDS overrides it.
+    /// </summary>
+    private static float PushMomentumSeconds =>
+        float.TryParse(Environment.GetEnvironmentVariable("PUSH_MOMENTUM_SECONDS"), out var seconds)
+            ? seconds
+            : 0.5f;
+
+    private static readonly List<(APawn Pawn, float ClearAt)> _pushesToClear = new();
+
+    /// <summary>A stink bomb's cloud: where, how big, until when, and when it next bites.</summary>
+    private static readonly List<(FVector Origin, float Radius, float EndsAt, float NextTickAt,
+                                  float Period, APawn? Instigator)> _gasClouds = new();
+
+    /// <summary>
+    ///     The lingering half of the thrown items - a knockback that has to be taken back off, and a
+    ///     gas cloud that keeps damaging whoever is standing in it. Driven from the projectile tick,
+    ///     which already runs every frame.
+    /// </summary>
+    private static void TickGrenadeEffects(UWorld world, float timeSeconds) {
+        for (var i = _landingCues.Count - 1; i >= 0; i--) {
+            if (timeSeconds < _landingCues[i].At) continue;
+
+            var landing = _landingCues[i];
+            _landingCues.RemoveAt(i);
+            SendCueToEveryone(world, landing.Pawn, FortGrenadeEffects.LowGravLandingCue);
+        }
+
+        for (var i = _pushesToClear.Count - 1; i >= 0; i--) {
+            if (timeSeconds < _pushesToClear[i].ClearAt) continue;
+
+            var pawn = _pushesToClear[i].Pawn;
+            _pushesToClear.RemoveAt(i);
+
+            pawn.SetPushMomentum(new FVector());
+            world.NetDriver?.FlushActorProperties(pawn);
+        }
+
+        for (var i = _gasClouds.Count - 1; i >= 0; i--) {
+            var cloud = _gasClouds[i];
+
+            if (timeSeconds >= cloud.EndsAt) { _gasClouds.RemoveAt(i); continue; }
+            if (timeSeconds < cloud.NextTickAt) continue;
+
+            _gasClouds[i] = cloud with { NextTickAt = timeSeconds + cloud.Period };
+
+            var radiusSquared = cloud.Radius * cloud.Radius;
+            var stats = FortProjectileStats.For("Athena_GasGrenade");
+            var damage = stats?.Player ?? 5f;
+            var killer = cloud.Instigator?.PlayerState ?? cloud.Instigator?.Controller?.PlayerState;
+
+            foreach (var actor in world.NetDriver?.NetworkObjectList.ToArray() ?? Array.Empty<AActor>()) {
+                if (actor is not APawn pawn || !actor.bHasKnownLocation) continue;
+                if (FVector.DistSquared(cloud.Origin, pawn.GetActorLocation()) > radiusSquared) continue;
+                if (pawn.PlayerState is not { } victim) continue;
+
+                FortDamageSystem.ApplyDamage(victim, damage, EDeathCause.Grenade, killer);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Starts the "goes off N seconds after it TOUCHES something" clock, for the items that have
+    ///     one, the first time they touch anything.
+    ///
+    ///     A FUSE AND A HIT DELAY ARE DIFFERENT THINGS, and three of the throwables use the second.
+    ///     A CLINGER does not count down from the throw at all - it sticks where it lands and goes
+    ///     off 2.5 seconds later (`Default.StickyGrenade.OnHitExplodeDelay`), so one thrown across a
+    ///     room and one dropped at your feet both give the same warning. A shockwave grenade's is
+    ///     0.5 and a chiller's the same. Everything else keeps the frag's fuse.
+    ///
+    ///     Armed ONCE: the deadline is only ever brought FORWARD, so a grenade that lands, rolls and
+    ///     bumps a wall does not keep resetting its own timer and never explode.
+    /// </summary>
+    private static bool ArmOnHitDelay(UWorld world, AFortProjectileBase projectile) {
+        if (FortGrenadeEffects.For(projectile.SourceItemName) is not { } effect) return false;
+        if (projectile.bLandedAndDeploying) return true;
+
+        projectile.bLandedAndDeploying = true;
+
+        // IT STOPS WHERE IT LANDS. Everything with an effect DEPLOYS rather than bounces: a boogie
+        // bomb goes off where it hit, a stink bomb's cloud sits there, a clinger sticks. The frag
+        // grenade keeps the bouncing model, because that IS the frag grenade.
+        //
+        // Zeroing the velocity is what makes the difference visible: without it a shockwave grenade
+        // rolled on for half a second and threw people from somewhere they had already walked past,
+        // and a firework mortar sailed off the far side of the island.
+        projectile.Velocity = new FVector();
+
+        var delay = effect.HitDelay;
+        var deadline = world.TimeSeconds + delay;
+        if (deadline < projectile.ExplodesAtWorldTime) projectile.ExplodesAtWorldTime = deadline;
+
+        Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} landed and stopped - " +
+                          $"{delay:F1}s until it deploys" +
+                          (delay > 0f ? " (its own OnHitExplodeDelay, not the fuse)." : " (at once)."));
+        return true;
+    }
+
+    /// <summary>
+    ///     The visible half of a shockwave's low gravity: the two gameplay cues the game itself puts
+    ///     on the thrown player.
+    ///
+    ///     Found by following what the projectile actually applies - `GE_Athena_ShockGrenade_FX`,
+    ///     which grants `GA_Athena_ShockGrenade_RemoveFX`, whose entire content is a LOOPING cue and
+    ///     a LANDING one, both named after the Low Gravity Rock. So the effect is not something to
+    ///     invent; it is two tags this server can now send, because the tag table exists.
+    ///
+    ///     THE LIFTOFF ONE, not the looping one, and the difference is the notify's CLASS rather
+    ///     than the tag: `GCN_Athena_LowGravity_C` is a FortGameplayCueNotify_**Looping** and answers
+    ///     only to Added/WhileActive, so sending it as Executed - which is what this did first - is a
+    ///     no-op, and "there is still no low gravity effect" was exactly that. Its siblings
+    ///     `_Liftoff_C` and `_Land_C` are FortGameplayCueNotify_**Simple** and do answer to Executed.
+    ///
+    ///     So the burst at the throw is sent here and the thump on landing rides the same path when
+    ///     the immunity ends. The continuous aura between them is still missing: it needs Added, and
+    ///     needs a REMOVE afterwards that this server has no way to send (removal rides the ASC's
+    ///     replicated cue list, not an RPC), and a loop that cannot be stopped is worse than none.
+    ///     SHOCKWAVE_FX=0 turns the whole thing off.
+    /// </summary>
+    private static void SendLowGravityCues(UWorld world, APawn pawn) {
+        if (Environment.GetEnvironmentVariable("SHOCKWAVE_FX") is "0") return;
+
+        SendCueToEveryone(world, pawn, FortGrenadeEffects.LowGravLiftoffCue);
+
+        // ...and the landing thump, when the immunity that marks the flight runs out.
+        _landingCues.Add((pawn, world.TimeSeconds + LandingCueDelay));
+    }
+
+    private static void SendCueToEveryone(UWorld world, APawn pawn, string cueTag) {
+        foreach (var connection in world.NetDriver?.ClientConnections ?? Enumerable.Empty<UNetConnection>()) {
+            if (connection.FindActorChannel(pawn) is not { } channel) continue;
+            channel.SendNetMulticastInvokeGameplayCueExecutedWithParams(cueTag, null);
+        }
+    }
+
+    /// <summary>
+    ///     How long after the throw the landing cue goes out. NOT a row - the game fires it from the
+    ///     pawn actually landing, which this server does not watch closely enough to hang an effect
+    ///     on. Close to a long throw's flight time. SHOCKWAVE_LANDING_CUE_DELAY overrides it.
+    /// </summary>
+    private static float LandingCueDelay =>
+        float.TryParse(Environment.GetEnvironmentVariable("SHOCKWAVE_LANDING_CUE_DELAY"), out var seconds)
+            ? seconds
+            : 2.0f;
+
+    private static readonly List<(APawn Pawn, float At)> _landingCues = new();
 }

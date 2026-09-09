@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net;
+﻿namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Ground height at an arbitrary (X, Y), read from baked grid files - the "real ground heights"
@@ -262,6 +262,15 @@ public static class TerrainHeightMap {
     /// <summary>Whether a placed-mesh grid was found at all - for a startup line, so its absence is
     /// visible rather than silently halving what the server knows about the world.</summary>
     public static bool HasMeshGrid => Meshes.Loaded;
+
+    /// <summary>
+    ///     Whether the LANDSCAPE bake is loaded at all - a different question from whether it has a
+    ///     height at some point, and confusing the two sent one investigation the wrong way. The
+    ///     warmup island is a placed FOUNDATION sitting off the landscape entirely, so
+    ///     <see cref="GetGroundHeight" /> returns null under it exactly as it would with no file at
+    ///     all. That is not a gap in the bake; there is genuinely no landscape there.
+    /// </summary>
+    public static bool LandscapeLoaded => Landscape.Loaded;
 
     private static float? Highest(Grid grid, float x, float y, float radius, float ceiling) {
         float? highest = null;

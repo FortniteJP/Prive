@@ -40,7 +40,21 @@ public class AActor : UObject {
 
     public virtual FVector GetVelocity() => Velocity;
 
-    public void SetActorLocation(FVector newLocation) {
+    public void SetActorLocation(FVector? newLocation) {
+        // A NULL HERE USED TO KILL THE SERVER, several frames later and somewhere else entirely.
+        // Location is a reference type, so a null assigned here is not noticed until something does
+        // arithmetic with it - and the crash that found this was inside FVector.DistSquared in a
+        // grenade's explosion loop, with a stack that names neither the actor nor whoever set it.
+        //
+        // Nothing can want "move to nowhere", so refusing is the honest reading. It is a WARN and
+        // not an exception on purpose: a bad location is one actor being wrong, and taking the whole
+        // match down for it is a worse answer than leaving that actor where it was.
+        if (newLocation == null) {
+            Console.WriteLine($"AActor.SetActorLocation: {GetFName()} was moved to a NULL location - " +
+                              "ignored, it stays where it was. Whoever computed that location is the bug.");
+            return;
+        }
+
         Location = newLocation;
         bHasKnownLocation = true;
     }
@@ -68,7 +82,23 @@ public class AActor : UObject {
     ///     AActor::bReplicateMovement - wire handle 2. The client's own gate: OnRep_AttachmentReplication
     ///     and the movement path both check it before doing anything with ReplicatedMovement.
     /// </summary>
-    public bool bReplicateMovement { get; set; }
+    /// <remarks>
+    ///     Setting this CHANGES THE PROPERTY SET, so it bumps the revision the channel's cache keys
+    ///     off. A dropped pickup carries handles 2 and 6 only while its toss is in the air (see
+    ///     UActorChannel.WithPickupMovement), and without the bump the channel would keep whichever
+    ///     set it happened to build at open time - the same silent failure the attachment handles hit.
+    /// </remarks>
+    public bool bReplicateMovement {
+        get => _bReplicateMovement;
+        set {
+            if (_bReplicateMovement == value) return;
+
+            _bReplicateMovement = value;
+            MarkReplicatedPropertySetChanged();
+        }
+    }
+
+    private bool _bReplicateMovement;
 
     /// <summary>AActor::ReplicatedMovement - wire handle 6. See FRepMovement.</summary>
     public FRepMovement ReplicatedMovement { get; } = new();
@@ -92,7 +122,12 @@ public class AActor : UObject {
         var location = GetActorLocation();
         var elapsed = now - _lastGatheredTime;
 
-        if (_lastGatheredLocation is { } previous && elapsed > 0.0001f) {
+        // DERIVED, UNLESS THE ACTOR HAS A REAL ONE. Deriving velocity from two positions is right for
+        // a pawn whose movement the client reports (see the summary above), and exactly wrong for an
+        // actor that is standing still ON PURPOSE while the client flies it: a thrown pickup sits at
+        // its launch point server-side, so the derived answer is zero and the throw never happens.
+        // bUseExplicitVelocity says "I set LinearVelocity myself, do not compute it".
+        if (!bUseExplicitVelocity && _lastGatheredLocation is { } previous && elapsed > 0.0001f) {
             ReplicatedMovement.LinearVelocity = new FVector {
                 X = (location.X - previous.X) / elapsed,
                 Y = (location.Y - previous.Y) / elapsed,
@@ -106,6 +141,15 @@ public class AActor : UObject {
         _lastGatheredLocation = ReplicatedMovement.Location;
         _lastGatheredTime = now;
     }
+    /// <summary>
+    ///     "The velocity in ReplicatedMovement is mine; do not derive one." See GatherCurrentMovement.
+    ///
+    ///     Set by FortPickupToss, which hands the client a launch velocity and lets the CLIENT fly
+    ///     the arc - the server's copy of the item never moves, so a derived velocity would be zero
+    ///     and the client would have nothing to simulate.
+    /// </summary>
+    public bool bUseExplicitVelocity { get; set; }
+
     public FRotator GetActorRotation() => Rotation;
     public void SetActorRotation(FRotator newRotation) => Rotation = newRotation;
     public FVector GetActorScale3D() => Scale3D;

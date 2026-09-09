@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core.Objects;
+﻿using AFortOnlineBeacon.Core.Objects;
 using AFortOnlineBeacon.Net.Rpc;
 
 namespace AFortOnlineBeacon.Net.Actors;
@@ -15,13 +15,25 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     Athena joined to its class, and every class to its CDO's ResourceType and amount tier. See
 ///     Tools/HarvestTable, which also documents why it takes TWO properties and not one.
 ///
-///     One known soft spot, 90 classes of 2048: those carry no ResourceType of their own, so the
-///     generator falls back to the family named by their amount curve. That is right for the case it
-///     was built for (a tree with no override and a ResourceWoodLow curve) and wrong wherever a class
-///     inherits its ResourceType from a PARENT Blueprint instead - a cooked child never re-serialises
-///     an inherited value, so the property is simply absent. `Car_Pickup` coming out as wood rather
-///     than metal is the visible symptom. Fixing it means walking the SuperStruct chain in the
-///     generator; the other 1958 classes state their resource outright and are unaffected.
+///     The generator also bakes each class's REAL MaxHealth, through the same AttributeInitKeys
+///     chain the game itself walks - see <see cref="MaxHealthFor" />. That is what lets
+///     <see cref="AmountForHit" /> pay the real per-hit amount instead of a full break every swing.
+///
+///     THE GENERATOR NOW WALKS THE SUPERSTRUCT CHAIN, and that closed the file's oldest known bug
+///     twice over. A cooked Blueprint serialises only what it OVERRIDES, so a child that inherits a
+///     property unchanged appears not to have it at all:
+///
+///       * `BuildingResourceAmountOverride` - 103 classes inherit it, and reading only leaf CDOs
+///         left every one of them ABSENT from this table. That is not a missing payout, it is an
+///         indestructible prop: ResolveHit doubles as the gate NativeRpcHandlers.DamageLevelActor
+///         uses to decide what it may damage at all. `NeoTilted_Car12` was the reported case - a car
+///         that resolved a real 400 HP through its ancestors and still could not be broken.
+///       * `ResourceType` - 156 classes inherit it. The row-name fallback had been guessing for
+///         them and was right all but once.
+///
+///     Together they fixed `Car_Pickup`, which this file blamed on inheritance from the day it was
+///     written and got only half right: the missing property was the ROW, not the type. A pickup
+///     truck now yields Metal|ResourceMetalMedium rather than wood.
 ///
 ///     What this deliberately does NOT do is trust the hit. The client picked the target, the
 ///     position and the moment; a real server re-traces all of that. Nothing here is safe against a
@@ -62,13 +74,14 @@ internal static partial class FortHarvestResources {
     ///     What this number does NOT mean: real Fortnite (see `ABuildingSMActor::OnDamageServer` in
     ///     PriveDev's Erbium reimplementation) does not pay this value per hit - it pays
     ///     `Eval(0) * Damage / MaxHealth`, i.e. this is a FULL-BREAK total that gets divided down by
-    ///     how much of the target's health one hit actually removed. This project has no real
-    ///     per-class MaxHealth yet (`ABuildingActor.BaseHitPointsFor` is still a placeholder), so that
-    ///     division can't be reproduced faithfully - using the raw Eval(0) as a flat per-hit amount is
-    ///     a deliberate, documented simplification, not an attempt to be exact. What IS exact: the
+    ///     how much of the target's health one hit actually removed. What IS exact here: the
     ///     RELATIVE proportions between rows (ResourceWoodVeryHigh really does yield ~7.6x
     ///     ResourceWoodLow, not the old TierAmounts' arbitrary 7:2), which is the part that was
     ///     previously fabricated.
+    ///
+    ///     THE DIVISION IS NOW POSSIBLE and <see cref="AmountForHit" /> does it: StemHealth carries
+    ///     the target's real MaxHealth, so a hit pays `Eval(0) * Damage / MaxHealth` exactly as the
+    ///     game does. This raw value is what a hit pays only where that health is unknown.
     /// </summary>
     private static int AmountFor(string tier, string rowName) =>
         RowAmounts.TryGetValue(rowName, out var real)
@@ -86,6 +99,65 @@ internal static partial class FortHarvestResources {
     ///     at all.
     /// </summary>
     public static (string ItemPath, int Amount)? ResolveHit(string hitActorPath) {
+        if (Resolve(hitActorPath) is not { } resolved) return null;
+
+        return (resolved.ItemPath, AmountFor(resolved.Tier, resolved.RowName));
+    }
+
+    /// <summary>
+    ///     The target's REAL MaxHealth, or null for a stem the bake could not resolve one for.
+    ///
+    ///     Baked by Tools/HarvestTable's pass 2b out of the class's AttributeInitKeys and the GAS
+    ///     attribute-defaults tables named in DefaultGame.ini - the same chain the game itself
+    ///     walks, and the same one FortBuildingAttributes uses for player-built pieces. Map props
+    ///     resolve in a DIFFERENT table from player builds (AttributesBuildingProps rather than
+    ///     AthenaAttributesBuildingSection), which is why solving one did not solve the other.
+    ///
+    ///     Spot values, all matching real Battle Royale: a tree is 300 - six swings of a 50-damage
+    ///     pickaxe - a rock 180, a car 400, a chest 500.
+    /// </summary>
+    public static int? MaxHealthFor(string hitActorPath) {
+        if (string.IsNullOrEmpty(hitActorPath)) return null;
+
+        var stem = Stem(hitActorPath[(hitActorPath.LastIndexOf('.') + 1)..]);
+        if (stem.Length == 0) return null;
+
+        return StemHealth.TryGetValue(stem, out var health) ? health : null;
+    }
+
+    /// <summary>
+    ///     What ONE hit pays, the way the real server computes it:
+    ///
+    ///         Eval(0) * Damage / MaxHealth
+    ///
+    ///     i.e. the curve row's full-break total, scaled by the fraction of the target's health this
+    ///     hit actually removed (Erbium's ABuildingSMActor::OnDamageServer, and the formula
+    ///     RowAmounts' doc comment has described as unreachable ever since it was baked).
+    ///
+    ///     THIS HAD TO ARRIVE WITH THE REAL HEALTH, not after it. The old model paid the full-break
+    ///     amount on EVERY hit, which was roughly right only because every prop shared a 200 HP
+    ///     default and died in four. Giving a tree its real 300 HP without this would have paid six
+    ///     full trees' worth of wood for one tree.
+    ///
+    ///     Returns null when the health is unknown, and the caller keeps the old flat model for that
+    ///     stem rather than guessing - the two must not be mixed.
+    /// </summary>
+    public static int? AmountForHit(string hitActorPath, int damage) {
+        if (damage <= 0) return null;
+        if (Resolve(hitActorPath) is not { } resolved) return null;
+        if (MaxHealthFor(hitActorPath) is not { } maxHealth || maxHealth <= 0) return null;
+
+        var fullBreak = RowAmounts.TryGetValue(resolved.RowName, out var real)
+            ? real
+            : TierAmounts.GetValueOrDefault(resolved.Tier, 3);
+
+        // At least 1: a chip that removes a measurable slice of a big prop still pays something, the
+        // same floor AmountFor has always applied.
+        return Math.Max(1, (int) MathF.Round(fullBreak * damage / maxHealth));
+    }
+
+    /// <summary>The stem lookup both public entry points share, so they can never disagree about what was hit.</summary>
+    private static (string ItemPath, string Tier, string RowName)? Resolve(string hitActorPath) {
         if (string.IsNullOrEmpty(hitActorPath)) return null;
 
         // The path is Package.Level.ActorName - only the last segment is the placed actor.
@@ -114,7 +186,7 @@ internal static partial class FortHarvestResources {
 
         if (!ItemPaths.TryGetValue(resource, out var itemPath)) return null;
 
-        return (itemPath, AmountFor(tier, rowName));
+        return (itemPath, tier, rowName);
     }
 
     /// <summary>

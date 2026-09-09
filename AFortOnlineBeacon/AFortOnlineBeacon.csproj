@@ -7,4 +7,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      The ONLY third-party dependency this server has, and it is here for one read: the locker.
+      Nothing the game client sends names a cosmetic - the choice lives in the MCP profile that
+      Prive.Server.Http writes - so FortLockerProfile reads that collection directly. Pinned to the
+      same 2.19.1 the HTTP server uses, because the two read the same documents.
+    -->
+    <PackageReference Include="MongoDB.Driver" Version="2.19.1" />
+  </ItemGroup>
+
 </Project>

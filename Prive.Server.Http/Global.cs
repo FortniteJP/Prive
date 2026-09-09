@@ -78,6 +78,7 @@ public static class Global {
         }
         p.Stats.Attributes.Add("favorite_backpack", profile.BackpackId);
         p.Stats.Attributes.Add("favorite_character", profile.CharacterId);
+        p.Stats.Attributes.Add("favorite_glider", profile.GliderId); // HOW I EVER MISSED THIS
         p.Stats.Attributes.Add("favorite_pickaxe", profile.PickaxeId);
         p.Stats.Attributes.Add("favorite_dance", profile.Dances);
         p.Stats.Attributes.Add("favorite_itemwraps", profile.ItemWraps);

@@ -31,7 +31,9 @@ namespace PakReader;
 ///         pakreader find &lt;substring&gt; [max]     search the mounted file index by path
 ///         pakreader exports &lt;objectPath&gt;       full JSON of every export in a package
 ///         pakreader props &lt;objectPath&gt; [names] one line per matching property (comma-separated filter)
-///         pakreader supers &lt;pathPrefix&gt;       class -&gt; super for every Blueprint class under a path
+    ///         pakreader supers &lt;pathPrefix&gt;       class -&gt; super for every Blueprint class under a path
+///         pakreader nameref &lt;needle&gt; [prefix]  every package whose NAME TABLE mentions a needle
+///         pakreader doors                      every placed building wall in WORLD space, with its yaw
 /// </summary>
 public static class Program {
     private const string DefaultPaks = @"C:\Users\user\Documents\10.40\FortniteGame\Content\Paks";
@@ -80,7 +82,10 @@ public static class Program {
                 case "raw": return Raw(provider, args);
                 case "buildinghealth": return BuildingHealth(provider, args);
                 case "walls": return Walls(provider, args);
+                case "doors": return Doors(provider, args);
                 case "connectivity": return Connectivity(provider, args);
+                case "nameref": return NameRef(provider, args);
+                case "grenadespeeds": return GrenadeSpeeds(provider, args);
                 default:
                     Console.Error.WriteLine($"unknown command '{args[0]}'");
                     return 2;
@@ -244,6 +249,118 @@ public static class Program {
     ///     `[/Script/GameplayAbilities.AbilitySystemGlobals]`, which is the only pointer to where a
     ///     building's real MaxHealth comes from.
     /// </summary>
+    /// <summary>
+    ///     Every package whose raw bytes mention a needle - "WHO REFERENCES THIS?", asked of the whole
+    ///     56-pak install at once instead of one guessed folder at a time.
+    ///
+    ///     THE PROBLEM THIS SOLVES. Half of Fortnite's logic is native x86 (answerable from the memory
+    ///     dump with Tools/BinXref) and half is Blueprint bytecode (readable with Tools/BlueprintDump).
+    ///     Both of those need to be POINTED at something. When the native side has already been ruled
+    ///     out - `dumpxref calls &lt;impl&gt;` finding only the exec thunk means nothing in C++ calls it, so
+    ///     the caller must be a Blueprint - there is no way to know WHICH Blueprint without either
+    ///     guessing folders or scanning everything. This scans everything.
+    ///
+    ///     WHY RAW BYTES RATHER THAN THE PARSED NAME TABLE. Every symbol a package touches - the
+    ///     functions it calls, the properties it reads, the classes it imports - is an FName, and a
+    ///     cooked package carries its OWN name table as plain FStrings in the header. So the presence
+    ///     of the string is exactly the question being asked, and answering it needs no deserialization
+    ///     at all: no export parsing, no property tags, nothing that can throw on an asset type
+    ///     CUE4Parse does not model. That makes this both far faster and far more robust than
+    ///     LoadPackage over 100k assets, which is the version of this that does not finish.
+    ///
+    ///     Case-SENSITIVE, because FNames are, and a case-insensitive scan over this many bytes costs
+    ///     an order of magnitude more. Matches are substring matches, so `ConfigureParticle` finds
+    ///     `ConfigureParticleSystem`; a needle short enough to appear inside unrelated names will
+    ///     report those too, which is the caller's problem to narrow.
+    /// </summary>
+    /// <summary>
+    ///     Every throw ability that OVERRIDES the grenade speed - `ability&lt;TAB&gt;min&lt;TAB&gt;max`.
+    ///
+    ///     WHY ONLY THE OVERRIDES. A cooked Blueprint serialises what it changes and nothing else, so
+    ///     an ability that inherits the family's speed has no such property to read; the base
+    ///     (GA_Athena_Grenade_WithTrajectory) carries 4000 and everything silent takes it. Listing
+    ///     the overriders is therefore the whole answer, and it needs no super-chain walk.
+    ///
+    ///     It matters because one constant was being used for every throw: a firework mortar's own
+    ///     speed is 2500, and thrown at 4000 it sails off the far side of the island - which is
+    ///     exactly what "it flies too far" was.
+    /// </summary>
+    private static int GrenadeSpeeds(DefaultFileProvider provider, string[] args) {
+        var prefix = args.Length > 1 ? args[1] : "FortniteGame/Content/Athena/Items/";
+        var found = 0;
+
+        foreach (var path in provider.Files.Keys
+                     .Where(f => f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                                 f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)) {
+            var name = path[(path.LastIndexOf('/') + 1)..^".uasset".Length];
+            if (!name.StartsWith("GA_", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!provider.TryLoadPackage(path, out var package)) continue;
+
+            foreach (var export in package.GetExports()) {
+                if (!export.Name.StartsWith("Default__", StringComparison.Ordinal)) continue;
+
+                var min = export.GetOrDefault<float?>("GrenadeSpeedMin", null);
+                var max = export.GetOrDefault<float?>("GrenadeSpeedMax", null);
+                if (min == null && max == null) continue;
+
+                Console.WriteLine($"{export.Name["Default__".Length..]}\t{min ?? max}\t{max ?? min}");
+                found++;
+            }
+        }
+
+        Console.Error.WriteLine($"pakreader: {found} ability/abilities override the grenade speed");
+        return 0;
+    }
+
+    private static int NameRef(DefaultFileProvider provider, string[] args) {
+        if (args.Length < 2) {
+            Console.Error.WriteLine("usage: pakreader nameref <needle> [pathPrefix]");
+            return 2;
+        }
+
+        var needle = System.Text.Encoding.ASCII.GetBytes(args[1]);
+        var prefix = args.Length > 2 ? args[2] : string.Empty;
+
+        var files = provider.Files.Keys
+            .Where(f => f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) ||
+                        f.EndsWith(".umap", StringComparison.OrdinalIgnoreCase))
+            .Where(f => prefix.Length == 0 || f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        Console.Error.WriteLine($"pakreader: scanning {files.Length} package(s) for \"{args[1]}\"");
+
+        var hits = 0;
+        var failed = 0;
+        var gate = new object();
+
+        // Reads only, and each one owns its buffer, so the scan parallelises cleanly. The decompress
+        // is the cost here - Oodle runs at GB/s but there are tens of thousands of small packages, and
+        // one core spends most of its time waiting on the pak reader rather than on the search.
+        Parallel.ForEach(files, file => {
+            byte[] bytes;
+            try {
+                bytes = provider.SaveAsset(file);
+            } catch {
+                // An asset this build cannot decrypt or decompress is not a match and not worth a line
+                // of its own; the count at the end says whether there were enough to matter.
+                Interlocked.Increment(ref failed);
+                return;
+            }
+
+            if (bytes.AsSpan().IndexOf(needle) < 0) return;
+
+            lock (gate) {
+                hits++;
+                Console.WriteLine(file);
+            }
+        });
+
+        Console.Error.WriteLine($"pakreader: {hits} package(s) mention it ({failed} unreadable)");
+        return 0;
+    }
+
     private static int Raw(DefaultFileProvider provider, string[] args) {
         if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader raw <path> [grepSubstring]"); return 2; }
 
@@ -288,6 +405,30 @@ public static class Program {
     ///     chain reaches Parent_BuildingWall. That is checkable offline and nowhere else, which is
     ///     what makes this a generated table rather than a runtime guess.
     /// </summary>
+    /// <summary>
+    ///     Whether an asset path has a WALL folder in it - "Wall" OR "Walls".
+    ///
+    ///     THE PLURAL IS NOT A DETAIL. The first version of this test was `path.Contains("/Wall/")`,
+    ///     and "/Walls/" does not contain "/Wall/" - so every themed POI that files its walls under a
+    ///     plural folder was excluded wholesale: PirateShip/Walls, IceCastle/Walls, ArcticBase/Walls,
+    ///     WinterVillage/Walls, Neo/Walls. That is over a hundred wall classes, and the symptom is a
+    ///     door the client offers to open and the server refuses to know about, forever - the client
+    ///     predicts the swing, gets no confirmation, and the door can never be closed again.
+    ///
+    ///     Matched as a whole path SEGMENT rather than a substring, so a folder like "Wallpaper" or
+    ///     "Wall_Decals" cannot sneak in.
+    /// </summary>
+    private static bool IsWallFolder(string assetPath) {
+        foreach (var segment in assetPath.Split('/')) {
+            if (segment.Equals("Wall", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("Walls", StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static int Walls(DefaultFileProvider provider, string[] args) {
         // EVERY .umap under Athena, not the foundation walk the other commands use. That walk only
         // reaches sublevels named directly by a top-level LF_ actor - 102 of them - and building
@@ -304,11 +445,12 @@ public static class Program {
             var result = false;
             var bare = className.EndsWith("_C", StringComparison.Ordinal) ? className[..^2] : className;
 
-            // The class ASSET's location is the gate: only walls live under Building/ActorBlueprints/Wall.
+            // The class ASSET's location is the gate: only walls live under Building/ActorBlueprints
+            // in a Wall folder.
             foreach (var file in provider.Files.Keys) {
                 if (!file.EndsWith($"/{bare}.uasset", StringComparison.OrdinalIgnoreCase)) continue;
                 result = file.Contains("/Building/ActorBlueprints/", StringComparison.OrdinalIgnoreCase)
-                      && file.Contains("/Wall/", StringComparison.OrdinalIgnoreCase);
+                      && IsWallFolder(file);
                 break;
             }
 
@@ -335,6 +477,135 @@ public static class Program {
 
         foreach (var (name, cls) in seen) Console.WriteLine($"{name}	{cls}");
         Console.Error.WriteLine($"pakreader: {seen.Count} distinct building-wall actor name(s) across {maps} map(s)");
+        return 0;
+    }
+
+    /// <summary>
+    ///     Every placed building wall on the map in WORLD space, WITH ITS YAW - the bake a door needs
+    ///     to open the right way.
+    ///
+    ///     WHY A DOOR NEEDS A TRANSFORM AT ALL. A real door opens AWAY from whoever opened it, and
+    ///     that is a question about sides: which side of the door's own plane the player is standing
+    ///     on decides whether DoorDesiredRotOffset.Yaw is +90 or -90. This server never loaded the
+    ///     map, so an interaction arrives as nothing but an actor PATH - it knows the door's name and
+    ///     not one thing about where it is or which way it faces. Without this table every door can
+    ///     only ever swing the same way, which is exactly the symptom.
+    ///
+    ///     The `walls` command already sweeps every Athena .umap for wall actors, but only for their
+    ///     NAMES, and a name is all its gate needs. Positions cannot come from that sweep: a sublevel
+    ///     stores its actors in LOCAL space and is placed by a foundation somewhere else entirely, so
+    ///     a world position only exists after the foundation walk composes the transforms. That is
+    ///     what this uses - the same recursion <see cref="WalkLevel" /> documents, which is also why
+    ///     it can find fewer walls than `walls` does: anything in a sublevel no foundation chain
+    ///     reaches has no world position to report.
+    ///
+    ///     THE SAME NAME APPEARS MANY TIMES, on purpose. One sublevel (a house kit) is placed at
+    ///     dozens of POIs, and the client's path names the RUNTIME-duplicated copy
+    ///     (`/Temp/.../Athena_SUB_3x3_House_g2_2384084a`), whose suffix is generated when the level
+    ///     streams in and cannot be baked. So the row is chosen at runtime by proximity to the player
+    ///     who touched the door - copies of one kit sit hundreds of metres apart and the player is
+    ///     within arm's reach, so that is not a close call.
+    ///
+    ///     Output: `ActorName&lt;TAB&gt;X,Y,Z&lt;TAB&gt;WorldYaw&lt;TAB&gt;Class`.
+    /// </summary>
+    private static int Doors(DefaultFileProvider provider, string[] args) {
+        string[] foundationMaps = {
+            "FortniteGame/Content/Athena/Maps/Athena_Streaming_Grid.umap",
+            "FortniteGame/Content/Athena/Maps/Athena_POI_Foundations.umap"
+        };
+
+        var verdict = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+        // The same gate as `walls`, and deliberately the same: a table that disagreed with the one
+        // deciding whether an actor may be treated as a wall at all would open doors this server
+        // then refuses to touch, or worse, the other way round.
+        bool IsBuildingWall(string className) {
+            if (verdict.TryGetValue(className, out var known)) return known;
+
+            var result = false;
+            var bare = className.EndsWith("_C", StringComparison.Ordinal) ? className[..^2] : className;
+
+            foreach (var file in provider.Files.Keys) {
+                if (!file.EndsWith($"/{bare}.uasset", StringComparison.OrdinalIgnoreCase)) continue;
+                result = file.Contains("/Building/ActorBlueprints/", StringComparison.OrdinalIgnoreCase)
+                      && IsWallFolder(file);
+                break;
+            }
+
+            verdict[className] = result;
+            return result;
+        }
+
+        var rows = 0;
+        var onStack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Walk(string packagePath, CUE4Parse.UE4.Objects.Core.Math.FVector origin, float yaw, int depth) {
+            if (depth > MaxFoundationDepth || !onStack.Add(packagePath)) return;
+
+            try {
+                if (!provider.TryLoadPackage(packagePath, out var package)) return;
+
+                var radians = yaw * MathF.PI / 180f;
+                var cos = MathF.Cos(radians);
+                var sin = MathF.Sin(radians);
+
+                foreach (var export in package.GetExports()) {
+                    var root = export.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FPackageIndex>("RootComponent", null);
+                    var component = root?.Load();
+
+                    if (component != null && IsBuildingWall(export.ExportType)) {
+                        var local = component.GetOrDefault("RelativeLocation",
+                            new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0));
+                        var localYaw = component.GetOrDefault("RelativeRotation",
+                            new CUE4Parse.UE4.Objects.Core.Math.FRotator(0, 0, 0)).Yaw;
+
+                        // SCALE, because a MIRRORED wall is a mirrored DOOR. A negative X scale flips
+                        // the piece's local frame, so its hinge sits on the other side and a swing
+                        // computed from yaw alone comes out backwards - which is exactly what "the
+                        // direction is wrong some of the time" looks like.
+                        var scale = component.GetOrDefault("RelativeScale3D",
+                            new CUE4Parse.UE4.Objects.Core.Math.FVector(1, 1, 1));
+
+                        Console.WriteLine(
+                            $"{export.Name}\t" +
+                            $"{origin.X + (local.X * cos - local.Y * sin):F0}," +
+                            $"{origin.Y + (local.X * sin + local.Y * cos):F0}," +
+                            $"{origin.Z + local.Z:F0}\t" +
+                            $"{yaw + localYaw:F1}\t{export.ExportType}\t" +
+                            $"{scale.X:F2},{scale.Y:F2},{scale.Z:F2}");
+                        rows++;
+                    }
+
+                    var worlds = export.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FSoftObjectPath[]>("AdditionalWorlds", null);
+                    if (worlds is not { Length: > 0 }) continue;
+
+                    var childLocal = component?.GetOrDefault("RelativeLocation",
+                        new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0))
+                        ?? new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0);
+                    var childYaw = component?.GetOrDefault("RelativeRotation",
+                        new CUE4Parse.UE4.Objects.Core.Math.FRotator(0, 0, 0)).Yaw ?? 0f;
+
+                    var childOrigin = new CUE4Parse.UE4.Objects.Core.Math.FVector(
+                        origin.X + (childLocal.X * cos - childLocal.Y * sin),
+                        origin.Y + (childLocal.X * sin + childLocal.Y * cos),
+                        origin.Z + childLocal.Z);
+
+                    foreach (var world in worlds) {
+                        var sub = world.AssetPathName.Text.Split('.')[0]
+                            .Replace("/Game/", "FortniteGame/Content/") + ".umap";
+                        Walk(sub, childOrigin, yaw + childYaw, depth + 1);
+                    }
+                }
+            } finally {
+                onStack.Remove(packagePath);
+            }
+        }
+
+        foreach (var map in foundationMaps) {
+            Walk(map, new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0), 0f, 0);
+        }
+
+        Console.Error.WriteLine($"pakreader: {rows} placed building wall(s) in world space");
         return 0;
     }
 
@@ -942,16 +1213,27 @@ public static class Program {
     ///     PhysX-cooked blob beside them (`CookedFormatData: PhysXPC`) never has to be parsed.
     /// </summary>
     private static int Collision(DefaultFileProvider provider, string[] args) {
-        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader collision <umapPath>"); return 2; }
+        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader collision <umapPath|meshPath>"); return 2; }
         if (!provider.TryLoadPackage(args[1], out var package)) { Console.Error.WriteLine("no such package"); return 1; }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var export in package.GetExports()) {
-            if (export is not CUE4Parse.UE4.Assets.Exports.Component.StaticMesh.UStaticMeshComponent smc) continue;
+        // A MESH PATH works as well as a umap. The question "what simple collision does this thing
+        // have" is the same one whether it is asked of every mesh a level places or of one mesh
+        // named directly, and the second form is what a player-building piece needs - those meshes
+        // are referenced from a Blueprint CDO, not placed in any level.
+        var direct = package.GetExports()
+            .OfType<CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh>().ToList();
 
+        foreach (var export in package.GetExports()) {
             CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh? mesh = null;
-            try { mesh = smc.GetLoadedStaticMesh(); } catch { continue; }
+
+            if (export is CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh own) {
+                mesh = own;
+            } else if (export is CUE4Parse.UE4.Assets.Exports.Component.StaticMesh.UStaticMeshComponent smc) {
+                try { mesh = smc.GetLoadedStaticMesh(); } catch { continue; }
+            }
+
             if (mesh == null || !seen.Add(mesh.Name)) continue;
 
             // BodySetup is a STRONGLY-TYPED field on UStaticMesh, not a tagged property - it is read

@@ -65,6 +65,13 @@ public static class FortDamageSystem {
             return 0.0f;
         }
 
+        // A HIT CANCELS AN EMOTE - see FortEmoteSystem.CancelEmote for why the server has to say so
+        // rather than let the client cancel it alone.
+        if (victim.GetWorld()?.NetDriver?.ClientConnections
+                  .FirstOrDefault(c => c.PlayerController?.PlayerState == victim)?.PlayerController is { } emoting) {
+            FortEmoteSystem.CancelEmote(emoting, "took damage");
+        }
+
         var absorbedByShield = MathF.Min(health.CurrentShield, amount);
         health.CurrentShield -= absorbedByShield;
 
@@ -99,7 +106,8 @@ public static class FortDamageSystem {
         // UActorChannel.SendNetMulticastAthenaBatchedDamageCues, and note what the reference capture
         // says it is NOT (the health bar's update channel).
         SendDamageCue(victim, dealt, absorbedByShield > 0.0f, bDestroyedShield: absorbedByShield > 0.0f && health.CurrentShield <= 0.0f,
-                      bBallistic: cause != EDeathCause.FallDamage && cause != EDeathCause.OutsideSafeZone, bFatal: bFatal);
+                      bBallistic: cause != EDeathCause.FallDamage && cause != EDeathCause.OutsideSafeZone, bFatal: bFatal,
+                      bWeaponHit: cause != EDeathCause.OutsideSafeZone);
 
         if (bFatal) Kill(victim, cause, instigator);
 
@@ -113,7 +121,8 @@ public static class FortDamageSystem {
     ///     a weapon hit the client already drew its own impact effect locally.
     /// </summary>
     private static void SendDamageCue(APlayerState victim, float magnitude, bool bShield,
-                                      bool bDestroyedShield, bool bBallistic, bool bFatal) {
+                                      bool bDestroyedShield, bool bBallistic, bool bFatal,
+                                      bool bWeaponHit = true) {
         if (victim.GetOwningPawn() is not { } pawn) return;
         if (victim.GetOwningController() is not APlayerController pc) return;
 
@@ -125,6 +134,22 @@ public static class FortDamageSystem {
 
         if (connection?.FindActorChannel(pawn) is not { } pawnChannel) return;
 
+        // THE WEAPON HIT CUE, AND ONLY FOR A WEAPON HIT. The reference capture carries 78 of these
+        // and every one is a weapon hit; across the 30 STORM-damage ticks on the local player there
+        // is not a single one. Sending it every storm tick is both wrong and not free - the storm
+        // ticks once a second per player for minutes, and each cue is work for the client's
+        // GameplayCueManager. (A captured client hang showed it streaming GameplayCueNotify assets in
+        // a flood with its game thread stuck in PhysX; that is not proven to be this, and the server
+        // behaved normally in the same window, but a cue a real server never sends is worth not
+        // sending.) STORM_DAMAGE_CUE=1 restores it for comparison.
+        //
+        // The FromSpec cue below is NOT gated: the same capture DOES send that one on a storm tick,
+        // and it is what makes the health bar redraw.
+        if (!bWeaponHit && Environment.GetEnvironmentVariable("STORM_DAMAGE_CUE") != "1") {
+            SendHealthChangeCue(pawnChannel, magnitude);
+            return;
+        }
+
         pawnChannel.SendNetMulticastAthenaBatchedDamageCues(
             pawn.GetActorLocation(), new FVector { X = 0.0f, Y = 0.0f, Z = 1.0f }, magnitude,
             bIsFatal: bFatal, bIsShield: bShield, bIsShieldDestroyed: bDestroyedShield,
@@ -133,7 +158,16 @@ public static class FortDamageSystem {
         // The other half of what a real server sends on a health change, and the one that carries a
         // gameplay-effect REASON rather than only a cosmetic cue. See
         // UActorChannel.SendNetMulticastInvokeGameplayCueExecutedFromSpec.
-        var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
+        SendHealthChangeCue(pawnChannel, magnitude);
+    }
+
+    /// <summary>
+    ///     The half of a damage notification that carries a REASON - the gameplay effect that moved
+    ///     the Damage meta attribute - and therefore the half that makes the health bar redraw. Sent
+    ///     for every kind of damage, the storm included; see SendDamageCue for what is not.
+    /// </summary>
+    private static void SendHealthChangeCue(Channels.Actor.UActorChannel pawnChannel, float magnitude) {
+var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
         spec.ModifiedAttributes.Add(new FGameplayEffectModifiedAttribute {
             // The DAMAGE meta attribute, not Health - that is what the reference capture's client
             // resolves out of this RPC, and it is how Fortnite models a hit: a GE moves Damage and

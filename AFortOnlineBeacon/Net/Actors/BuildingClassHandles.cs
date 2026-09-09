@@ -84,14 +84,15 @@ public static class BuildingClassHandles {
     };
 
     /// <summary>
-    ///     The class this handle names, or null when the table has no entry for it yet. Resolved as
-    ///     ABuildingActor (not a plain AActor) so a spawned instance carries HP/material/piece-kind -
-    ///     see ABuildingActor's doc comment, and FortWeaponActorClasses.BuildingActorClassFor's for
-    ///     why every building-path lookup in this project must agree on that same C# type.
+    ///     The class this handle names, or null when the table has no entry for it yet.
+    ///
+    ///     Through ABuildingActor.ClassForPath so a spawned instance carries HP/material/piece-kind -
+    ///     and, for a wall, its door handles. See that method for why every building-path lookup in
+    ///     this project has to agree on the C# type it resolves a path as.
     /// </summary>
     public static UClass? ClassFor(uint handle) {
         var path = PathFor(handle);
-        return path == null ? null : GUClassArray.StaticClassForPath<ABuildingActor>(path);
+        return path == null ? null : ABuildingActor.ClassForPath(path);
     }
 
     public static string? PathFor(uint handle) {

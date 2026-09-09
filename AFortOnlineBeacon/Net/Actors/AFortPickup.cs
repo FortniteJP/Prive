@@ -76,11 +76,35 @@ public class AFortPickup : AActor {
     public EFortPickupTossState TossState { get; set; } = EFortPickupTossState.AtRest;
 
     /// <summary>
-    ///     PickupLocationData's three FVector_NetQuantize10 positions (handles 41, 42, 45). With no
-    ///     toss to simulate they are all just where the item came to rest, which is also the actor's
-    ///     own location - kept as one property so a real toss has somewhere to diverge later.
+    ///     PickupLocationData.LootFinalPosition and FinalTossRestLocation (handles 42 and 45) - where
+    ///     the item ends up. For a pickup that is simply placed, this is also its actor location.
     /// </summary>
     public FVector RestLocation { get; set; } = new();
+
+    /// <summary>
+    ///     PickupLocationData.LootInitialPosition (handle 41) - where a toss STARTS.
+    ///
+    ///     THE THREE POSITIONS USED TO BE ONE. All of 41, 42 and 45 returned RestLocation, on the
+    ///     honest grounds that with no toss to simulate they really were the same point, and the
+    ///     comment there said it was "kept as one property so a real toss has somewhere to diverge
+    ///     later". There is a real toss now (FortPickupToss's streamed mode), and the client reads
+    ///     these: it calls `AFortPickup::SetupForMovementCompToss` off them and complained in its own
+    ///     log the moment the data was inconsistent.
+    ///
+    ///     DEFAULTS TO RestLocation RATHER THAN TO ZERO, and that is the point of the backing field.
+    ///     Three places spawn pickups - a player's drop, a container's loot and the floor-loot
+    ///     generator - and only the first has any reason to think about a toss. Making this a plain
+    ///     auto-property meant the other two would quietly report a toss that began at the WORLD
+    ///     ORIGIN, which is precisely the shape of bug this session has spent all day on: a property
+    ///     that is silent, plausible and wrong. Now a caller that never heard of tossing gets the
+    ///     right answer for free.
+    /// </summary>
+    public FVector TossStartLocation {
+        get => _tossStartLocation ?? RestLocation;
+        set => _tossStartLocation = value;
+    }
+
+    private FVector? _tossStartLocation;
 
     /// <summary>AFortPickup::bPickedUp (0x0438, Net + RepNotify) - handle 49.</summary>
     public bool bPickedUp { get; set; }

@@ -54,14 +54,51 @@ public class ABuildingWall : ABuildingActor {
     ///     Toggles the door and reports the new state, or null when the attempt was swallowed as a
     ///     repeat of the press that is already being handled.
     /// </summary>
-    public bool? ToggleDoor(float timeSeconds) {
+    public bool? ToggleDoor(float timeSeconds, string actorName, FVector interactorLocation,
+                            float interactorYaw) {
         if (timeSeconds - _lastToggleAt < ToggleCooldownSeconds) return null;
 
         _lastToggleAt = timeSeconds;
         bDoorOpen = !bDoorOpen;
-        DoorDesiredRotOffset = new FRotator { Yaw = bDoorOpen ? DoorOpenYaw : 0f };
+
+        // WHICH WAY, which used to be "always the same way" and is the whole of the complaint that
+        // a door does not open away from you. The map bake gives this door's world position and
+        // yaw (see FortDoorPlacements - the name is not unique, so the nearest placement to the
+        // player is the one they touched), and the side the player is standing on decides the sign.
+        //
+        // A door with no placement still opens, at the old fixed angle. Degrading is the point:
+        // a door that will not open is a worse answer than one that opens the wrong way, and the
+        // log line says which happened rather than leaving it to be guessed at.
+        // A PLAYER-BUILT door needs no bake: this server spawned it and knows exactly where it is.
+        // The bake is only for MAP doors, which are stand-ins for actors in a streaming sublevel
+        // this server never loaded and therefore carry no transform of their own.
+        var swing = DoorOpenYaw;
+        if (bPlayerPlaced) {
+            swing *= FortDoorPlacements.SideOf(GetActorRotation().Yaw, interactorYaw, bMirrored);
+            // The door's own LOCATION goes in too. Without it a report of "it opened the wrong way"
+            // cannot be checked at all: which axis is the wall's normal and which is lateral is
+            // exactly the question, and it is answered by comparing the player's position to the
+            // door's - which is how the +90 in WallNormalOffset was finally pinned down.
+            LastSwingSource = $"built here at {GetActorLocation()}, yaw {GetActorRotation().Yaw:F0}" +
+                              (bMirrored ? ", mirrored" : "") + $", player heading {interactorYaw:F0}" +
+                              OpenYawNote;
+        } else if (FortDoorPlacements.Nearest(actorName, interactorLocation) is { } placement) {
+            // The LOCATION still picks WHICH placement (the name is not unique); only the SIDE moved
+            // off position and onto heading. See FortDoorPlacements.SideOf.
+            swing *= FortDoorPlacements.SideOf(placement.Yaw, interactorYaw, placement.Mirrored);
+            LastSwingSource = $"placement at {placement.Location} yaw {placement.Yaw:F0}" +
+                              (placement.Mirrored ? ", mirrored" : "") + $", player heading {interactorYaw:F0}" +
+                              OpenYawNote;
+        } else {
+            LastSwingSource = "NO PLACEMENT - this wall is not in the bake, so the swing is a fixed guess";
+        }
+
+        DoorDesiredRotOffset = new FRotator { Yaw = bDoorOpen ? swing : 0f };
         return bDoorOpen;
     }
+
+    /// <summary>How the last swing direction was decided, for the interact log line.</summary>
+    public string LastSwingSource { get; private set; } = "never opened";
 
     /// <summary>
     ///     ABuildingWall::DoorDesiredRotOffset - wire handle 70, an FRotator. How far the door should
@@ -70,10 +107,27 @@ public class ABuildingWall : ABuildingActor {
     public FRotator DoorDesiredRotOffset { get; private set; } = new();
 
     /// <summary>
-    ///     How far an open door swings. Ninety degrees is the obvious value and NOT a measured one -
-    ///     the real game picks a direction per door (a door opens away from whoever opened it), which
-    ///     this does not attempt. DOOR_OPEN_YAW overrides it; negative swings the other way.
+    ///     How far an open door swings. Ninety degrees is the obvious value and not a measured one;
+    ///     what IS derived now is the DIRECTION - see ToggleDoor and FortDoorPlacements.SideOf.
+    ///
+    ///     DOOR_OPEN_YAW overrides it, and its SIGN is the one bit of the direction rule that is not
+    ///     derived: turning "the player is on this side" into "+90 or -90" depends on how the door
+    ///     mesh is hinged relative to its actor's forward, which is a property of the art and is the
+    ///     same for every door in the game. If doors swing INTO the player, set DOOR_OPEN_YAW=-90 and
+    ///     every door is fixed at once.
     /// </summary>
     private static readonly float DoorOpenYaw =
         float.TryParse(Environment.GetEnvironmentVariable("DOOR_OPEN_YAW"), out var v) ? v : 90f;
+
+    /// <summary>
+    ///     Says so in the log when DOOR_OPEN_YAW is overriding the default, because this variable
+    ///     INVERTS the feature it is meant to diagnose and a silently-set one reads as a bug in the
+    ///     rule. It cost a round exactly that way: a door reported as "opens the wrong way" had the
+    ///     rule compute +1 correctly and the override turn it into -90, and the numbers only stopped
+    ///     agreeing with the behaviour once they were worked through by hand.
+    /// </summary>
+    private static readonly string OpenYawNote =
+        Environment.GetEnvironmentVariable("DOOR_OPEN_YAW") is { Length: > 0 } set
+            ? $", base {set} FROM DOOR_OPEN_YAW (default is 90)"
+            : string.Empty;
 }

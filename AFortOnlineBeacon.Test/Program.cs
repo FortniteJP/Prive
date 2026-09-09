@@ -20,6 +20,12 @@ class Program {
         // why the level logic specifically is worth checking that way.
         if (args.Contains("--groundtruth-selftest")) return TerrainGroundTruth.RunSelfTest() ? 0 : 1;
         if (args.Contains("--worldcollision-selftest")) return WorldCollision.RunSelfTest() ? 0 : 1;
+        // The player-build hulls, offline: is a doorway a hole, does a shut door fill it, are the
+        // posts solid. Prints and returns 0 either way - the message is the result.
+        if (args.Contains("--buildhulls-selftest")) {
+            AFortOnlineBeacon.Net.Actors.FortBuildingHulls.VerifyDoorway();
+            return 0;
+        }
         if (args.Contains("--structarray-selftest")) return AFortOnlineBeacon.Net.Replication.StructArraySelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--weaponstats-selftest")) return AFortOnlineBeacon.Net.Actors.FortWeaponStatsSelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--inventoryslots-selftest")) return AFortOnlineBeacon.Net.Actors.FortInventorySlotSelfTest.RunSelfTest() ? 0 : 1;

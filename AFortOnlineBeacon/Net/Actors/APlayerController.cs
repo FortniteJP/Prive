@@ -1,6 +1,15 @@
 ﻿namespace AFortOnlineBeacon.Net.Actors;
 
 public class APlayerController : AController {
+    /// <summary>
+    ///     What this player has in their locker, read from MongoDB once at login (null when there is
+    ///     no profile, or LOCKER_FROM_DB=0). Kept on the controller rather than applied and forgotten
+    ///     because a pawn is spawned MORE THAN ONCE per match - the warmup pawn is destroyed when the
+    ///     bus phase starts and a fresh one is spawned on the jump - and the glider has to be set on
+    ///     every one of them. See FortLockerProfile and AGameModeBase.SpawnAndPossessPawn.
+    /// </summary>
+    internal FortLockerProfile.FLockerLoadout? Locker { get; set; }
+
     public byte NetPlayerIndex { get; set; }
     public UPlayer? Player { get; private set; }
 

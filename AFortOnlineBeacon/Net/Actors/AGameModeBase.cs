@@ -758,6 +758,20 @@ public class AGameModeBase : AInfo {
         // moment it decides to interact, and an unresolved sub-object costs the WHOLE content block.
         newPlayerController?.CreateInteractionComponent();
 
+        // THE PLAYER'S LOCKER, read once, here, because two very different things need it and one of
+        // them is the starting inventory a few lines down: the harvesting tool is an ordinary
+        // inventory ITEM, so a pickaxe skin is a different WID handed out at the start rather than a
+        // cosmetic property set later. Reading it after the grant meant taking an entry back out of
+        // the array again, which is exactly the kind of surgery a fast array should never see.
+        //
+        // Null for a player with no profile, an unreachable database, or LOCKER_FROM_DB=0 - and every
+        // default below then stands unchanged. See FortLockerProfile.
+        var locker = uniqueId.UniqueNetId?.Contents is { Length: > 0 } lockerAccountId
+            ? FortLockerProfile.For(lockerAccountId)
+            : null;
+
+        if (newPlayerController != null) newPlayerController.Locker = locker;
+
         if (newPlayerController == null) {
             errorMessage = "Failed to spawn player controller";
             return null;
@@ -783,7 +797,10 @@ public class AGameModeBase : AInfo {
             // set the id by hand, or MarkItemDirty skips its own counter and the next item collides
             // with this one.
             worldInventory.Inventory.Add(new FFortItemEntry {
-                ItemDefinition = UAssetRegistry.GetOrCreate("/Game/Athena/Items/Weapons/WID_Harvest_Pickaxe_Athena_C_T01.WID_Harvest_Pickaxe_Athena_C_T01"),
+                // The locker's harvesting tool when there is one - a pickaxe SKIN is a different
+                // WID, not a cosmetic property, so this is the only place it can be applied.
+                ItemDefinition = UAssetRegistry.GetOrCreate(locker?.PickaxeWeaponPath
+                    ?? "/Game/Athena/Items/Weapons/WID_Harvest_Pickaxe_Athena_C_T01.WID_Harvest_Pickaxe_Athena_C_T01"),
                 Count = 1
             });
 
@@ -1137,11 +1154,67 @@ public class AGameModeBase : AInfo {
             // only tags are the asset tags Gameplay.Mod.Cost / Gameplay.Mod.Stamina, which are
             // metadata for queries and are never applied to anyone.
             //
-            // Still a THEORY until a client confirms the bar moves - what is settled is that this
-            // candidate cannot repeat the GE_GM_HealthIncrease regression. Unset, this server applies
-            // nothing and behaves as it did before the experiment.
+            // ===================================================================================
+            // THE PATH WAS MISSING `_C`, AND THAT POISONED THE WHOLE CONNECTION. Measured
+            // 2026-09-08 with two clients, from the CLIENTS' own logs:
+            //
+            //   LogNetPackageMap: Error: GetObjectFromNetGUID: Failed to resolve path.
+            //       FullNetGUIDPath: [151]/Game/Abilities/Player/Generic/Gadgets/RomanCandle/
+            //       GE_RomanCandleCost.[149]Default__GE_RomanCandleCost
+            //   LogNet: Warning: UActorChannel::ProcessQueuedBunches: Guid is broken.
+            //       NetGUID: 149, ChIndex: 12, Actor: ...FortPlayerStateAthena...
+            //
+            // The asset IS there - FModel shows GE_RomanCandleCost.uasset - and what is NOT there is
+            // the object we named inside it. `pakreader exports` on the package lists exactly two:
+            //
+            //     BlueprintGeneratedClass  GE_RomanCandleCost_C
+            //     GE_RomanCandleCost_C     Default__GE_RomanCandleCost_C
+            //
+            // **A Blueprint's CDO is `Default__<Name>_C`, not `Default__<Name>`** - the `_C` belongs
+            // to the generated CLASS and the CDO is named after it. Every other Blueprint path in
+            // this project has it (Default__GAB_Emote_Generic_C, Default__GE_OutsideSafeZoneDamage_C,
+            // Default__GA_DefaultPlayer_Death_C); only this one, typed into an env var rather than
+            // derived, did not. Native classes really do have no suffix (Default__FortPickupAthena),
+            // which is what makes the missing one look plausible.
+            //
+            // THE EFFECT ITSELF WAS CHOSEN CORRECTLY. `pakreader exports` confirms all five points
+            // the analysis above worked out: one modifier, on `Health`, `EGameplayModOp::Additive`,
+            // ScalableFloat magnitude 0.0, no cues and no granted abilities. So the experiment was
+            // never actually run - the reference never landed - and
+            // `.Default__GE_RomanCandleCost_C` is what finally lets it happen.
+            //
+            // WHY THAT IS SO MUCH WORSE THAN "THE EXPERIMENT DID NOTHING". An object reference the
+            // client cannot resolve is announced as a must-be-mapped GUID, and UE then QUEUES every
+            // later bunch ON THAT CHANNEL until it resolves. ActiveGameplayEffects and
+            // ActivatableAbilities ride the SAME content block (see
+            // UActorChannel.ReplicateAbilitySystemComponent), so a broken reference in the effects
+            // array holds up every ability grant behind it. The players' logs show the two locked
+            // together exactly: every burst of `GameplayAbilitySpec ... Reading` lands on the same
+            // millisecond as a "Guid is broken" line - the specs were only ever arriving when UE
+            // finally gave up on this asset and flushed the queue. When one client stopped getting
+            // that flush, its abilities stopped for good: no emote, no firing, and
+            // `TryActivateAbility called with invalid Handle` on every attempt.
+            //
+            // So this is not an inert switch that can be left set. It is a live grenade, and it is
+            // the whole of "the first player to join loses every ability once a second joins".
+            // ===================================================================================
             if (playerState.AbilitySystemComponent != null &&
                 Environment.GetEnvironmentVariable("HEALTH_AGGREGATOR_EFFECT") is { Length: > 0 } effectPath) {
+                Console.WriteLine($"AGameModeBase.Login: HEALTH_AGGREGATOR_EFFECT is set to '{effectPath}'. " +
+                                  "IF THE CLIENT CANNOT LOAD THAT ASSET, this poisons the PlayerState channel: " +
+                                  "the reference is announced as a must-be-mapped GUID and the client queues every " +
+                                  "later bunch on that channel behind it, which stops ability grants dead. " +
+                                  "A Blueprint CDO is 'Default__<Name>_C' - a path missing the _C resolves to " +
+                                  "nothing and is exactly the bug this warning exists for. Unset this variable " +
+                                  "unless you have confirmed the path with `pakreader exports`.");
+
+                if (!effectPath.EndsWith("_C", StringComparison.Ordinal)) {
+                    Console.WriteLine($"AGameModeBase.Login: '{effectPath}' does not end in _C. Almost every " +
+                                      "GameplayEffect in Fortnite is a BLUEPRINT, whose CDO is Default__<Name>_C. " +
+                                      "This is the exact shape of the path that stalled a player's whole " +
+                                      "PlayerState channel on 2026-09-08.");
+                }
+
                 playerState.AbilitySystemComponent.AddActiveGameplayEffect(
                     UAssetRegistry.GetOrCreate(effectPath),
                     magnitude: EnvFloat("HEALTH_AGGREGATOR_MAGNITUDE", 0.0f),
@@ -1190,6 +1263,18 @@ public class AGameModeBase : AInfo {
                 (byte) ((1 << (int) EFortCustomPartType.Head)
                       | (1 << (int) EFortCustomPartType.Body)
                       | (1 << (int) EFortCustomPartType.Backpack));
+
+            // THE PLAYER'S ACTUAL OUTFIT, replacing whichever of the three defaults it can.
+            //
+            // Those defaults stay because they are the FALLBACK, not dead code: Mongo may be down,
+            // the account may have no profile, and an outfit may resolve no head - and a player who
+            // joins as the default commando is playing, while one who joins with no character parts
+            // at all leaves the client warning "Customization ... still hasn't completed" forever.
+            // FortLockerProfile.Apply only overwrites what it actually resolved.
+            if (locker is { } equipped) {
+                FortLockerProfile.Apply(playerState, equipped);
+                Console.WriteLine($"AGameModeBase.Login: locker - {equipped.Description}");
+            }
             newPlayerController.PlayerState = playerState;
         }
 
@@ -1312,6 +1397,15 @@ public class AGameModeBase : AInfo {
         // at a velocity clamped to exactly 1.0 uu/s. See NativeRepLayouts handle 8.
         if (pc.PlayerState?.AbilitySystemComponent is { } abilitySystem) {
             abilitySystem.AvatarActor = pawn;
+        }
+
+        // The player's own glider, if their locker named one. Set on EVERY pawn, not once at
+        // login: the warmup pawn is destroyed for the bus and a brand new one is spawned on the
+        // jump, and it is that second pawn whose glider actually opens. APawn.CosmeticGlider (wire
+        // handle 145) starts at DefaultGlider, which stays for a player with no profile - and it has
+        // to stay something, because the client dereferences it without a null check.
+        if (pc.Locker?.GliderItemPath is { } gliderPath) {
+            pawn.CosmeticGlider = UAssetRegistry.GetOrCreate(gliderPath);
         }
 
         // NOTHING IS EQUIPPED HERE BY DEFAULT, BECAUSE THE REAL SERVER DOES NOT.

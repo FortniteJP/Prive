@@ -132,6 +132,14 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // nobody reads. No-op unless that variable is set - see FortWelcomeMessage.
         Net.FortWelcomeMessage.Tick(this, TimeSeconds);
 
+        // Dropped items still in the air, when PICKUP_TOSS_STREAM asks for a toss to be watched
+        // rather than solved up front. No-op otherwise - see FortPickupToss.
+        Net.FortPickupToss.Tick(this, TimeSeconds);
+
+        // Emoji cues waiting for the throw to leave the hand - the montage notify this server cannot
+        // run. No-op unless someone is mid-emoji; see FortEmoteSystem.EmojiCueDelay.
+        Net.FortEmoteSystem.Tick(this, TimeSeconds);
+
         // The storm. Off unless SAFEZONE_ENABLED=1 - see FortSafeZoneSystem for why it is opt-in.
         // Placed with the structural tick rather than after the NetDriver so a radius change and the
         // damage it causes go out on the same tick they happen.
@@ -143,6 +151,10 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         FortFloorLoot.Tick(this, TimeSeconds);
         FortVehicleSpawns.Tick(this, TimeSeconds);
         FortSupplyLlamas.Tick(this, TimeSeconds);
+
+        // One of every throwable on the warmup island, so the grenade effects can actually be
+        // tried rather than waited for. WARMUP_THROWABLES=0 turns it off - see FortWarmupThrowables.
+        Net.Actors.FortWarmupThrowables.Tick(this, TimeSeconds);
 
         // Prints the ABSENCE of a jump, with everything a jump depends on, until one happens - see
         // Net.JumpDiagnostics for why an absent log line is not good enough.

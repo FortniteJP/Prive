@@ -107,6 +107,29 @@ public class ABuildingActor : AActor {
     public void MarkAsLevelActor() => bPlayerPlaced = false;
 
     /// <summary>
+    ///     Gives a MAP actor's stand-in its real hit points, from the baked
+    ///     FortHarvestResources.StemHealth table - the level-actor counterpart of what
+    ///     <see cref="InitializeFromClass" /> does for a player-placed piece.
+    ///
+    ///     A stand-in has no resolved UClass to derive anything from (it is built from the exported
+    ///     PATH of an actor living in a streaming sublevel this server never loads), so its health
+    ///     used to sit at the 200 class default for a tree, a car and a brick wall alike. The real
+    ///     numbers come from the same chain the game walks - see Tools/HarvestTable's pass 2b.
+    ///
+    ///     Idempotent, and deliberately refuses to move health on a piece that has already been hit:
+    ///     the caller runs on registration, but the same object can be handed back by
+    ///     UAssetRegistry's cache after a reconnect, and resetting a half-broken tree to full would
+    ///     be worse than leaving it at the default.
+    /// </summary>
+    public void InitializeLevelActorHitPoints(int maxHitPoints) {
+        if (maxHitPoints <= 0 || CurrentHitPoints != MaxHitPoints) return;
+
+        MaxHitPoints = maxHitPoints;
+        CurrentHitPoints = maxHitPoints;
+        SyncAttributeSet();
+    }
+
+    /// <summary>
     ///     ABuildingActor::bMirrored (wire handle 45) - whether this piece's mesh is mirrored, e.g. a
     ///     half-wall or stair whose open side depends on which way the player faced the edit pattern.
     ///     Was `Reserved` (declared, never sent) until Round 44: ServerEditBuildingActor's own
@@ -741,12 +764,15 @@ public class ABuildingActor : AActor {
     private const int DefaultHitPoints = 200;
 
     /// <summary>
-    ///     Base HP per material tier. NOT measured from a live client or read off a real
-    ///     BuildingActorData/HealthMax property - Fortnite ships those in a DataTable this project
-    ///     does not parse yet (see Tools/MapActorDump's "props:" mode, which could pull the real
-    ///     numbers off a WID-adjacent building data asset given the exact row name). Picked in the
-    ///     right relative order (wood weakest, metal strongest) so destruction has SOME grounded
-    ///     number to subtract from; treat every value here as a placeholder pending that extraction.
+    ///     Base HP per material tier, and NOW ONLY A LAST RESORT. Both real sources are in place:
+    ///     a player-placed piece takes its health from FortBuildingAttributes.Generated.cs
+    ///     (<see cref="InitializeFromClass" />) and a piece of map geometry from
+    ///     FortHarvestResources.StemHealth (<see cref="InitializeLevelActorHitPoints" />), each
+    ///     resolved through the class's own AttributeInitKeys the way the game does it.
+    ///
+    ///     What reaches here is a class neither table covers. The numbers are still invented, in the
+    ///     right relative order (wood weakest, metal strongest), so destruction has something to
+    ///     subtract from rather than nothing.
     /// </summary>
     public static int BaseHitPointsFor(EBuildingMaterial material) => material switch {
         EBuildingMaterial.Wood => 200,
@@ -776,6 +802,38 @@ public class ABuildingActor : AActor {
     ///     named explicitly rather than left to a default, and Stair has to be tested before Wall
     ///     because StairW would otherwise never be reached.
     /// </summary>
+    /// <summary>
+    ///     The UClass for a building content path, with the RIGHT C# TYPE behind it: an
+    ///     <see cref="ABuildingWall" /> for a wall, this class for everything else.
+    ///
+    ///     EVERY BUILDING-PATH LOOKUP MUST COME THROUGH HERE, and that is not tidiness. UClasses are
+    ///     cached per (C# Type, path) pair, so resolving one path as two different types makes TWO
+    ///     UClass objects for one piece of content - and the client then gets the same class exported
+    ///     as two different NetGUIDs depending on which lookup happened to run first. That hazard is
+    ///     older than this method (BuildingClassHandles and FortWeaponActorClasses both carried a
+    ///     comment about it); what is new is that the answer is no longer "always ABuildingActor".
+    ///
+    ///     WHY A WALL NEEDS ITS OWN TYPE. The C# type decides the wire LAYOUT - BuildingWallProps is
+    ///     the building layout plus handles 68-74, so a wall resolved as the base class has no
+    ///     bDoorOpen to send - and it is what the interact handler switches on when the client names
+    ///     a piece by NetGUID. Both failing at once is what "a built door opens and never closes"
+    ///     was.
+    ///
+    ///     SAFE BECAUSE IT IS CHECKED, not because the naming looks right: every one of the 182
+    ///     player wall classes derives from BuildingWall, and no class that
+    ///     <see cref="BuildingTypeFromClassPath" /> calls a Wall is anything else (verified against
+    ///     `pakreader supers` over Building/ActorBlueprints/Player). Twelve go the harmless way -
+    ///     `PBWA_W1_RoofWall_C` reads as a Roof because "Roof" is tested first - and simply get no
+    ///     door handles, which a roof piece has no use for anyway. Getting it wrong in the OTHER
+    ///     direction would send a handle the class does not have, which drops the connection.
+    /// </summary>
+    public static UClass ClassForPath(string classPath) =>
+        GUClassArray.StaticClassForPath(
+            BuildingTypeFromClassPath(classPath) == EFortBuildingType.Wall
+                ? typeof(ABuildingWall)
+                : typeof(ABuildingActor),
+            classPath);
+
     public static EFortBuildingType BuildingTypeFromClassPath(string? classPath) {
         if (classPath == null) return EFortBuildingType.None;
         var name = classPath[(classPath.LastIndexOf('.') + 1)..];

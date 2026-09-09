@@ -74,7 +74,7 @@ public class UActorChannel : UChannel {
 
         if (dropped.Length > 0) {
             changed.ExceptWith(dropped);
-            Console.WriteLine($"\aGetInitialReplicatedProperties: REP_DISABLE dropped [{string.Join(", ", dropped)}] from {typeName}");
+            Console.WriteLine($"GetInitialReplicatedProperties: REP_DISABLE dropped [{string.Join(", ", dropped)}] from {typeName}");
             File.AppendAllText("REP_DISABLE.log", $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {typeName} dropped [{string.Join(", ", dropped)}]{Environment.NewLine}");
         }
 
@@ -193,6 +193,39 @@ public class UActorChannel : UChannel {
         return properties;
     }
 
+    /// <summary>
+    ///     Handles 2 and 6 on a dropped pickup, so the SERVER's toss is what the player watches.
+    ///
+    ///     THIS LIST USED TO SAY "NO bReplicateMovement / ReplicatedMovement", on evidence: two live
+    ///     rounds where a pickup carrying replicated movement was one the client would not let
+    ///     anyone pick up - not a single ServerHandlePickup in either. Both of those rounds also
+    ///     had the item 95 units INSIDE the landscape for its whole flight (FortPickupToss's
+    ///     RestClearance was 40 against a measured 135), which is reason enough on its own for the
+    ///     client's interaction query to find nothing. The confound is gone, and the substep counts
+    ///     in FortPickupToss.BeginStreamed say the server is the only thing that flies a dropped
+    ///     item on a real 10.40 server, so this goes back in.
+    ///
+    ///     PICKUP_REPLICATE_MOVEMENT=0 takes it out again if the old symptom returns; the item then
+    ///     simply waits at its launch point for the AtRest handoff.
+    ///
+    ///     Note these are only ever non-default WHILE A TOSS IS IN THE AIR - FortPickupToss.Tick
+    ///     clears bReplicateMovement the moment the item lands - so a resting or generated pickup
+    ///     costs nothing but two comparisons.
+    /// </summary>
+    private static HashSet<string> WithPickupMovement(AFortPickup pickup, HashSet<string> properties) {
+        // ONLY WHILE THE TOSS IS IN THE AIR. Listing these unconditionally would put a zeroed
+        // ReplicatedMovement in the OPEN bunch of every floor-loot and container pickup on the map -
+        // 2895 of them - and a zeroed FRepMovement is a Location of (0, 0, 0). bReplicateMovement
+        // bumps the property-set revision when it changes, so the channel rebuilds this at the
+        // moment the toss starts and again at the moment it lands.
+        if (pickup.bReplicateMovement && Environment.GetEnvironmentVariable("PICKUP_REPLICATE_MOVEMENT") is not "0") {
+            properties.Add("bReplicateMovement");
+            properties.Add("ReplicatedMovement");
+        }
+
+        return properties;
+    }
+
     /// <summary>What a thrown projectile replicates - see the AFortProjectileBase arm below.</summary>
     private static readonly HashSet<string> ProjectileProperties =
         Environment.GetEnvironmentVariable("PROJECTILE_REPLICATE_MOVEMENT") is "1"
@@ -287,7 +320,15 @@ public class UActorChannel : UChannel {
             "ReplicatedFlightTimestamp", "AircraftIndex"
         },
         APlayerState => WithPlayerName(new HashSet<string> { "RemoteRole", "Role", "UniqueId", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
-            "CharacterData.WasPartReplicatedFlags", "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[3]",
+            // ALL SIX SLOTS, not the three the built-in default happened to fill. Head/Body/Backpack
+            // was enough while every player was the same commando; a real locker outfit brings a HAT
+            // (CID_028's Hat_F_Commando_08_V01) and some bring a face or a charm, and a slot that is
+            // never named in a changed set is a slot that is never sent. A null in an unused slot is
+            // the correct value for "this outfit has no hat" - WasPartReplicatedFlags is what says
+            // which ones carry meaning. See FortLockerProfile.
+            "CharacterData.WasPartReplicatedFlags",
+            "CharacterData.Parts[0]", "CharacterData.Parts[1]", "CharacterData.Parts[2]",
+            "CharacterData.Parts[3]", "CharacterData.Parts[4]", "CharacterData.Parts[5]",
             // The plain-float health mirror (216-219), the second of the two paths a client could be
             // drawing a health bar from - see NativeRepLayouts for why both are sent. These CHANGE
             // during a match, so they have to be listed here or the per-tick diff would never
@@ -350,7 +391,7 @@ public class UActorChannel : UChannel {
             // Which granted abilities this weapon fires and reloads with - handles 31 and 33.
             "PrimaryAbilitySpecHandle", "ReloadAbilitySpecHandle"
         },
-        AFortPickup => new HashSet<string> {
+        AFortPickup pickupActor => WithPickupMovement(pickupActor, new HashSet<string> {
             "RemoteRole", "Role",
             "PrimaryPickupItemEntry.Count", "PrimaryPickupItemEntry.ItemDefinition",
             "PrimaryPickupItemEntry.OrderIndex", "PrimaryPickupItemEntry.Durability",
@@ -374,7 +415,7 @@ public class UActorChannel : UChannel {
             // ServerHandlePickup flips it. That makes this the first property in the project
             // whose whole purpose is to change after the initial burst.
             "bPickedUp"
-        },
+        }),
         // WorldInventory maps to handle 34 as a plain ObjectRef - CONFIRMED live by the truncated
         // name probe, which reported "Property=WorldInventory, Parent=25, Cmd=53, ReadHandle=34"
         // with ReadLen=8, i.e. a packed NetGUID byte, matching PlayerState's own ObjectRef read at
@@ -420,10 +461,29 @@ public class UActorChannel : UChannel {
             // False until the player is killed - see FortDamageSystem.Kill. Listed for the same
             // reason CurrentWeapon is: it only ever changes after the initial burst.
             "bIsDying",
+            // WHERE THIS PLAYER IS LOOKING VERTICALLY, and the only source anyone else has for it -
+            // a capsule carries yaw alone, so without this every other player's head stays level.
+            // It changes constantly, so listing it here is what puts it in the per-tick diff; the
+            // condition table above already marks it SkipOwner, which is what stops the owner being
+            // told its own aim. See APawn.RemoteViewPitch.
+            "RemoteViewPitch",
+            // The shockwave grenade's throw - see FortProjectileSystem's knockback and
+            // NativeRepLayouts handle 65. Listed here because this set is also the per-tick diff's
+            // walk list: a property missing from it is never compared, so it could never start
+            // being sent later either.
+            "PushMomentum",
             // Null until this player emotes, and back to null when they stop - the only part of an
             // emote that reaches anybody but the emoter. See APawn.LastReplicatedEmoteExecuted;
             // listed here for the same reason as the two above.
             "LastReplicatedEmoteExecuted",
+            // RepAnimMontageInfo, handles 176-182 - the half of an emote that reaches ONLOOKERS.
+            // Every one has to be listed or the per-tick diff never compares it: this set doubles
+            // as the walk list, which is how "the server set it, said so in the log, and the channel
+            // filtered it out" has happened before. See NativeRepLayouts' RepAnimMontageInfo block.
+            "RepAnimMontageInfo.AnimMontage", "RepAnimMontageInfo.PlayRate",
+            "RepAnimMontageInfo.Position", "RepAnimMontageInfo.BlendTime",
+            "RepAnimMontageInfo.ForcePlayBit", "RepAnimMontageInfo.IsStopped",
+            "RepAnimMontageInfo.SkipPositionCorrection",
             // Handles 95, 126 and 127 - the storm. All three CHANGE mid-match, so they have to be
             // listed here or the per-tick diff would never compare them. bIsInAnyStorm is the one
             // that actually lights up the screen effect - see APawn.bIsInAnyStorm.
@@ -458,9 +518,15 @@ public class UActorChannel : UChannel {
         // sent later (same reason AFortPickup.bPickedUp and APawn.CurrentWeapon are listed).
         // A chest or ammo box. Everything a building piece sends, plus the two that ARE the open:
         // bAlreadySearched (71, whose OnRep swaps in the opened mesh) and the animation counter (76).
-        // A door. bDoorOpen (73) is the whole thing; the collision flag rides along so an open door
-        // is actually walkable.
-        ABuildingWall => WithDoorRotation(new HashSet<string> {
+        // A MAP door - a stand-in for an actor in a streaming sublevel this server never loaded, so
+        // there is no build animation, no health bar and no mirroring to send. bDoorOpen (73) is the
+        // whole thing; the collision flag rides along so an open door is actually walkable.
+        //
+        // MATCHED ON bPlayerPlaced BEING FALSE, which is what MarkAsLevelActor sets. A door the
+        // PLAYER built is also an ABuildingWall and must NOT take this arm: it is a real spawned
+        // building piece and needs everything a building piece sends. It falls through to the
+        // ABuildingActor arm below, which adds the door handles back through WithDoorProperties.
+        ABuildingWall { bPlayerPlaced: false } => WithDoorRotation(new HashSet<string> {
             "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced",
             "bDoorOpen", "bDoorCollisionDisabled"
         }),
@@ -468,13 +534,20 @@ public class UActorChannel : UChannel {
             "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced",
             "ReplicatedLootTier", "bAlreadySearched", "SearchBounceData.SearchAnimationCount"
         },
+        // A SPRAY ON A WALL. Deliberately minimal, and above the ABuildingActor arm for the same
+        // reason the llama is: that arm names ReplicatedDrawScale3D, BuildingAnimation, the
+        // attribute set and MinimalReplicationProxy - a build-in animation, a health bar and a
+        // damage proxy, none of which a decal has any business carrying. The one thing worth
+        // sending is which spray it is. See AFortSprayDecalInstance.
+        AFortSprayDecalInstance => new HashSet<string> { "RemoteRole", "Role", "SprayInfo.SprayAsset" },
         // A supply llama. MUST be above the ABuildingActor arm, and not only because a llama IS one:
         // that arm names ReplicatedDrawScale3D, BuildingAnimation and MinimalReplicationProxy.*,
         // which are ABuildingSMActor handles in the 45-67 range that a llama's class simply does not
         // have. Sending one is the BunchIsError-then-silent-disconnect failure - see
         // NativeRepLayouts.SupplyDropLlamaProps. Looted (39) is the whole opened-state visual.
         AFortAthenaSupplyDropLlama => new HashSet<string> { "RemoteRole", "Role", "Looted" },
-        ABuildingActor placedBuilding => WithBuildingAttributeSet(placedBuilding, new HashSet<string> {
+        ABuildingActor placedBuilding => WithDoorProperties(placedBuilding,
+            WithBuildingAttributeSet(placedBuilding, new HashSet<string> {
             "RemoteRole", "Role", "HealthBarIndicatorDifficultyRating",
             "bDestroyed", "bPlayerPlaced",
             // MIRRORING (45 and 58). Both of these had a working getter in NativeRepLayouts and
@@ -499,9 +572,34 @@ public class UActorChannel : UChannel {
             "MinimalReplicationProxy.Health", "MinimalReplicationProxy.MaxHealth",
             // The damage cue (67) - see ABuildingActor.OnDamaged.
             "ProxyGameplayCueDamagePhysical.ProxyGameplayCueDamagePhysicalMagnitude"
-        }),
+        })),
         _ => new HashSet<string> { "RemoteRole", "Role" }
     };
+
+    /// <summary>
+    ///     Adds the door handles (70/73/74) to a PLAYER-BUILT wall's property set.
+    ///
+    ///     A player-built door is not the map-door case at all: it is a real spawned piece, so it
+    ///     needs the whole building set - health, build animation, mirroring, the damage cue - AND
+    ///     the door flags on top. Its class really is an ABuildingWall subclass (PBWA_W1_DoorSide_C
+    ///     and friends), so the handles exist on it and BuildingWallProps is the layout either way.
+    ///
+    ///     WITHOUT THIS a built door opens and never closes. The piece used to be spawned as a plain
+    ///     ABuildingActor, so bDoorOpen was neither in its layout nor in this whitelist and the
+    ///     server had nothing to say back; the client predicted the swing locally, was never
+    ///     confirmed, and had no way to ask again.
+    ///
+    ///     Every wall piece gets them, not just the door variants: a plain wall's class has the
+    ///     handles too (they are ABuildingWall's), and OnRep_bDoorOpen on a wall with no door in it
+    ///     does nothing - which is exactly the reasoning FortMapWalls' name gate already documents.
+    /// </summary>
+    private static HashSet<string> WithDoorProperties(ABuildingActor building, HashSet<string> properties) {
+        if (building is not ABuildingWall) return properties;
+
+        properties.Add("bDoorOpen");
+        properties.Add("bDoorCollisionDisabled");
+        return WithDoorRotation(properties);
+    }
 
     /// <summary>
     ///     Adds the attribute-set references (handles 19 and 20) unless this is a player-built piece
@@ -674,11 +772,43 @@ public class UActorChannel : UChannel {
 
         foreach (var subobject in GetInitialReplicatedSubobjects(Actor)) ReplicateSubobject(subobject, bunch);
 
-        SendBunch(bunch, false);
+        CommitFastArrayBaseStates(SendBunch(bunch, false));
 
         // Everything the burst just wrote is now the client's view of this actor, so record it -
         // otherwise the first ReplicateActorUpdate would resend all of it as "changed".
         NativeRepLayouts.Get(Actor).SeedShadowState(Actor, AllReplicatedProperties, _shadowState);
+
+        // THE EARLY ABILITY PUSH IS OFF NOW, AND THE FORMAT FIX IS WHY.
+        //
+        // A client's FFastArraySerializer decides ONCE, the first time that array object is
+        // serialised, whether it speaks the plain wire format or the delta-STRUCT one - and then
+        // LATCHES it for the object's lifetime (NetSerialization.h:1232-1239; the early-out at 1070
+        // honours the latch on every later call). The deciding bit comes off OUR wire, but the
+        // client's own DEMO recorder serialises these same arrays when it records a newly created
+        // actor, with the bit true, and whoever touches the array first wins.
+        //
+        // This used to be a RACE fix: push the component on the opening tick so our read got there
+        // first. It fixed the abilities and it broke JUMPING, at every size tried - the full bunch,
+        // the bunch without its must-be-mapped GUIDs, the fast array alone (1579 bits), and the fast
+        // array held until possession completed. The symptom names the subsystem: the client stops
+        // asking to activate spec handle 1 (Jump) while handle 2 (Sprint) still works, so it is
+        // CHARACTER MOVEMENT refusing, not the ability system - "a pawn it has possessed but not
+        // finished", which is the possession-window rule again ("it is not volume, it is WHAT lands
+        // in the possession window"). One run with ASC_ON_OPEN=0 brought jumping straight back, and
+        // that is what pinned it on this push rather than on anything else changed the same day.
+        //
+        // The answer was the FORMAT, not the timing. This server now writes
+        // FastArrayDeltaSerialize_DeltaSerializeStructs and claims it, so both sides latch the same
+        // way whichever of them gets there first and there is no race left to win - see
+        // FFastArraySerializerWriter's class doc and [[fastarray-delta-latch]].
+        //
+        // ASC_ON_OPEN=1 puts the early push back, for bisecting only. It is expected to break
+        // jumping; that is the finding, not a regression.
+        if (Environment.GetEnvironmentVariable("ASC_ON_OPEN") is "1" && PossessionComplete) {
+            ReplicateAbilitySystemComponent(fastArraysOnly: true);
+        } else {
+            _ascOpenPushPending = Environment.GetEnvironmentVariable("ASC_ON_OPEN") is "1";
+        }
     }
 
     /// <summary>
@@ -957,6 +1087,19 @@ public class UActorChannel : UChannel {
     /// </summary>
     private static readonly HashSet<string> NeverSentAtOpen = new() {
         "bIsDying", "LastReplicatedEmoteExecuted",
+        // NOT THE MONTAGE STRUCT. It was here on the reasoning that it "is meaningless until somebody
+        // emotes" - and that reasoning cost the same bug twice.
+        //
+        // NeverSentAtOpen does not stop the shadow being SEEDED with the current value; it only stops
+        // the value going out. So a member that already holds its final value when the channel opens
+        // is recorded as sent, never changes again, and is never transmitted at all. First it was
+        // PlayRate defaulting to 1.0 against the client's 0; then, with the defaults matched, it was
+        // a player who emoted BEFORE an onlooker's channel for their pawn opened - PlayRate was
+        // already 1.0 at open, so that onlooker never received it and saw the emote frozen on its
+        // first frame.
+        //
+        // Six small values in the opening burst is the cheap side of that trade, and it is also
+        // CORRECT: a player who is mid-emote when you arrive should be mid-emote when you see them.
         "DeathInfo.FinisherOrDowner", "DeathInfo.bDBNO", "DeathInfo.DeathCause",
         "DeathInfo.Distance", "DeathInfo.bInitialized",
         // Zero until the player is eliminated, and zero IS the client's default - so it belongs
@@ -1030,12 +1173,67 @@ public class UActorChannel : UChannel {
     ///     FReplicationFlags::bNetOwner - does the connection this channel belongs to own the actor?
     ///     The owner chain ends at the PlayerController, which is what a connection has.
     /// </summary>
+    /// <summary>
+    ///     Who this channel talks to, for the log.
+    ///
+    ///     ADDED AFTER A TWO-PLAYER SESSION COULD NOT BE READ: every ability line printed
+    ///     `Actor=FortPlayerStateAthena` and a ChIndex, and ChIndex is per CONNECTION - so two lines
+    ///     about two different players were indistinguishable from two lines about one player on two
+    ///     connections. A log that cannot tell two players apart is no use in the one situation that
+    ///     needs it.
+    /// </summary>
+    /// <summary>
+    ///     This channel's actor, named the way the CLIENT's log names it - by NetGUID - so the two
+    ///     logs can be laid side by side. NOT GetUniqueID(): that returns UObjectBase._InternalIndex,
+    ///     which nothing in this project ever assigns (the compiler says so, CS0649), so it is always
+    ///     zero and every actor looks like every other one.
+    /// </summary>
+    private string ActorName {
+        get {
+            if (Actor == null) return "no actor";
+
+            var guid = (Connection?.PackageMap as UPackageMapClient)?.GuidCache?.GetNetGUID(Actor);
+            return $"{Actor.GetFName()}<{guid?.Value.ToString() ?? "?"}>";
+        }
+    }
+
+    private string ConnectionName =>
+        Connection?.PlayerController is { } pc
+            ? $"{pc.GetFName()}{(IsNetOwner ? " (OWNER)" : "")}"
+            : Connection?.RemoteAddr?.ToString() ?? "no connection";
+
     private bool IsNetOwner =>
         Connection?.PlayerController is { } owner && Actor != null &&
         (Actor.IsOwnedBy(owner) || Actor == owner || (Actor as APawn)?.Controller == owner);
 
-    public unsafe bool ReplicateActorUpdate() {
+    /// <summary>
+    ///     <paramref name="force" /> skips the NetUpdateFrequency gate only - never the open/ack
+    ///     ones, which exist because an update that overtakes its own channel-open is dropped
+    ///     silently and never retried. Used when a property has to reach the client as its OWN
+    ///     change rather than folded into the next scheduled diff; see FortEmoteSystem.
+    /// </summary>
+    /// <summary>
+    ///     The same three signals UNetDriver.OpenChannelsForNewlyRelevantActors uses: the client has
+    ///     no pawn to take, has said it finished loading one, or has acknowledged the one it has.
+    /// </summary>
+    private bool PossessionComplete =>
+        Connection?.PlayerController is not { } viewer
+        || viewer.Pawn == null || viewer.bClientPawnLoaded || viewer.AcknowledgedPawn == viewer.Pawn;
+
+    /// <summary>
+    ///     The ability array still owes this connection its early push - the channel opened during
+    ///     the possession window, so it could not go out there. Sent the moment possession finishes,
+    ///     which is still long before the client's demo recorder touches the array.
+    /// </summary>
+    private bool _ascOpenPushPending;
+
+    public unsafe bool ReplicateActorUpdate(bool force = false) {
         if (Actor == null || Connection == null || Closing || Broken) return false;
+
+        if (_ascOpenPushPending && PossessionComplete) {
+            _ascOpenPushPending = false;
+            ReplicateAbilitySystemComponent(fastArraysOnly: true);
+        }
 
         // Not yet opened on the wire - the initial burst has not run, and there is nothing to diff
         // against. ReplicateActor is what opens it.
@@ -1049,7 +1247,7 @@ public class UActorChannel : UChannel {
         if (!OpenAcked) return false;
 
         var driverTime = Connection.Driver!.GetElapsedTime();
-        if (driverTime < _nextUpdateTime) return false;
+        if (!force && driverTime < _nextUpdateTime) return false;
 
         var frequency = Actor.NetUpdateFrequency > 0.0f ? Actor.NetUpdateFrequency : 1.0f;
         _nextUpdateTime = driverTime + 1.0f / frequency;
@@ -1153,7 +1351,7 @@ public class UActorChannel : UChannel {
         Console.WriteLine($"ReplicateCustomDeltaUpdate: {Actor!.GetType().Name} ChIndex={ChIndex} " +
                           $"numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
 
-        SendBunch(bunch, false);
+        CommitFastArrayBaseStates(SendBunch(bunch, false));
 
         return true;
     }
@@ -1357,7 +1555,12 @@ public class UActorChannel : UChannel {
     ///     Sent in its own bunch rather than appended to the actor's, purely so a failure here
     ///     cannot corrupt the actor's own property stream while this path is new.
     /// </summary>
-    private unsafe bool ReplicateAbilitySystemComponent() {
+    /// <param name="fastArraysOnly">
+    ///     Send the custom-delta fields and nothing else - no RepLayout properties, no ability
+    ///     instances, no must-be-mapped announcement. Used on the channel's opening tick, where the
+    ///     ability array has to arrive early but everything around it must not. See the caller.
+    /// </param>
+    private unsafe bool ReplicateAbilitySystemComponent(bool fastArraysOnly = false) {
         if (Connection == null) return false;
 
         // A building carries its own ASC for exactly one reason - to make its attribute set's
@@ -1376,7 +1579,7 @@ public class UActorChannel : UChannel {
         // it resolves to null on arrival and a property matching the shadow is never reconsidered.
         // Sending the instance's own content block first means the client has constructed the object
         // by the time the spec points at it.
-        ReplicateAbilityInstances(asc);
+        if (!fastArraysOnly) ReplicateAbilityInstances(asc);
 
         using var payload = new FNetBitWriter(Connection.PackageMap, 256);
 
@@ -1385,7 +1588,9 @@ public class UActorChannel : UChannel {
         // OwnerActor/AvatarActor are what let the client run InitAbilityActorInfo and therefore
         // apply movement attributes to the pawn; see NativeRepLayouts.AbilitySystemComponentProps.
         var layout = NativeRepLayouts.AbilitySystemComponent;
-        var changed = layout.CompareProperties(asc, AbilitySystemProperties, _ascShadowState);
+        var changed = fastArraysOnly
+            ? new List<(string Name, object? Value)>()
+            : layout.CompareProperties(asc, AbilitySystemProperties, _ascShadowState);
         var changedNames = changed.Select(entry => entry.Name).ToHashSet();
 
         if (changedNames.Count > 0) layout.WriteChangedProperties(payload, asc, changedNames);
@@ -1393,7 +1598,8 @@ public class UActorChannel : UChannel {
         var wroteDelta = WriteCustomDeltaField(payload, NativeClassNetCache.FortAbilitySystemComponentCache,
             "ActivatableAbilities", fieldPayload =>
                 FFastArraySerializerWriter.WriteDelta(fieldPayload, asc.ActivatableAbilities,
-                    BaseStateFor("ActivatableAbilities"), FFastArraySerializerWriter.WriteAbilitySpec));
+                    BaseStateFor("ActivatableAbilities"), FFastArraySerializerWriter.WriteAbilitySpec,
+                    FFastArraySerializerWriter.WriteAbilitySpecDeltaStruct));
 
         // The second fast array on this component. Only sent once something is actually in it -
         // an empty one has nothing to say, and a bare header would make the client run its whole
@@ -1402,7 +1608,8 @@ public class UActorChannel : UChannel {
             wroteDelta |= WriteCustomDeltaField(payload, NativeClassNetCache.FortAbilitySystemComponentCache,
                 "ActiveGameplayEffects", fieldPayload =>
                     FFastArraySerializerWriter.WriteDelta(fieldPayload, asc.ActiveGameplayEffects,
-                        BaseStateFor("ActiveGameplayEffects"), FFastArraySerializerWriter.WriteActiveGameplayEffect));
+                        BaseStateFor("ActiveGameplayEffects"), FFastArraySerializerWriter.WriteActiveGameplayEffect,
+                        FFastArraySerializerWriter.WriteActiveGameplayEffectDeltaStruct));
         }
 
         if (changedNames.Count == 0 && !wroteDelta) return false;
@@ -1421,16 +1628,69 @@ public class UActorChannel : UChannel {
         fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
 
         var ascGuid = ((UPackageMapClient) Connection.PackageMap!).GuidCache!.GetNetGUID(asc);
-        Console.WriteLine($"ReplicateAbilitySystemComponent: ChIndex={ChIndex} Actor={Actor.GetFName()} " +
+        Console.WriteLine($"ReplicateAbilitySystemComponent: ChIndex={ChIndex} to={ConnectionName} " +
+                          $"Actor={ActorName} " +
                           $"ascNetGuid={ascGuid} stablyNamed={asc.IsNameStableForNetworking()} " +
                           $"changed=[{string.Join(", ", changedNames)}] " +
                           $"abilities={asc.ActivatableAbilities.Count} numPayloadBits={numPayloadBits} " +
                           $"payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
 
-        SendBunch(bunch, false);
+        // THE ONE TARGETED VERSION OF THE NET_ASYNC_LOAD TEST. Announcing must-be-mapped GUIDs makes
+        // the client HOLD every later bunch on this channel until they resolve - which is what we
+        // want at join time (turning it off wholesale with NET_ASYNC_LOAD=0 hangs the loading
+        // screen, so the queueing is load-bearing there) and is also the only known mechanism that
+        // can stall one connection's ability deltas forever while the server sees nothing wrong.
+        //
+        // ASC_MUST_BE_MAPPED=0 drops the announcement for THIS bunch only. The ability specs it
+        // carries name an emote asset and its ability class by GUID; if those are what a stalled
+        // channel is waiting on, this is the switch that says so - and it leaves every other
+        // channel's queueing, including the join burst's, exactly as it was.
+        if (Environment.GetEnvironmentVariable("ASC_MUST_BE_MAPPED") is "0"
+            && Connection.PackageMap is UPackageMapClient packageMap) {
+            var pending = packageMap.GetMustBeMappedGuidsInLastBunch();
+            if (pending.Count > 0) {
+                Console.WriteLine($"ReplicateAbilitySystemComponent: ASC_MUST_BE_MAPPED=0 - dropping " +
+                                  $"[{string.Join(", ", pending.Select(g => g.Value))}] from this bunch so it " +
+                                  "cannot queue behind an unresolved reference.");
+                pending.Clear();
+            }
+        }
+
+        // The opening tick announces nothing: a must-be-mapped GUID is what makes the client stall
+        // this channel to async-load a Blueprint class, and that is the possession-window hazard.
+        if (fastArraysOnly && Connection.PackageMap is UPackageMapClient openPackageMap) {
+            openPackageMap.GetMustBeMappedGuidsInLastBunch().Clear();
+        }
+
+        var ascSent = SendBunch(bunch, false);
+        CommitFastArrayBaseStates(ascSent);
 
         // Only after the bunch is away, for the same reason ReplicateActorUpdate commits late.
-        FRepLayout.CommitShadowState(changed, _ascShadowState);
+        if (ascSent.First != UnrealConstants.IndexNone) FRepLayout.CommitShadowState(changed, _ascShadowState);
+
+        // AVATARACTOR HAS TO BE RE-SENT UNTIL THIS CONNECTION CAN ACTUALLY RESOLVE IT, and that is
+        // the whole of "an onlooker never sees an emote".
+        //
+        // AFortPawn::OnRep_ReplicatedAnimMontage (static 0x141973660) begins:
+        //
+        //      rbx = [this + 0xD00]        ; AFortPawn::AbilitySystemComponent
+        //      if (rbx == 0) return        ; <- nothing happens, ever
+        //      ... copy RepAnimMontageInfo into the ASC and call ITS OnRep (vtable +0x7B8)
+        //
+        // That pointer is NOT replicated (it is absent from the pawn's handle list); the client
+        // builds it from the ASC, which needs the ASC bound to this pawn - AvatarActor.
+        //
+        // A PlayerState's channel opens on an onlooker's connection BEFORE that player's pawn does.
+        // AvatarActor is written then as a NetGUID for an actor the client has not been told to
+        // spawn, so it resolves NULL - and it never changes afterwards, so the diff never sends it
+        // again. This project's standing hazard, in the one place where it costs a whole feature.
+        //
+        // Re-dirtying it while the target has no channel here costs one ObjectRef per pass and stops
+        // the moment the pawn's channel exists.
+        if (asc.AvatarActor is { } avatar && Connection.FindActorChannel(avatar) == null) {
+            _ascShadowState.Remove("AvatarActor");
+            _ascShadowState.Remove("OwnerActor");
+        }
 
         // Same repair as handle 19's: a building's own initial push named this component before it
         // had a NetGUID, so the client read it null and would never reconsider.
@@ -1832,6 +2092,32 @@ public class UActorChannel : UChannel {
     /// <summary>The component's own shadow buffer, kept apart from the actor's.</summary>
     private readonly Dictionary<string, object?> _ascShadowState = new();
 
+    /// <summary>
+    ///     Turns a written fast-array delta into a SENT one - or throws it away so the next pass
+    ///     writes it again.
+    ///
+    ///     A fast array has no redundancy and no resync point: the next delta is computed against
+    ///     what this connection is believed to hold, so a delta that was serialised but never
+    ///     delivered leaves the connection stuck at that version for the rest of the match. Both of
+    ///     SendBunch's failure paths return First == INDEX_NONE (a bunch too large to construct, and
+    ///     a reliable-buffer overflow, which also closes the connection), so this is the whole test.
+    ///
+    ///     See FNetFastTArrayBaseState.StagePending for the bug this exists to prevent.
+    /// </summary>
+    private void CommitFastArrayBaseStates(FPacketIdRange sent) {
+        var delivered = sent.First != UnrealConstants.IndexNone;
+
+        foreach (var state in _fastArrayBaseStates.Values) {
+            if (delivered) state.Commit();
+            else state.Discard();
+        }
+
+        if (!delivered) {
+            Console.WriteLine($"UActorChannel: a custom-delta bunch for {Actor?.GetFName()} on ChIndex={ChIndex} " +
+                              "was NOT sent - the fast-array base states were rolled back so the next pass resends them.");
+        }
+    }
+
     private FNetFastTArrayBaseState BaseStateFor(string fieldName) {
         if (!_fastArrayBaseStates.TryGetValue(fieldName, out var state)) {
             state = new FNetFastTArrayBaseState();
@@ -1858,11 +2144,22 @@ public class UActorChannel : UChannel {
             case AFortInventory inventory:
                 wroteSomething |= WriteCustomDeltaField(payload, "Inventory", fieldPayload =>
                     FFastArraySerializerWriter.WriteDelta(fieldPayload, inventory.Inventory, BaseStateFor("Inventory"),
-                        FFastArraySerializerWriter.WriteItemEntry));
+                        FFastArraySerializerWriter.WriteItemEntry,
+                        FFastArraySerializerWriter.WriteItemEntryDeltaStruct));
                 break;
 
             // AFortGameStateAthena::GameMemberInfoArray - the team/squad roster the client looks up
             // by unique id. See FFastArraySerializerWriter.WriteGameMemberInfo.
+            //
+            // PLAIN FORMAT, deliberately, and it is the one array here that must stay that way.
+            // FGameMemberInfoArray never calls SetDeltaSerializationEnabled, so the client's copy
+            // has no HasDeltaBeenRequested flag and cannot take the delta-struct path no matter what
+            // bit we write (NetSerialization.h:1235). A 10.40 client's own log settles it: every
+            // struct that ever takes that path names itself in a
+            // "FastArrayDeltaSerialize_DeltaSerializeStruct for <Struct>" line, and GameMemberInfo
+            // appears only in the plain "FastArrayDeltaSerialize for GameMemberInfo" one - 6619
+            // times, with zero struct-path lines. Claiming the struct format here would have it read
+            // as plain and corrupt the roster.
             case AGameState gameState when gameState.GameMemberInfoArray.Count > 0:
                 wroteSomething |= WriteCustomDeltaField(payload, "GameMemberInfoArray", fieldPayload =>
                     FFastArraySerializerWriter.WriteDelta(fieldPayload, gameState.GameMemberInfoArray, BaseStateFor("GameMemberInfoArray"),
@@ -2985,6 +3282,67 @@ public class UActorChannel : UChannel {
         });
 
     /// <summary>
+    ///     AFortPawn::NetMulticast_InvokeGameplayCueExecuted_WithParams - a GameplayCue fired at
+    ///     everyone, with a payload the cue's own Blueprint reads.
+    ///
+    ///     THIS IS HOW THE EMOJI SPRITE GETS ON SCREEN, and it took a whole-pak search to find. The
+    ///     emoji's visual is not in the montage and not in the ability: it is
+    ///     `GCNS_GM_OnDisplayEmoji`, a FortGameplayCueNotify_Simple bound to
+    ///     `GameplayCue.Abilities.Emotes.DisplayEmoji`, whose OnStartParticleSystemSpawned casts the
+    ///     cue's SOURCE OBJECT to UAthenaEmojiItemDefinition and calls ConfigureParticleSystem on it
+    ///     to put that emoji's texture on the P_Emote_Show_Emoji particle. Exactly three packages in
+    ///     the whole install mention ConfigureParticleSystem and all three are those cue notifies
+    ///     (`pakreader nameref`), and exactly two mention the tag - the notify and the tag table - so
+    ///     NO Blueprint executes it. The client's C++ does, on the server side, which is why this
+    ///     server has to send it by hand.
+    ///
+    ///     ENCODING. Three parameters, each a struct with its own NetSerialize, so the usual rule
+    ///     applies - one presence bit per parameter, then the struct's own bits:
+    ///
+    ///       * the TAG as a flat 14-bit net index (see FortGameplayTags; index 0 is a real tag, so
+    ///         an unknown name has to send InvalidNetIndex rather than nothing);
+    ///       * the PREDICTION KEY absent, i.e. left at its default - a server-originated cue has no
+    ///         client prediction to reconcile, and the receiving side only checks
+    ///         `PredictionKey.IsLocalClientKey() == false` before running the cue;
+    ///       * the PARAMETERS: 12 RepFlag bits saying which members follow, then both tag containers
+    ///         (one bit each, empty), then those members in enum order
+    ///         (FGameplayCueParameters::NetSerialize, GameplayEffectTypes.cpp:788).
+    ///
+    ///     Sent on the PAWN, not the ability system component, because that is where the reference
+    ///     capture sends the sibling _FromSpec RPC from - AFortPawn implements
+    ///     IAbilitySystemReplicationProxyInterface and forwards to its own ASC, and the pawn's
+    ///     channel is always relevant to everyone who can see the emote.
+    /// </summary>
+    public unsafe void SendNetMulticastInvokeGameplayCueExecutedWithParams(string cueTagName, UObject? sourceObject) =>
+        SendRpc("NetMulticast_InvokeGameplayCueExecuted_WithParams", writer => {
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+            writer.WriteBit(true);                                  // the GameplayCueTag parameter
+            FGameplayTypes.WriteTag(writer, cueTagName);
+
+            writer.WriteBit(false);                                 // PredictionKey: left at default
+
+            writer.WriteBit(true);                                  // the GameplayCueParameters parameter
+
+            // RepFlag bits, low to high: NormalizedMagnitude, RawMagnitude, EffectContext, Location,
+            // Normal, Instigator, EffectCauser, SourceObject, TargetAttachComponent, PhysMaterial,
+            // GELevel, AbilityLevel. Only SourceObject is carried: the emoji cue reads nothing else,
+            // and every unset member is one the client fills with the value it would have anyway
+            // (magnitudes 0, levels 1).
+            var repBits = (ushort) (1 << 7);
+            writer.SerializeBits(&repBits, 12);
+
+            FGameplayTypes.WriteEmptyTagContainer(writer);          // AggregatedSourceTags
+            FGameplayTypes.WriteEmptyTagContainer(writer);          // AggregatedTargetTags
+
+            packageMap.SerializeObject(writer, sourceObject);       // SourceObject
+
+            // Sent RELIABLY even though the engine declares the function unreliable, exactly as the
+            // sibling _FromSpec sender does and for the same reason: an emote's cue fires once, and
+            // a dropped one is a player pressing an emoji and seeing nothing.
+        });
+
+    /// <summary>
     ///     AFortPawn::NetMulticast_Athena_BatchedDamageCues - Athena's damage cue, and the only
     ///     damage-notification RPC in the whole net cache. This is what puts a damage number over a
     ///     hit, flashes the screen, and tells the client a hit was fatal or landed on shield.
@@ -3088,7 +3446,8 @@ public class UActorChannel : UChannel {
         var payloadData = payload.GetData();
         fixed (byte* p = payloadData) bunch.SerializeBits(p, payload.GetNumBits());
 
-        Console.WriteLine($"SendSubObjectRpc: {fieldName} on {subObject.GetFName()} fieldIndex={fieldIndex} " +
+        Console.WriteLine($"SendSubObjectRpc: {fieldName} on {subObject.GetFName()} ChIndex={ChIndex} " +
+                          $"to={ConnectionName} actor={ActorName} fieldIndex={fieldIndex} " +
                           $"numPayloadBits={numPayloadBits} payloadHex={Convert.ToHexString(payloadData, 0, (int) payload.GetNumBytes())}");
 
         SendBunch(bunch, false);

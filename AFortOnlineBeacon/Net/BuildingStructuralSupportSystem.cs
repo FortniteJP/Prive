@@ -372,7 +372,45 @@ public static class BuildingStructuralSupportSystem {
     ///     sends is a multiple of 90, so a rotation only ever SWAPS the X and Y extents.
     /// </summary>
     private static (FVector Min, FVector Max) BoxOf(ABuildingActor piece) =>
-        BoxOf(piece.GetActorLocation(), piece.GetActorRotation().Yaw, piece.BuildingType);
+        BoxOf(piece, piece.GetActorLocation(), piece.GetActorRotation().Yaw);
+
+    /// <summary>
+    ///     The broad phase's box for a piece: the world AABB of its REAL shape when the bake knows the
+    ///     class, and the coarse per-type box otherwise.
+    ///
+    ///     THE COARSE BOX IS NOT ALWAYS BIG ENOUGH, which is why this matters beyond tidiness. A roof
+    ///     piece's own bounds run Z -8..200 while the per-type box for a Roof is a thin slab, so the
+    ///     broad phase would reject a shot at the top of a roof before the exact test ever ran. The
+    ///     baked bounds cannot be too small: they are the bounds of the very hulls the exact test
+    ///     uses.
+    /// </summary>
+    private static (FVector Min, FVector Max) BoxOf(ABuildingActor piece, FVector pivot, float yaw) {
+        if (FortBuildingHulls.For(piece.ClassName) is not { } shape) return BoxOf(pivot, yaw, piece.BuildingType);
+
+        var radians = yaw * MathF.PI / 180f;
+        var cos = MathF.Cos(radians);
+        var sin = MathF.Sin(radians);
+
+        // A mirrored piece is the mesh with local X negated, so the X interval reflects.
+        float lowX = shape.Min.X, highX = shape.Max.X;
+        if (piece.bMirrored) (lowX, highX) = (-highX, -lowX);
+
+        var min = new FVector { X = float.MaxValue, Y = float.MaxValue, Z = float.MaxValue };
+        var max = new FVector { X = float.MinValue, Y = float.MinValue, Z = float.MinValue };
+
+        foreach (var x in new[] { lowX, highX }) {
+            foreach (var y in new[] { shape.Min.Y, shape.Max.Y }) {
+                var wx = pivot.X + (x * cos - y * sin);
+                var wy = pivot.Y + (x * sin + y * cos);
+
+                min = new FVector { X = MathF.Min(min.X, wx), Y = MathF.Min(min.Y, wy), Z = min.Z };
+                max = new FVector { X = MathF.Max(max.X, wx), Y = MathF.Max(max.Y, wy), Z = max.Z };
+            }
+        }
+
+        return (new FVector { X = min.X, Y = min.Y, Z = pivot.Z + shape.Min.Z },
+                new FVector { X = max.X, Y = max.Y, Z = pivot.Z + shape.Max.Z });
+    }
 
     /// <summary>The same box from a bare placement, so the startup check can build one without an actor.</summary>
     private static (FVector Min, FVector Max) BoxOf(FVector pivot, float yaw, EFortBuildingType type) {
@@ -380,8 +418,21 @@ public static class BuildingStructuralSupportSystem {
 
         var half = type switch {
             // Spans the cell edge: 512 along the edge, a storey tall, thin across.
-            EFortBuildingType.Wall => (X: WallHalfThickness,
-                                       Y: FBuildingSupportCellIndex.TileSize / 2f,
+            //
+            // THIN ALONG Y AT YAW 0, WHICH IS THE OPPOSITE OF WHAT THIS USED TO SAY, and the swap
+            // was worth a 90-degree error in every player-built wall's collision. A wall's NORMAL is
+            // its yaw plus ninety, measured from 235 real placements in this project's own logs -
+            // the pivot's offset from its cell base is (0,-256) at yaw 0 and (+256,0) at yaw 90, so
+            // a yaw-0 wall stands on the edge PERPENDICULAR TO Y and a yaw-90 wall on the edge
+            // perpendicular to X. Independently confirmed by the door work: only the +90 normal fits
+            // three labelled live cases of which way a door should swing (FortDoorPlacements.SideOf).
+            //
+            // The old box was perpendicular to the real wall and centred on the same point, so the
+            // two overlapped in a 64x64 column at the middle of the piece - which is why a spray
+            // aimed at the centre of a built wall landed and one aimed off-centre did not, and why a
+            // grenade could pass a wall it visibly should have hit.
+            EFortBuildingType.Wall => (X: FBuildingSupportCellIndex.TileSize / 2f,
+                                       Y: WallHalfThickness,
                                        Z: FBuildingSupportCellIndex.StoreyHeight / 2f),
             // Fills the cell in plan, thin in Z.
             EFortBuildingType.Floor or EFortBuildingType.Roof => (X: FBuildingSupportCellIndex.TileSize / 2f,
@@ -409,8 +460,17 @@ public static class BuildingStructuralSupportSystem {
     ///     log. A geometry bug reports nothing on its own; the assertion has to be about the thing that
     ///     can actually be wrong, which is placement.
     ///
-    ///     A wall placed at pivot (0, 256, 0) facing yaw 0 spans the cell edge at X = 0: its body must
-    ///     contain that edge at mid-height, and must NOT contain the middle of either cell beside it.
+    ///     A wall placed at pivot (0, 256, 0) facing yaw 0 stands on the cell edge at Y = 256 - the
+    ///     edge PERPENDICULAR TO Y, because a wall's normal is its yaw plus ninety (see BoxOf). So its
+    ///     body must span that edge from X -256 to +256, must NOT reach the middle of the cell either
+    ///     side of it along Y, and must be solid over the storey's height.
+    ///
+    ///     THE ORIENTATION IS THE THING THAT CAN BE WRONG, so the check now tests it. The previous
+    ///     version asserted the opposite convention and passed, because it was written from the same
+    ///     belief as the code it was checking - which is how a wall's collision sat perpendicular to
+    ///     the wall for as long as it did. These assertions are written from the placement DATA
+    ///     instead: 235 real walls in this project's logs, whose pivot-to-base offsets are (0,-256)
+    ///     at yaw 0 and (+256,0) at yaw 90.
     /// </summary>
     public static void VerifyCollisionGeometry() {
         var pivot = new FVector { X = 0f, Y = 256f, Z = 0f };
@@ -423,9 +483,13 @@ public static class BuildingStructuralSupportSystem {
 
         if (!Contains(new FVector { X = 0f, Y = 256f, Z = 192f }))
             problems.Add("a wall does not contain the cell edge it stands on");
-        if (Contains(new FVector { X = 256f, Y = 256f, Z = 192f }))
+        if (!Contains(new FVector { X = 240f, Y = 256f, Z = 192f }) ||
+            !Contains(new FVector { X = -240f, Y = 256f, Z = 192f }))
+            problems.Add("a wall does not span the full width of the edge it stands on - it is " +
+                         "turned 90 degrees, across the doorway instead of along it");
+        if (Contains(new FVector { X = 0f, Y = 512f, Z = 192f }))
             problems.Add("a wall reaches the middle of the cell in front of it");
-        if (Contains(new FVector { X = -256f, Y = 256f, Z = 192f }))
+        if (Contains(new FVector { X = 0f, Y = 0f, Z = 192f }))
             problems.Add("a wall reaches the middle of the cell behind it");
         if (!Contains(new FVector { X = 0f, Y = 256f, Z = 20f }) || !Contains(new FVector { X = 0f, Y = 256f, Z = 360f }))
             problems.Add("a wall is not solid over the full height of its storey");
@@ -457,9 +521,18 @@ public static class BuildingStructuralSupportSystem {
         foreach (var piece in Nearby(point, ignore)) {
             var (min, max) = BoxOf(piece);
 
-            if (point.X >= min.X && point.X <= max.X &&
-                point.Y >= min.Y && point.Y <= max.Y &&
-                point.Z >= min.Z && point.Z <= max.Z) return true;
+            if (point.X < min.X || point.X > max.X ||
+                point.Y < min.Y || point.Y > max.Y ||
+                point.Z < min.Z || point.Z > max.Z) continue;
+
+            // Inside the coarse box - now ask the piece's real shape, if it has one. Without this a
+            // doorway reads as solid: the box is the whole wall and the hole is exactly what the box
+            // cannot see. A zero-length "segment" through the point is the same clip test the sweep
+            // uses, which keeps the two answers consistent by construction.
+            if (FortBuildingHulls.For(piece.ClassName) == null) return true;
+
+            if (FortBuildingHulls.Sweep(piece, point, point,
+                    includeDoorLeaf: piece is not ABuildingWall { bDoorOpen: true }) != null) return true;
         }
 
         return false;
@@ -487,14 +560,50 @@ public static class BuildingStructuralSupportSystem {
     ///     straight over it. A slab test cannot miss a box however thin it is or however fast the
     ///     projectile is moving.
     /// </summary>
-    private static (FVector Point, int Axis)? FirstHit(FVector from, FVector to, ABuildingActor? ignore) {
+    private static (FVector Point, int Axis, FVector Normal, ABuildingActor Piece, bool Exact)? FirstHit(
+        FVector from, FVector to, ABuildingActor? ignore) {
         var d = new[] { to.X - from.X, to.Y - from.Y, to.Z - from.Z };
         var o = new[] { from.X, from.Y, from.Z };
 
         var bestT = float.MaxValue;
         var bestAxis = -1;
+        var bestNormal = new FVector();
+        ABuildingActor? bestPiece = null;
+        var bestExact = false;
 
         foreach (var piece in Nearby(from, ignore)) {
+            // THE PIECE'S REAL SHAPE when the bake knows it, which is every player-buildable class.
+            // A doorway and a window are holes in these hulls, a stair is a stair, and an edited
+            // piece is whatever it was edited INTO - none of which a per-type box can express. The
+            // door LEAF is included only while the door is shut, which is the whole of what opening
+            // one changes about collision.
+            // A MISS IS AN ANSWER. If the bake knows this class, its hulls decide - hit OR miss -
+            // and the coarse box below is never consulted for it.
+            //
+            // THIS FALLING THROUGH WAS THE BUG behind "windows and doors still block". A shot
+            // through a doorway or a window correctly missed every hull, the code read that as
+            // "no exact answer" and dropped to the box test, and the box is the WHOLE WALL - so the
+            // hole was solid again. It was invisible on a pillar, where the box is the piece's own
+            // tight bounds and agrees with the hull, which is exactly the edit that looked right.
+            if (FortBuildingHulls.For(piece.ClassName) != null) {
+                if (FortBuildingHulls.Sweep(piece, from, to,
+                        includeDoorLeaf: piece is not ABuildingWall { bDoorOpen: true }) is { } exact &&
+                    exact.T < bestT) {
+                    bestT = exact.T;
+                    bestNormal = exact.Normal;
+                    bestPiece = piece;
+                    bestExact = true;
+
+                    // The dominant axis of the real normal, for the callers that still speak in axes.
+                    var ax = MathF.Abs(exact.Normal.X);
+                    var ay = MathF.Abs(exact.Normal.Y);
+                    var az = MathF.Abs(exact.Normal.Z);
+                    bestAxis = ax >= ay && ax >= az ? 0 : ay >= az ? 1 : 2;
+                }
+
+                continue;
+            }
+
             var (min, max) = BoxOf(piece);
             var lo = new[] { min.X, min.Y, min.Z };
             var hi = new[] { max.X, max.Y, max.Z };
@@ -522,16 +631,43 @@ public static class BuildingStructuralSupportSystem {
 
             bestT = tEnter;
             bestAxis = axis;
+            bestNormal = new FVector();
+            bestPiece = piece;
+            bestExact = false;
         }
 
-        if (bestAxis < 0) return null;
+        if (bestAxis < 0 || bestPiece == null) return null;
 
         return (new FVector { X = from.X + d[0] * bestT, Y = from.Y + d[1] * bestT, Z = from.Z + d[2] * bestT },
-                bestAxis);
+                bestAxis, bestNormal, bestPiece, bestExact);
     }
 
     /// <summary>The first point along a step that is inside a player build, and the axis it entered on.</summary>
-    public static (FVector Point, int Axis)? SweepToBuild(FVector from, FVector to) => FirstHit(from, to, null);
+    public static (FVector Point, int Axis)? SweepToBuild(FVector from, FVector to) =>
+        FirstHit(from, to, null) is { } hit ? (hit.Point, hit.Axis) : null;
+
+    /// <summary>
+    ///     The same sweep with the piece's REAL surface normal, and whether that normal came from the
+    ///     piece's own hulls or from the coarse box that stands in for a class the bake never saw.
+    ///
+    ///     A caller that has this does not need to guess where the surface was: an exact hit is
+    ///     already ON the mesh, so nothing needs snapping to a plane afterwards.
+    /// </summary>
+    public static (FVector Point, FVector Normal, ABuildingActor Piece, bool Exact)? SweepToBuildSurface(
+        FVector from, FVector to) =>
+        FirstHit(from, to, null) is { } hit ? (hit.Point, hit.Normal, hit.Piece, hit.Exact) : null;
+
+    /// <summary>
+    ///     The same sweep, WITH THE PIECE IT HIT - which the box alone cannot tell you and a decal
+    ///     needs, because the box is a coarse stand-in and the piece knows where its body really is.
+    ///
+    ///     A wall's box is 64 units thick (32 either side of the pivot plane) while the wall MESH is a
+    ///     fraction of that, so the entry point is in mid-air in front of what the player can see. The
+    ///     piece's own centroid gives the plane the mesh is actually on. See
+    ///     FortSpraySystem.SnapToPiece.
+    /// </summary>
+    public static (FVector Point, int Axis, ABuildingActor Piece)? SweepToBuildPiece(FVector from, FVector to) =>
+        FirstHit(from, to, null) is { } hit ? (hit.Point, hit.Axis, hit.Piece) : null;
 
     /// <summary>
     ///     Which piece a step would hit, named - for the bounce diagnostic. The reflection maths was

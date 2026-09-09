@@ -147,6 +147,57 @@ internal static class NativeRpcHandlers {
     ///     See FortMapWalls.Generated.cs. Anything not in that table is left completely alone, because
     ///     a door that will not open is a far better failure than a disconnect.
     /// </summary>
+    /// <summary>
+    ///     Spawns a player-built piece. The C# class comes from the UCLASS, not from here -
+    ///     <see cref="ABuildingActor.ClassForPath" /> resolved a wall's path as an ABuildingWall, and
+    ///     SpawnActor instantiates whatever type that UClass carries.
+    ///
+    ///     ASKING FOR ABuildingWall HERE IS WRONG and was tried first: SpawnActor's type parameter is
+    ///     the type the result is CAST to, so a UClass built as an ABuildingActor threw
+    ///     InvalidCastException the moment a wall was placed. The class table is the single place
+    ///     that gets to decide, because it is also the place the cache is keyed on.
+    ///
+    ///     The C# type is not cosmetic here - it decides two things at once. It picks the wire
+    ///     LAYOUT (BuildingWallProps is the building layout plus handles 68-74, so a wall spawned as
+    ///     the base class simply has no bDoorOpen to send), and it is what the interact handler
+    ///     switches on when the client names the piece by NetGUID. Both of those failing at once is
+    ///     what "a built door opens and never closes" was: the client predicted the swing, the
+    ///     server had no door to toggle and no handle to answer with, and nothing ever told the
+    ///     client otherwise.
+    ///
+    ///     Every wall variant, not only the door ones. `PBWA_W1_Solid_C` is an ABuildingWall
+    ///     subclass in the game exactly as `PBWA_W1_DoorSide_C` is, so this matches the real class
+    ///     hierarchy rather than guessing from the piece's name - and a door handle sent to a wall
+    ///     without a door does nothing, which is the same reasoning FortMapWalls' gate already rests
+    ///     on.
+    /// </summary>
+    private static ABuildingActor? SpawnBuildingPiece(UWorld world, UClass buildingClass, EFortBuildingType type) =>
+        world.SpawnActor<ABuildingActor>(buildingClass, new FActorSpawnParameters {
+            ObjectFlags = EObjectFlags.RF_Transient
+        });
+
+    /// <summary>What an interact reference actually resolved to, for the log line that says it did not work.</summary>
+    private static string DescribeInteractTarget(object? target) => target switch {
+        null => "nothing at all (an unresolved NetGUID, or a path this server never exported)",
+        AActor actor => $"{actor.GetType().Name} '{actor.GetFName()}'",
+        _ => target.GetType().Name
+    };
+
+    /// <summary>
+    ///     Which way a player is HEADING, for the door they just opened - the camera yaw the client
+    ///     last sent, falling back to the pawn's own facing.
+    ///
+    ///     The camera is the right first choice because interaction IS a camera trace: to touch the
+    ///     door at all they were looking at it. The pawn's rotation is the fallback for the window
+    ///     before any view has arrived, and 0 is only reached with no pawn at all, in which case
+    ///     nothing is opening anything.
+    /// </summary>
+    private static float InteractorYaw(APlayerController pc) =>
+        pc.LastClientCameraRotation?.Yaw
+        ?? pc.Pawn?.LastClientViewRotation?.Yaw
+        ?? pc.Pawn?.GetActorRotation().Yaw
+        ?? 0f;
+
     private static bool LooksLikeDoor(string actorPath) => FortMapWalls.IsBuildingWall(actorPath);
 
     private static string? ContainerTierGroupFor(string actorPath) {
@@ -435,7 +486,7 @@ internal static class NativeRpcHandlers {
 
                 if (buildingClass == null) {
                     buildingClass = pawn.SelectedBuildingActorClassPath is { } selectedPath
-                        ? GUClassArray.StaticClassForPath<ABuildingActor>(selectedPath)
+                        ? ABuildingActor.ClassForPath(selectedPath)
                         : FortWeaponActorClasses.BuildingActorClassFor(pawn.CurrentWeapon?.WeaponData);
 
                     Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - BuildingClassHandle " +
@@ -494,9 +545,13 @@ internal static class NativeRpcHandlers {
                     return;
                 }
 
-                var building = world.SpawnActor<ABuildingActor>(buildingClass, new FActorSpawnParameters {
-                    ObjectFlags = EObjectFlags.RF_Transient
-                });
+                // A WALL PIECE IS SPAWNED AS AN ABuildingWall, not a plain ABuildingActor, and that
+                // is what makes a built door a door. PBWA_W1_DoorSide_C and every other wall variant
+                // really is an ABuildingWall subclass in the game, so the door handles are part of
+                // its layout; spawning the C# stand-in as the base class threw them away, and the
+                // interact handler - which switches on the C# type - could not see a door either.
+                // Live symptom: a built door opened once and could never be closed.
+                var building = SpawnBuildingPiece(world, buildingClass, placeType);
                 if (building == null) return;
 
                 building.SetRole(ENetRole.ROLE_Authority);
@@ -677,7 +732,13 @@ internal static class NativeRpcHandlers {
                 var world = pc.GetWorld();
                 if (world == null) return;
 
-                var newClass = GUClassArray.StaticClassForPath<ABuildingActor>(newClassPath);
+                // ClassForPath, like every other building-path lookup - editing a wall INTO a door
+                // is the one place where getting the C# type from the path matters most, and this
+                // site was missed the first time round: the created piece became an ABuildingWall
+                // and the EDITED one stayed an ABuildingActor, so a door you built by editing a wall
+                // could be opened (the client predicts it) and never closed (the interact handler
+                // switches on the C# type and saw no door).
+                var newClass = ABuildingActor.ClassForPath(newClassPath);
                 if (newClass == null) {
                     Console.WriteLine($"NativeRpcHandlers: ServerEditBuildingActor - '{newClassPath}' is not a known building class, ignoring");
                     return;
@@ -758,9 +819,9 @@ internal static class NativeRpcHandlers {
                 oldBuilding.SetEditingPlayer(null);
                 oldBuilding.Destroy();
 
-                var building = world.SpawnActor<ABuildingActor>(newClass, new FActorSpawnParameters {
-                    ObjectFlags = EObjectFlags.RF_Transient
-                });
+                // Same as the create path: an edit that turns a wall into a DOOR has to produce an
+                // ABuildingWall or the door is a wall with a door-shaped hole and no way to work it.
+                var building = SpawnBuildingPiece(world, newClass, editedType);
                 if (building == null) return;
 
                 building.SetRole(ENetRole.ROLE_Authority);
@@ -1367,8 +1428,16 @@ internal static class NativeRpcHandlers {
     ///     pawn and declared already at rest (bServerStoppedSimulation) - see
     ///     NativeRepLayouts.PickupProps.
     /// </summary>
-    /// <summary>How far in front of the pawn a dropped item lands, in Unreal units (~1.5m).</summary>
-    private const float TossDistance = 150.0f;
+    /// <summary>
+    ///     How far in front of the pawn a dropped item is LAUNCHED, in Unreal units - not where it
+    ///     lands, which is this plus however far TossSpeed carries it during the fall.
+    ///
+    ///     60, DOWN FROM 150. The launch point is what the player watches the item appear at, and
+    ///     150 read as "it spawns some way away from me". The fall from DropLaunchHeight takes about
+    ///     half a second, which at TossSpeed adds another ~130 units, so the item still lands about
+    ///     two metres away - a toss, not a placement.
+    /// </summary>
+    private const float TossDistance = 60.0f;
 
     /// <summary>How wide a container fans its loot, either side of the player's heading.</summary>
     private const float LootFanHalfAngleDegrees = 42.0f;
@@ -1377,8 +1446,39 @@ internal static class NativeRpcHandlers {
     private const float LootFanMinDistance = 110.0f;
     private const float LootFanMaxDistance = 190.0f;
 
-    /// <summary>Slightly above the pawn's origin so the item is not half-buried in the ground.</summary>
-    private const float TossHeight = 40.0f;
+    /// <summary>
+    ///     How far above the pawn's ORIGIN a dropped item is launched from - and the single number
+    ///     that decides whether the drop animates at all.
+    ///
+    ///     THE ITEM WAS BEING SPAWNED INSIDE THE LANDSCAPE, and the client's own log said so in a
+    ///     line nothing had been reading:
+    ///
+    ///         LogProjectileMovement: Projectile FortPickupAthena_2147476438: (Role: 1, Iteration 1,
+    ///             step 0.017, ...) sim (Pos X=-117258.805 Y=-120989.305 Z=3914.900,
+    ///             Vel X=150.100 Y=-212.300 Z=420.000)
+    ///         LogMovement: ResolvePenetration: FortPickupAthena_2147476438.CollisionCylinder at
+    ///             location ... Z=3914.900 inside LandscapeStreamingProxy4.
+    ///             LandscapeHeightfieldCollisionComponent_3 ... by 95.585
+    ///
+    ///     ONE substep, then a depenetration, then the drop sound two milliseconds after the spawn.
+    ///     The velocity was arriving perfectly and the client was building its projectile movement
+    ///     component exactly as intended; the component simply had nowhere to go, because the item
+    ///     began 95 units underground. All 17 dropped pickups in that session did the same, by
+    ///     between 90 and 113 units.
+    ///
+    ///     That 95 is not terrain error, it is FortPickupAthena's own collision capsule - see
+    ///     FortPickupToss.RestClearance for the measurement. A pickup needs its ORIGIN about 135
+    ///     units above the ground merely to be free of it, so the old launch at `origin.Z + 40`
+    ///     (the pawn's capsule centre is 96 above its feet, so 136 above the ground) cleared the
+    ///     landscape by ONE UNIT. The item was either just touching the ground or just inside it,
+    ///     which is what "it lands with no falling animation" and "it is buried" both are.
+    ///
+    ///     So this is the free height plus a real fall: 100 above the capsule centre is 196 above the
+    ///     feet, a little over head height, where a player's hands are. **It may not go below about
+    ///     40** (= 135 above the feet) without putting the item back inside the ground at the one
+    ///     moment it matters; everything above that is fall to watch. About 90 units of visible movement over a third of a second.
+    /// </summary>
+    private const float DropLaunchHeight = 100.0f;
 
     /// <summary>
     ///     How hard a dropped item is thrown, forward and upward, in uu/s.
@@ -1389,9 +1489,34 @@ internal static class NativeRpcHandlers {
     ///     not the velocity they left with - so unlike everything in FortPickupToss they are chosen,
     ///     to put the item roughly where TossDistance used to place it outright.
     /// </summary>
-    private const float TossSpeed = 260.0f;
+    private const float TossSpeed = 370.0f;
 
-    private const float TossUpSpeed = 180.0f;
+    /// <summary>
+    ///     Upward, and now ZERO: a dropped item leaves the hands and falls, it is not lobbed.
+    ///
+    ///     It was 420, on the reasoning that a pickup's measured gravity of 2800 makes any smaller
+    ///     number invisible - 420 up buys a 31-unit rise, and 180 would buy six. That reasoning was
+    ///     about a launch point at ground level. The launch is head height now (DropLaunchHeight),
+    ///     so there is a real fall to watch either way, and the rise on top of it reads as a flick:
+    ///     reported as "the little hop at the moment of the throw feels off".
+    ///
+    ///     THE REFERENCE DOES THROW THEM UP - Vz = +154, +234, +268, +361 in the PR3.0 logs - but
+    ///     every one of those is a CONTAINER spilling its loot, which is a different motion from a
+    ///     player dropping something. Raise this if a chest toss ever wants the lob back; it is the
+    ///     one number here the capture has an opinion about.
+    ///
+    ///     TossSpeed went 260 -> 370 alongside, to keep the landing point where it already was: with
+    ///     no upward push the fall is 0.37 s instead of 0.52 s, and the item would otherwise stop
+    ///     about 40 units short.
+    /// </summary>
+    private const float TossUpSpeed = 0.0f;
+
+    /// <summary>
+    ///     The standard Fortnite character capsule half-height, used to get from a pawn's ORIGIN
+    ///     (its capsule centre) to the ground it is standing on. Same 96 FortProjectileSystem uses
+    ///     for ThrowerGroundZ, and a convention rather than something read from the paks.
+    /// </summary>
+    private const float PawnCapsuleHalfHeight = 96.0f;
 
     /// <summary>
     ///     internal rather than private since Round 47: FortHarvestResources.Grant calls this
@@ -1409,7 +1534,8 @@ internal static class NativeRpcHandlers {
     ///     AFortPickup::bTossedFromContainer (handle 50). False means a player dropped it.
     /// </param>
     internal static void SpawnDroppedPickup(APlayerController pc, FFortItemEntry item, int count,
-                                            FVector? at = null, bool tossedFromContainer = false) {
+                                            (FVector Launch, FVector Velocity)? toss = null,
+                                            bool tossedFromContainer = false) {
         var world = pc.GetWorld();
         if (world == null) return;
 
@@ -1438,22 +1564,39 @@ internal static class NativeRpcHandlers {
         // and Tools/ProjectileReplay for where each of its constants comes from.
         var yawRadians = (pawn.LastClientViewRotation?.Yaw ?? 0.0f) * MathF.PI / 180.0f;
         var origin = pawn.GetActorLocation();
-        var launch = at ?? new FVector {
-            X = origin.X + MathF.Cos(yawRadians) * TossDistance,
-            Y = origin.Y + MathF.Sin(yawRadians) * TossDistance,
-            Z = origin.Z + TossHeight
-        };
 
-        // A caller that named an exact spot (`at`) meant it - container loot has its own authored
-        // placement - so only a player's own drop gets thrown. It still falls either way.
-        var tossVelocity = at != null
-            ? new FVector()
-            : new FVector { X = MathF.Cos(yawRadians) * TossSpeed, Y = MathF.Sin(yawRadians) * TossSpeed, Z = TossUpSpeed };
+        // The dropper's FEET as a floor of last resort - see FortPickupToss's _floorZ. The capsule
+        // half-height is the same 96 FortProjectileSystem uses for ThrowerGroundZ.
+        var floorZ = origin.Z - PawnCapsuleHalfHeight;
 
-        var restLocation = FortPickupToss.Settle(launch, tossVelocity);
+        // ONE PATH FOR BOTH, and it took the whole toss investigation to earn that. Container loot
+        // used to be PLACED at an authored fan point and never tossed, because an earlier attempt to
+        // simulate it made chest items invisible - the sweep found nothing, the item went underground
+        // and the comment here said "a caller that named an exact spot meant it".
+        //
+        // What was really wrong was the same pair of bugs that stopped a player's drop animating: the
+        // item spawned inside the ground, and Settle had no "it never came to rest" guard. Both are
+        // fixed, so a container's fan point is now a TARGET to aim at rather than a placement to
+        // honour, and its loot arcs out and lands on the real ground like anything else.
+        var (launch, tossVelocity) = toss ?? (
+            new FVector {
+                X = origin.X + MathF.Cos(yawRadians) * TossDistance,
+                Y = origin.Y + MathF.Sin(yawRadians) * TossDistance,
+                Z = origin.Z + DropLaunchHeight
+            },
+            new FVector {
+                X = MathF.Cos(yawRadians) * TossSpeed,
+                Y = MathF.Sin(yawRadians) * TossSpeed,
+                Z = TossUpSpeed
+            });
 
-        pickup.SetActorLocation(restLocation);
-        pickup.RestLocation = restLocation;
+        var streamed = FortPickupToss.BeginStreamed(pickup, launch, tossVelocity, floorZ);
+        var restLocation = streamed ? launch : FortPickupToss.SettleActorLocation(launch, tossVelocity, floorZ);
+
+        if (!streamed) {
+            pickup.SetActorLocation(restLocation);
+            pickup.RestLocation = restLocation;   // TossStartLocation follows it - see AFortPickup
+        }
         pickup.SetRole(ENetRole.ROLE_Authority);
 
         // Set BEFORE SetReplicates, deliberately. SetReplicates is what makes
@@ -1486,31 +1629,50 @@ internal static class NativeRpcHandlers {
                           $"count={count} guid={item.ItemGuid} - waiting for ServerReplicateActors to open its channel");
     }
 
+    /// <summary>How far in front of the player a container's loot is thrown FROM - all of it from one
+    /// point, the way a chest spills.</summary>
+    private const float ContainerLaunchDistance = 40.0f;
+
     /// <summary>
-    ///     Where each of a container's items comes to rest.
+    ///     The upward part of a container toss, in uu/s - and unlike a player's drop this one IS a lob.
+    ///
+    ///     MEASURED, in the sense that the reference's container tosses are the only launch velocities
+    ///     the capture ever shows: Vz = +154, +234, +268, +361 in the PR3.0 logs, every one of them a
+    ///     chest spilling its loot. 154 is the gentlest of them, which suits a fan that has to land
+    ///     inside two metres. See TossUpSpeed for why a player's own drop gets none of this.
+    /// </summary>
+    private const float ContainerTossUpSpeed = 154.0f;
+
+    /// <summary>
+    ///     How each of a container's items is thrown.
     ///
     ///     Real Fortnite TOSSES them: the chest CDO carries `LootSpawnLocation_Athena = (0, 50, 30)`
     ///     in the container's own local space and `LootTossSpeed_Athena = 600`, and PR3.0's SpawnLoot
     ///     sets `bToss` and `bRandomRotation`, so a UProjectileMovementComponent scatters them over a
-    ///     metre or two. Neither half of that is available here: there is no physics, and - more
-    ///     awkwardly - THIS SERVER DOES NOT KNOW WHERE THE CONTAINER IS. ServerAttemptInteract
-    ///     carries only ReceivingActor, InteractComponent, InteractType and OptionalObjectData; no
-    ///     location, and a chest lives in a streaming sublevel that is never loaded. The pawn is the
-    ///     one position known for certain, and it is by definition within interaction range of the
-    ///     chest, so the fan is built around the player's heading instead.
-    ///
-    ///     The real point is only that N items must not share ONE point, which is what a single
-    ///     shared rest location did: a five-item chest looked like it had dropped one thing, because
-    ///     five pickups were sitting inside each other.
+    ///     metre or two. That is what this now does too - but around the PLAYER, because THIS SERVER
+    ///     DOES NOT KNOW WHERE THE CONTAINER IS. ServerAttemptInteract carries only ReceivingActor,
+    ///     InteractComponent, InteractType and OptionalObjectData; no location, and a chest lives in
+    ///     a streaming sublevel that is never loaded. The pawn is the one position known for certain,
+    ///     and it is by definition within interaction range of the chest.
     ///
     ///     Spawning at the container proper needs its world location, which would mean generating a
-    ///     placed-container table the way FortFloorLoot's 932 spawn points were generated
+    ///     placed-container table the way FortFloorLoot's spawn points were generated
     ///     (`pakreader spawnpoints`) - see [[pak-access]]. Worth doing; not needed for this.
+    ///
+    ///     THE FAN DISTANCE IS NOW A TARGET, NOT A PLACEMENT. Each item gets the horizontal speed
+    ///     that would carry it that far (FortPickupToss.SpeedForDistance, which knows the measured
+    ///     gravity and the rest clearance), and then the toss is simulated against real collision -
+    ///     so an item aimed at a wall stops at the wall and one aimed downhill runs on. The point of
+    ///     the fan is unchanged and is only that N items must not share ONE point, which is what a
+    ///     single shared rest location did: a five-item chest looked like it had dropped one thing,
+    ///     because five pickups were sitting inside each other.
     /// </summary>
-    private static FVector[] ContainerLootScatter(APawn pawn, int count) {
+    private static (FVector Launch, FVector Velocity)[] ContainerLootTosses(APawn pawn, int count) {
         var origin = pawn.GetActorLocation();
+        var floorZ = origin.Z - PawnCapsuleHalfHeight;
         var baseYaw = pawn.LastClientViewRotation?.Yaw ?? 0.0f;
-        var spots = new FVector[count];
+        var launchZ = origin.Z + DropLaunchHeight;
+        var tosses = new (FVector Launch, FVector Velocity)[count];
 
         for (var i = 0; i < count; i++) {
             // Evenly spaced across the fan so two items can never coincide, plus a little jitter in
@@ -1523,14 +1685,25 @@ internal static class NativeRpcHandlers {
                          + (float) LootRng.NextDouble() * (LootFanMaxDistance - LootFanMinDistance);
             var radians = yaw * MathF.PI / 180.0f;
 
-            spots[i] = new FVector {
-                X = origin.X + MathF.Cos(radians) * distance,
-                Y = origin.Y + MathF.Sin(radians) * distance,
-                Z = origin.Z + TossHeight
-            };
+            // The item is already ContainerLaunchDistance out when it is thrown, so only the REST of
+            // the fan distance has to be covered in the air.
+            var speed = FortPickupToss.SpeedForDistance(
+                launchZ, floorZ, ContainerTossUpSpeed, MathF.Max(distance - ContainerLaunchDistance, 0f));
+
+            tosses[i] = (
+                new FVector {
+                    X = origin.X + MathF.Cos(radians) * ContainerLaunchDistance,
+                    Y = origin.Y + MathF.Sin(radians) * ContainerLaunchDistance,
+                    Z = launchZ
+                },
+                new FVector {
+                    X = MathF.Cos(radians) * speed,
+                    Y = MathF.Sin(radians) * speed,
+                    Z = ContainerTossUpSpeed
+                });
         }
 
-        return spots;
+        return tosses;
     }
 
     /// <summary>
@@ -1546,11 +1719,11 @@ internal static class NativeRpcHandlers {
         if (pc.Pawn is not { } pawn) return;
 
         var drops = FortLootTables.Roll(tierGroup, LootRng);
-        var spots = ContainerLootScatter(pawn, drops.Count);
+        var tosses = ContainerLootTosses(pawn, drops.Count);
 
         for (var i = 0; i < drops.Count; i++) {
             SpawnDroppedPickup(pc, FortWeaponActorClasses.WorldLootEntry(drops[i].ItemPath, drops[i].Count),
-                               drops[i].Count, spots[i], tossedFromContainer: true);
+                               drops[i].Count, tosses[i], tossedFromContainer: true);
         }
 
         Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - opened {label} ({tierGroup}), " +
@@ -1725,10 +1898,22 @@ internal static class NativeRpcHandlers {
                 // not, and the handler only understood paths.
                 switch (values[0]) {
                     case ABuildingWall knownDoor:
-                        if (knownDoor.ToggleDoor(world.TimeSeconds) is not { } byIdState) return;
+                        if (knownDoor.ToggleDoor(world.TimeSeconds,
+                                UAssetRegistry.PathOf(knownDoor) is { } knownDoorPath
+                                    ? knownDoorPath[(knownDoorPath.LastIndexOf('.') + 1)..]
+                                    : knownDoor.GetFName().ToString(),
+                                pc.Pawn?.GetActorLocation() ?? new Core.Math.FVector(),
+                                InteractorYaw(pc))
+                            is not { } byIdState) return;
 
+                        // THE SAME DIAGNOSTIC THE PATH BRANCH PRINTS. Every interaction after the
+                        // first arrives by id, and a player-built door only ever arrives that way -
+                        // so leaving the swing numbers off this line meant the one case being
+                        // debugged was the one case with no evidence.
                         Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - door {knownDoor.GetFName()} " +
-                                          $"(by id, InteractType={values[2]}) is now {(byIdState ? "OPEN" : "CLOSED")}");
+                                          $"(by id, InteractType={values[2]}) is now {(byIdState ? "OPEN" : "CLOSED")}, " +
+                                          $"swing {knownDoor.DoorDesiredRotOffset.Yaw:F0} ({knownDoor.LastSwingSource}), " +
+                                          $"player at {pc.Pawn?.GetActorLocation()}");
                         return;
 
                     // RIDING A VEHICLE - AN EXPERIMENT THAT HAS RUN, AND ITS ANSWER IS "NOT ENOUGH".
@@ -1877,7 +2062,15 @@ internal static class NativeRpcHandlers {
 
                 var path = values[0] as string ?? string.Empty;
                 if (path.Length == 0) {
-                    Console.WriteLine("NativeRpcHandlers: ServerAttemptInteract named no resolvable actor, ignoring");
+                    // SAY WHAT ARRIVED, because "no resolvable actor" covers two very different
+                    // failures and they need opposite fixes: a NetGUID that resolved to an object of
+                    // a type no branch above handles (the C# class is wrong for what it is - this is
+                    // what a player-built door looked like while it was still a plain ABuildingActor),
+                    // versus a reference that resolved to NOTHING at all (the client named an actor
+                    // this server has no channel for).
+                    Console.WriteLine("NativeRpcHandlers: ServerAttemptInteract named no actor this handler " +
+                                      $"understands - the reference resolved to {DescribeInteractTarget(values[0])}, " +
+                                      "ignoring");
                     return;
                 }
 
@@ -1899,10 +2092,16 @@ internal static class NativeRpcHandlers {
                         netDriver.AddNetworkActor(door);
                     }
 
-                    if (door.ToggleDoor(world.TimeSeconds) is not { } state) return;
+                    var interactorLocation = pc.Pawn?.GetActorLocation() ?? new Core.Math.FVector();
+                    var doorName = path[(path.LastIndexOf('.') + 1)..];
+
+                    if (door.ToggleDoor(world.TimeSeconds, doorName, interactorLocation, InteractorYaw(pc))
+                        is not { } state) return;
 
                     Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract - door '{path}' " +
-                                      $"(InteractType={values[2]}) is now {(state ? "OPEN" : "CLOSED")}");
+                                      $"(InteractType={values[2]}) is now {(state ? "OPEN" : "CLOSED")}, " +
+                                      $"swing {door.DoorDesiredRotOffset.Yaw:F0} ({door.LastSwingSource}), " +
+                                      $"player at {interactorLocation}");
                     return;
                 }
 
@@ -2278,6 +2477,12 @@ internal static class NativeRpcHandlers {
                 // never pitches or rolls, and the view's pitch belongs to the control rotation,
                 // which is a separate thing the owning client keeps for itself.
                 pawn.SetActorRotation(new FRotator { Yaw = view.Yaw });
+
+                // THE PITCH GOES SOMEWHERE TOO, and it is not the actor's rotation - it is
+                // APawn::RemoteViewPitch (handle 16), the one property that tells everyone else which
+                // way a player is looking vertically. Yaw alone is why heads stayed level for
+                // onlookers while turning left and right looked perfectly correct.
+                pawn.SetRemoteViewPitch(view.Pitch);
             }
 
             if (Param("ClientLoc") is not FVector clientLoc) return;
@@ -2712,10 +2917,18 @@ internal static class NativeRpcHandlers {
 
         var damage = stats.EnvironmentDamageAt(ShotDistance(hit));
 
-        // THE WEAK-SPOT MULTIPLIER IS THE WEAPON'S OWN, not this file's guess. DamageZone_Vulnerability
-        // is 10.0 on the pickaxe and 0 on every gun - and 0 means "this weapon has no vulnerability
-        // zone", not "no bonus", so it is only applied when it is actually set.
-        if (IsWeakspotHit(hit) && stats.Vulnerability > 0f) damage *= stats.Vulnerability;
+        // A WEAK-SPOT HIT IS x2 AGAINST A STRUCTURE, not the weapon row's DamageZone_Vulnerability.
+        //
+        // That row value is 10.0 on every pickaxe, and taking it literally gives 500 environment
+        // damage - which one-shot every prop in Athena the moment the real health table landed
+        // (a tree is 300). Battle Royale's numbers are flat and well known: a pickaxe does 50 to a
+        // structure and 100 on the weak spot, identical for every pickaxe skin, and 50/100 against
+        // the real per-class health reproduces the familiar six-swing tree exactly. 10.0 is a Save
+        // the World number for husk weak points; it is in the row, it is simply not this rule.
+        //
+        // Vulnerability is still what decides WHETHER a weapon gets the bonus at all - it is 0 on
+        // every gun, and a gun does not get a structural weak-spot bonus.
+        if (IsWeakspotHit(hit) && stats.Vulnerability > 0f) damage *= WeakspotEnvironmentMultiplier;
 
         return (int) MathF.Round(damage);
     }
@@ -2745,6 +2958,12 @@ internal static class NativeRpcHandlers {
     ///     now uses whenever it has one.
     /// </summary>
     private const int WeakspotDamageMultiplier = 3;
+
+    /// <summary>
+    ///     What a weak-spot hit multiplies ENVIRONMENT damage by. See DamageFor for why this is 2
+    ///     and not the weapon row's DamageZone_Vulnerability.
+    /// </summary>
+    private const float WeakspotEnvironmentMultiplier = 2f;
 
     /// <summary>DESTRUCTIBLE_SCENERY=1 gates <see cref="DamageLevelActor"/> - see there for what it does and why it defaults off.</summary>
     private static bool DestructibleSceneryEnabled =>
@@ -2825,6 +3044,13 @@ internal static class NativeRpcHandlers {
             // (bAllowResourceDrop=false on its CDO, per Erbium's OnDamageServer) will not break
             // either, since it never entered StemYields in the first place. Under-covering
             // destructibility is the acceptable failure here; disconnecting the client is not.
+            //
+            // That under-coverage used to be much wider than intended and it was a BUG, not the
+            // tradeoff: the generator read BuildingResourceAmountOverride off leaf CDOs only, and a
+            // cooked Blueprint does not re-serialise a property it inherits unchanged. 103 classes
+            // - `NeoTilted_Car12` among them, a car with a perfectly real 400 HP - therefore looked
+            // like they had no resource data and were unbreakable. Tools/HarvestTable now walks the
+            // SuperStruct chain, which is the same evidence one level up, not a weaker gate.
             if (FortHarvestResources.ResolveHit(hit.ActorPath) == null) return false;
 
             // A CHEST OR AMMO BOX IS NOT SCENERY - but it must still be REGISTERED here, and this is
@@ -2893,10 +3119,20 @@ internal static class NativeRpcHandlers {
         levelActorOut = levelActor;
 
         if (!netDriver.NetworkObjectList.Contains(levelActor)) {
+            // ITS REAL HIT POINTS, before the first hit is applied. Without this every piece of map
+            // geometry shared ABuildingActor's 200 HP class default, so a tree, a pickup truck and a
+            // brick wall all broke in the same four swings. FortHarvestResources.MaxHealthFor reads
+            // the number the game itself resolves for that class; a stem it does not cover keeps the
+            // default rather than being made indestructible.
+            if (FortHarvestResources.MaxHealthFor(hit.ActorPath) is { } maxHealth) {
+                levelActor.InitializeLevelActorHitPoints(maxHealth);
+            }
+
             levelActor.SetReplicates(true);
             netDriver.AddNetworkActor(levelActor);
             Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY registered level actor " +
-                              $"'{hit.ActorPath}' for replication - its channel opens on the next tick");
+                              $"'{hit.ActorPath}' for replication ({levelActor.MaxHitPoints} HP) - " +
+                              "its channel opens on the next tick");
         }
 
         // This hit landed on the marker that's currently up (Round 36's PhysMaterial detection) -
@@ -2953,8 +3189,12 @@ internal static class NativeRpcHandlers {
     ///     0f makes it appear on the piece's very FIRST hit, and - combined with ResetWeakSpot - on
     ///     the very same hit that consumes the previous one, matching real Fortnite's "always exactly
     ///     one marker up somewhere on the piece" feel far more closely than an authentic multi-second
-    ///     delay would on a piece this cheap to destroy. See ABuildingActor.BaseHitPointsFor for why
-    ///     the HP side of this tradeoff is still a placeholder.
+    ///     delay would on a piece this cheap to destroy.
+    ///
+    ///     THE HP SIDE OF THAT TRADEOFF IS NO LONGER A PLACEHOLDER: a map prop now carries its real
+    ///     health (a tree is 300, six swings of a 50-damage pickaxe), so pieces last long enough for
+    ///     a genuine reveal delay to be worth revisiting. Left at 0 because nothing has measured what
+    ///     the real one is.
     /// </summary>
     private const float WeakSpotRevealDelaySeconds = 0.0f;
 
@@ -3194,19 +3434,33 @@ internal static class NativeRpcHandlers {
 
         if (FortHarvestResources.ResolveHit(hit.ActorPath) is not { } yield) return;
 
-        // IsWeakspotHit is DERIVED (the four WeakSpot* physical materials the PAK actually ships -
-        // see there); WeakspotBonusMultiplier, like FellingBonusMultiplier, is not - only the
-        // DETECTION is ground truth here, not the payout size.
         var bJustHitWeakspot = IsWeakspotHit(hit);
-        var multiplier = 1;
-        if (bFellingBonus) multiplier *= FellingBonusMultiplier;
-        if (bJustHitWeakspot) multiplier *= WeakspotBonusMultiplier;
-        var amount = yield.Amount * multiplier;
 
-        FortHarvestResources.Grant(controller, yield.ItemPath, amount);
+        // THE REAL FORMULA WHEREVER THE TARGET'S REAL HEALTH IS KNOWN: a hit pays the curve row's
+        // full-break total scaled by the fraction of health it removed. Both invented multipliers
+        // are gone with it, because the formula already contains them - a weak-spot hit does double
+        // damage and therefore pays double on its own, and the hit that fells a tree pays for
+        // exactly the health it took. See FortHarvestResources.AmountForHit.
+        //
+        // For a stem with no baked health the old flat model stands unchanged: full amount per hit,
+        // with the two placeholder bonuses. The two models must not be mixed - scaling a payout by
+        // health this server does not know is worse than paying the documented placeholder.
+        var amount = FortHarvestResources.AmountForHit(hit.ActorPath, DamageFor(hit, playerState));
+
+        if (amount == null) {
+            // IsWeakspotHit is DERIVED (the four WeakSpot* physical materials the PAK actually
+            // ships - see there); WeakspotBonusMultiplier, like FellingBonusMultiplier, is not -
+            // only the DETECTION is ground truth here, not the payout size.
+            var multiplier = 1;
+            if (bFellingBonus) multiplier *= FellingBonusMultiplier;
+            if (bJustHitWeakspot) multiplier *= WeakspotBonusMultiplier;
+            amount = yield.Amount * multiplier;
+        }
+
+        FortHarvestResources.Grant(controller, yield.ItemPath, amount.Value);
 
         if (levelActor != null) {
-            ReportHarvestedScenery(playerState, levelActor, ResourceTypeForItemPath(yield.ItemPath), amount,
+            ReportHarvestedScenery(playerState, levelActor, ResourceTypeForItemPath(yield.ItemPath), amount.Value,
                                    levelActor.bDestroyed, bJustHitWeakspot);
         }
     }

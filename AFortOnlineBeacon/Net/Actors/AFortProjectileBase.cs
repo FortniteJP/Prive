@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     A thrown or fired projectile - the actor `Server_SpawnProjectile` asks this server to make.
@@ -113,6 +113,13 @@ public class AFortProjectileBase : AActor {
     ///     so it stays server-side.
     /// </summary>
     public FVector SimulatedLocation { get; set; } = new();
+
+    /// <summary>
+    ///     Server-side only: this projectile has touched something and is now sitting where it
+    ///     landed, waiting to deploy. Set once, so rolling or a second surface cannot re-arm the
+    ///     delay and leave a clinger that never goes off - see FortProjectileSystem.ArmOnHitDelay.
+    /// </summary>
+    public bool bLandedAndDeploying { get; set; }
 
     /// <summary>
     ///     A floor for the server's simulation: the Z the thrower was standing at.
