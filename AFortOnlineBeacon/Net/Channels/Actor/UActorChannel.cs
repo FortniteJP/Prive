@@ -234,6 +234,40 @@ public class UActorChannel : UChannel {
             : new HashSet<string> { "RemoteRole", "Role", "Owner", "Instigator", "bHasExploded",
                                     "bIsBeingKilled" };
 
+    /// <summary>
+    ///     Adds the two per-spawn movement overrides, and ONLY for a projectile that actually has
+    ///     them.
+    ///
+    ///     Listing them unconditionally would be worse than useless: ReplicatedMaxSpeed's "no
+    ///     override" value is 0, and 0 is not an inert MaxSpeed - it is a real one, and telling the
+    ///     client that every grenade's cap is zero is a good way to make thrown weapons stop
+    ///     working. Every projectile except the air strike's rocket leaves both at zero, so this
+    ///     costs two comparisons and changes nothing for them. See AFortProjectileBase for what the
+    ///     pair is for and NativeRepLayouts.ProjectileProps for the handles.
+    /// </summary>
+    private static HashSet<string> WithSpeedOverride(AFortProjectileBase projectile,
+                                                     HashSet<string> properties) {
+        if (projectile.ReplicatedMaxSpeed > 0f) properties.Add("ReplicatedMaxSpeed");
+        if (projectile.GravityScale != 0f) properties.Add("GravityScale");
+
+        // AND ITS POSITION, WHEN THE SERVER IS THE ONE FLYING IT - read off the actor's own flag
+        // rather than PROJECTILE_REPLICATE_MOVEMENT, so it is a per-projectile decision instead of
+        // a global one. A thrown grenade leaves the flag alone and nothing changes for it; the air
+        // strike's rocket sets it, because no client ability flies a rocket and a projectile that
+        // holds still is, for this particular Blueprint, completely invisible (its actor is hidden
+        // and its smoke trail is dragged to wherever the actor IS).
+        //
+        // The same trap FortPickupToss records applies: a zeroed FRepMovement is Location (0,0,0),
+        // so this must only be listed for an actor whose ReplicatedMovement is actually being kept
+        // up to date - UNetDriver's GatherCurrentMovement does that for anything flagged.
+        if (projectile.bReplicateMovement) {
+            properties.Add("bReplicateMovement");
+            properties.Add("ReplicatedMovement");
+        }
+
+        return properties;
+    }
+
     private static HashSet<string> GetInitialReplicatedPropertiesCore(AActor actor) => actor switch {
         // The Athena block (WarmupCountdown*/AircraftStartTime/TotalPlayers/PlayersLeft/
         // CurrentPlaylistId/GamePhase/bGameModeWillSkipAircraft) mirrors what raider3.5 sets in
@@ -299,7 +333,8 @@ public class UActorChannel : UChannel {
         // PROJECTILE_REPLICATE_MOVEMENT is set - see FortProjectileSystem.ReplicateMovement for what
         // that switch actually decides. Listing them unconditionally would send a Location that the
         // server only updates when the simulation runs, which is worse than sending none.
-        AFortProjectileBase => ProjectileProperties,
+        AFortProjectileBase projectile =>
+            WithSpeedOverride(projectile, new HashSet<string>(ProjectileProperties)),
         // The storm circle. Every one of these changes at each phase - the client interpolates from
         // Last to Next between the two shrink times - so the per-tick diff has to be walking them.
         AFortSafeZoneIndicator => new HashSet<string> {
@@ -546,6 +581,17 @@ public class UActorChannel : UChannel {
         // have. Sending one is the BunchIsError-then-silent-disconnect failure - see
         // NativeRepLayouts.SupplyDropLlamaProps. Looted (39) is the whole opened-state visual.
         AFortAthenaSupplyDropLlama => new HashSet<string> { "RemoteRole", "Role", "Looted" },
+        // A DEPLOYED SHIELD BUBBLE OR EMPLACEMENT, and it is above the ABuildingActor arm for
+        // exactly the reason the llama is - it is the same fork. These are BuildingGameplayActors,
+        // ABuildingSMActor's SIBLINGS, so ReplicatedDrawScale3D, BuildingAnimation and
+        // MinimalReplicationProxy.* below name handles their class does not have.
+        //
+        // NOTHING BUT THE ROLES, and that is not a stub: where a placed wall needs health, a build-in
+        // animation and a mirror flip, a deployable needs only to EXIST at a place. Its position
+        // rides SerializeNewActor's own header rather than the property list (which is why the llama
+        // works with this same pair), and everything it looks like and does afterwards belongs to
+        // the Blueprint the client builds from the class path.
+        AFortDeployedActor => new HashSet<string> { "RemoteRole", "Role" },
         ABuildingActor placedBuilding => WithDoorProperties(placedBuilding,
             WithBuildingAttributeSet(placedBuilding, new HashSet<string> {
             "RemoteRole", "Role", "HealthBarIndicatorDifficultyRating",
@@ -1612,6 +1658,20 @@ public class UActorChannel : UChannel {
                         FFastArraySerializerWriter.WriteActiveGameplayEffectDeltaStruct));
         }
 
+        // The third one - and its guard is NOT `Count > 0`, which is the mistake this shape invites.
+        // A cue's whole point is that it also ends: the delta that REMOVES the last element is sent
+        // from an array that is by then empty, so the field has to keep being offered for as long as
+        // this connection still believes something is in it. BaseStateFor's record of what it was
+        // last sent is exactly that memory.
+        var cueBaseState = BaseStateFor("ActiveGameplayCues");
+        if (asc.ActiveGameplayCues.Count > 0 || cueBaseState.IdToKey.Count > 0) {
+            wroteDelta |= WriteCustomDeltaField(payload, NativeClassNetCache.FortAbilitySystemComponentCache,
+                "ActiveGameplayCues", fieldPayload =>
+                    FFastArraySerializerWriter.WriteDelta(fieldPayload, asc.ActiveGameplayCues,
+                        cueBaseState, FFastArraySerializerWriter.WriteActiveGameplayCue,
+                        FFastArraySerializerWriter.WriteActiveGameplayCueDeltaStruct));
+        }
+
         if (changedNames.Count == 0 && !wroteDelta) return false;
 
         using var bunch = new FOutBunch(this, false);
@@ -2660,19 +2720,34 @@ public class UActorChannel : UChannel {
             return;
         }
 
-        if (ResolveCorrectionLocation(pawn) is not { } newLocation) return;
+        // A LAUNCH IS THE OTHER REASON TO CORRECT, and it wants a different position and a real
+        // velocity. The vehicle-exit case has no idea where the player is (a based move carries no
+        // world position) and has to reconstruct one from the camera; a launched player has been
+        // sending unbased moves all along, so their own last reported position is exactly right -
+        // and naming it makes the correction a pure velocity+mode change with no teleport at all.
+        var launch = pawn.TakeLaunchVelocity();
+
+        var newLocation = launch != null && pawn.HasFreshUnbasedLocation
+            ? pawn.GetActorLocation()
+            : ResolveCorrectionLocation(pawn);
+
+        if (newLocation is not { } correctedLocation) return;
 
         SendRpc("ClientAdjustPosition", writer => {
             writer.WriteBit(true);
             writer.WriteFloat(pawn.LastClientMoveTimeStamp);          // TimeStamp
 
             writer.WriteBit(true);
-            newLocation.NetSerializeWrite(writer);                    // NewLoc, absolute
+            correctedLocation.NetSerializeWrite(writer);              // NewLoc, absolute
 
-            // NewVel - zero, and deliberately: a server that is not simulating this pawn has no
-            // honest velocity to give, and the client is about to land on the ground anyway.
+            // NewVel. Zero for a vehicle exit - a server that is not simulating this pawn has no
+            // honest velocity to give, and the client is about to land on the ground anyway - but a
+            // LAUNCH is the one moment this server does know better than the client, because the
+            // grenade is its own. This is the whole delivery mechanism for a shockwave: the
+            // projectile Blueprint calls LaunchCharacter on the server, and this line is what that
+            // becomes on the wire.
             writer.WriteBit(true);
-            new FVector().NetSerializeWrite(writer);
+            (launch ?? new FVector()).NetSerializeWrite(writer);
 
             // NewBase / NewBaseBoneName - both absent. Sending the position ABSOLUTE is what makes
             // that safe: a relative correction whose base fails to resolve on the client is thrown
@@ -2701,14 +2776,18 @@ public class UActorChannel : UChannel {
 
         // AND THE SERVER'S OWN COPY, which has been stale since the player boarded (a based
         // ServerMove carries no world position - see the move handler). Leaving it behind would
-        // make relevancy, fall damage and every distance check run off the boarding spot.
-        pawn.SetActorLocation(newLocation);
+        // make relevancy, fall damage and every distance check run off the boarding spot. For a
+        // launch it is the pawn's own position already, so this is a no-op there.
+        pawn.SetActorLocation(correctedLocation);
 
         Console.WriteLine($"UActorChannel.SendMovementCorrection: ChIndex={ChIndex} {pawn.GetFName()} -> packed " +
                           $"movement mode {packedMode} " +
                           $"({(packedMode >= 16 ? $"custom {packedMode - 16}" : "not custom")}) " +
-                          $"at {newLocation}, TimeStamp={pawn.LastClientMoveTimeStamp}. " +
-                          "If the client ignores this, its log says why (LogNetPlayerMovement).");
+                          $"at {correctedLocation}, TimeStamp={pawn.LastClientMoveTimeStamp}" +
+                          (launch is { } thrown
+                              ? $", LAUNCHED at ({thrown.X:F0}, {thrown.Y:F0}, {thrown.Z:F0})."
+                              : ".") +
+                          " If the client ignores this, its log says why (LogNetPlayerMovement).");
     }
 
     /// <summary>
@@ -3323,23 +3402,43 @@ public class UActorChannel : UChannel {
             writer.WriteBit(false);                                 // PredictionKey: left at default
 
             writer.WriteBit(true);                                  // the GameplayCueParameters parameter
-
-            // RepFlag bits, low to high: NormalizedMagnitude, RawMagnitude, EffectContext, Location,
-            // Normal, Instigator, EffectCauser, SourceObject, TargetAttachComponent, PhysMaterial,
-            // GELevel, AbilityLevel. Only SourceObject is carried: the emoji cue reads nothing else,
-            // and every unset member is one the client fills with the value it would have anyway
-            // (magnitudes 0, levels 1).
-            var repBits = (ushort) (1 << 7);
-            writer.SerializeBits(&repBits, 12);
-
-            FGameplayTypes.WriteEmptyTagContainer(writer);          // AggregatedSourceTags
-            FGameplayTypes.WriteEmptyTagContainer(writer);          // AggregatedTargetTags
-
-            packageMap.SerializeObject(writer, sourceObject);       // SourceObject
+            FGameplayTypes.WriteCueParameters(writer, packageMap, sourceObject);
 
             // Sent RELIABLY even though the engine declares the function unreliable, exactly as the
             // sibling _FromSpec sender does and for the same reason: an emote's cue fires once, and
             // a dropped one is a player pressing an emoji and seeing nothing.
+        });
+
+    /// <summary>
+    ///     AFortPawn::NetMulticast_InvokeGameplayCueAdded_WithParams - the OnActive half of a cue
+    ///     that STAYS ON, and the sibling of the Executed sender above in every respect but its
+    ///     meaning to the client.
+    ///
+    ///     Identical parameters, identical encoding (Tag, PredictionKey, Parameters), and it is sent
+    ///     on the PAWN for the same reason - AFortPawn is the ASC's replication proxy, which is what
+    ///     `IAbilitySystemReplicationProxyInterface::Call_InvokeGameplayCueAdded_WithParams` resolves
+    ///     to on this build.
+    ///
+    ///     ON ITS OWN THIS IS A ONE-SHOT TOO, and that is the trap worth naming: it makes the notify
+    ///     run OnActive and nothing more. The cue only persists - and can only later be REMOVED -
+    ///     because an element also lands in the ASC's ActiveGameplayCues array, which is what makes
+    ///     the client run WhileActive now and Removed later. The pair is what real UE sends together
+    ///     (AbilitySystemComponent.cpp:1144), and a PR3.0 capture shows exactly that pair around a
+    ///     shield potion: this RPC on the pawn's channel, then one new ActiveGameplayCues element on
+    ///     the PlayerState's. Send the RPC without the array element and the effect never stops.
+    /// </summary>
+    public void SendNetMulticastInvokeGameplayCueAddedWithParams(string cueTagName, UObject? sourceObject,
+                                                                 FVector? location = null) =>
+        SendRpc("NetMulticast_InvokeGameplayCueAdded_WithParams", writer => {
+            var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+            writer.WriteBit(true);                                  // the GameplayCueTag parameter
+            FGameplayTypes.WriteTag(writer, cueTagName);
+
+            writer.WriteBit(false);                                 // PredictionKey: left at default
+
+            writer.WriteBit(true);                                  // the GameplayCueParameters parameter
+            FGameplayTypes.WriteCueParameters(writer, packageMap, sourceObject, location);
         });
 
     /// <summary>

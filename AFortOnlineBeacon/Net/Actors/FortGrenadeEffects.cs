@@ -16,19 +16,55 @@ namespace AFortOnlineBeacon.Net.Actors;
 internal static partial class FortGrenadeEffects {
     /// <summary>The effect for a thrown item, or null when it just explodes.</summary>
     public static (EGrenadeEffect Kind, float Radius, float LaunchVelocity, float AddToZ,
-                   float Duration, float Period, float HitDelay, bool FriendlyFire,
-                   bool Damages, bool FallDamage)? For(string? itemName) {
+                   float Duration, float Period, float HitDelay, float DestroyDistance,
+                   bool FriendlyFire, bool Damages, bool FallDamage)? For(string? itemName) {
         if (itemName == null) return null;
 
         foreach (var row in Rows) {
             if (!row.Item.Equals(itemName, StringComparison.OrdinalIgnoreCase)) continue;
             return (row.Kind, row.Radius, row.LaunchVelocity, row.AddToZ,
-                    row.Duration, row.Period, row.HitDelay, row.FriendlyFire,
-                    row.Damages, row.FallDamage);
+                    row.Duration, row.Period, row.HitDelay, row.DestroyDistance,
+                    row.FriendlyFire, row.Damages, row.FallDamage);
         }
 
         return null;
     }
+
+    /// <summary>
+    ///     A SHOCKWAVE'S VICTIM SMASHES THROUGH WHAT IS IN FRONT OF THEM, and the projectile
+    ///     Blueprint says exactly how. `B_Prj_Athena_ShockGrenade`'s graph, after LaunchCharacter:
+    ///
+    ///         if (ShouldDestroyStructure > 0) {                       // Default.ShockwaveGrenade... = 1
+    ///             start = victim.GetActorLocation()
+    ///             dir   = GetDirectionUnitVector(HitLocation, start)  // the blast, toward them
+    ///             end   = start + dir * DestructionDistance           // ...DestructionDistance = 1400
+    ///             hits  = CapsuleTraceMultiForObjects(start, end, 80, 150, DestroyObjectTypes)
+    ///             for each hit: apply GE_ShockGrenade_Damage to it
+    ///         }
+    ///
+    ///     So it is NOT a blast radius. It is a capsule the size of a person, swept from the person
+    ///     along the direction they were just thrown, and everything it passes through is destroyed -
+    ///     which is why a shockwave takes out the wall you were standing against and nothing behind
+    ///     the grenade. The IMPULSE grenade has no such pair on its Blueprint at all, so it throws
+    ///     you INTO a wall where a shockwave throws you THROUGH it; that difference is the table's,
+    ///     not this code's - see the generator.
+    ///
+    ///     The 80 and the 150 are literals in that graph (a capsule radius and half height, i.e. a
+    ///     player). SHOCKWAVE_DESTRUCTION=0 turns the whole thing off.
+    /// </summary>
+    public const float DestructionCapsuleRadius = 80f;
+
+    /// <summary>See <see cref="DestructionCapsuleRadius" />.</summary>
+    public const float DestructionCapsuleHalfHeight = 150f;
+
+    /// <summary>
+    ///     What the sweep does to each thing it touches: `GE_ShockGrenade_Damage`'s single execution
+    ///     is `OutgoingBaseEnvironmentalDamage += 10000`, a flat ScalableFloat with no curve. Not a
+    ///     number to be balanced - a wall has 150 hit points and the sturdiest map prop 500, so
+    ///     10,000 is the data's way of spelling "destroyed", and it is kept literal so it reads as
+    ///     the row it is.
+    /// </summary>
+    public const float DestructionDamage = 10000f;
 
     /// <summary>
     ///     The velocity a shockwave or impulse grenade throws a pawn at - the projectile Blueprint's

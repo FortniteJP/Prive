@@ -135,4 +135,45 @@ public static class FGameplayTypes {
 
         writer.WriteFloat(magnitude);                   // EventMagnitude
     }
+
+    /// <summary>
+    ///     FGameplayCueParameters, exactly as its native NetSerialize writes it
+    ///     (GameplayEffectTypes.cpp:788) - and in ONE place, because three different senders now
+    ///     need the identical bytes: the Executed RPC, the Added RPC, and the FActiveGameplayCue
+    ///     items inside the ASC's replicated cue list.
+    ///
+    ///     Twelve RepFlag bits say which members follow; low to high they are NormalizedMagnitude,
+    ///     RawMagnitude, EffectContext, Location, Normal, Instigator, EffectCauser, SourceObject,
+    ///     TargetAttachComponent, PhysMaterial, GELevel, AbilityLevel. Then BOTH tag containers
+    ///     unconditionally - the source comments that out of the flags itself, "empty tag containers
+    ///     are frequently replicated" - and then the flagged members in that same order.
+    ///
+    ///     Only SourceObject is ever carried here, and only when there is one. Every member left out
+    ///     is one the reader fills with the value this server would have sent anyway: magnitudes 0,
+    ///     levels 1, no context. A cue notify that reads more than its own source object would need
+    ///     this extended, and the flag bit is the whole of that change.
+    /// </summary>
+    public static unsafe void WriteCueParameters(FBitWriter writer, UPackageMapClient packageMap,
+                                                 Objects.UObject? sourceObject,
+                                                 Math.FVector? location = null) {
+        const int repLocation = 3;
+        const int repSourceObject = 7;
+
+        var repBits = (ushort) ((sourceObject != null ? 1 << repSourceObject : 0)
+                              | (location != null ? 1 << repLocation : 0));
+        writer.SerializeBits(&repBits, 12);
+
+        WriteEmptyTagContainer(writer);   // AggregatedSourceTags
+        WriteEmptyTagContainer(writer);   // AggregatedTargetTags
+
+        // MEMBERS FOLLOW IN FLAG ORDER, not in the order the caller happens to care about them -
+        // Location is bit 3 and SourceObject bit 7, so Location goes first however it was passed.
+        //
+        // FVector_NetQuantize10, which is the type the member is DECLARED as
+        // (GameplayEffectTypes.h:969) and not a choice: scale 10, 24 bits per component. Sending
+        // three plain floats would be read as a quantised vector and land somewhere absurd.
+        if (location is { } where) where.NetSerializeWriteQuantized(writer, 10, 24);
+
+        if (sourceObject != null) packageMap.SerializeObject(writer, sourceObject);
+    }
 }

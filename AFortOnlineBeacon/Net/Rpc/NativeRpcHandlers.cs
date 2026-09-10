@@ -112,6 +112,15 @@ internal static class NativeRpcHandlers {
             ? connection.ClientVisibleLevelNames.Add(info.PackageName)
             : connection.ClientVisibleLevelNames.Remove(info.PackageName);
 
+        // AND THE COOKED -> LOADED MAPPING, which is the only way this server can ever name an actor
+        // inside an instanced sublevel. See UNetConnection.ClientLevelInstances. Filename is empty
+        // when the two are the same (the wire omits it - bFileNameIsPackageName), and an ordinary
+        // sublevel needs no translation, so only the differing pairs are worth keeping.
+        if (info.Filename.Length > 0 && !info.Filename.Equals(info.PackageName, StringComparison.OrdinalIgnoreCase)) {
+            if (info.bIsVisible) connection.ClientLevelInstances[info.Filename] = info.PackageName;
+            else connection.ClientLevelInstances.Remove(info.Filename);
+        }
+
         if (changed && NetDebugLog.VerboseEnabled) {
             Console.WriteLine($"NativeRpcHandlers: {source} - {(info.bIsVisible ? "loaded" : "dropped")} " +
                               $"'{info.PackageName}', client now has {connection.ClientVisibleLevelNames.Count} level(s)");
@@ -2753,7 +2762,7 @@ internal static class NativeRpcHandlers {
 
     private static void OnShotReported(AActor actor, object? handleValue,
                                        FGameplayAbilityTargetDataHandle? targetData, string source) {
-        ReportTargetData(actor, targetData, source);
+        ReportTargetData(actor, targetData, source, IsThrowAbility(actor, handleValue));
 
         if (actor is not APlayerState playerState) {
             Console.WriteLine($"NativeRpcHandlers: {source} arrived on {actor.GetType().Name}, not a PlayerState");
@@ -2796,12 +2805,49 @@ internal static class NativeRpcHandlers {
     }
 
     /// <summary>
+    ///     Whether the target data in this batch came from a THROW rather than from firing whatever
+    ///     the player is holding.
+    ///
+    ///     WHY IT HAS TO BE ASKED. `ReportTargetData` prices every reported hit with `DamageFor`,
+    ///     which reads the pawn's CURRENT WEAPON - and a thrown grenade does not change that. So the
+    ///     impact the client reports for a grenade was being charged at the rifle still in the
+    ///     player's hands: "the buildings take exactly 30" is `WID_Assault_Auto`'s EnvPB, applied to
+    ///     every build near where an impulse grenade landed. The grenade's own effect is applied by
+    ///     this server, in FortProjectileSystem.Explode, from the projectile's row - and for an
+    ///     impulse or a shockwave that row is zero.
+    ///
+    ///     EXCLUDES THROWS RATHER THAN REQUIRING A WEAPON, which is the conservative direction and
+    ///     deliberately not the tidier one. The obvious test is "does this handle match the held
+    ///     weapon's own fire spec", which is what the ammo path below already asks - but if a
+    ///     pickaxe's spec ever failed that test, harvesting and every structure hit would go silent,
+    ///     and this is not a change worth risking that on. A throw is identified positively, by the
+    ///     same WithTrajectory/Throw test FortWarmupThrowables uses on the ability's own path, so
+    ///     nothing else changes behaviour at all.
+    /// </summary>
+    private static bool IsThrowAbility(AActor actor, object? handleValue) {
+        if (handleValue is not int abilityHandle) return false;
+        if (actor is not APlayerState playerState) return false;
+        if (playerState.AbilitySystemComponent is not { } abilitySystem) return false;
+
+        var spec = abilitySystem.ActivatableAbilities.Items.FirstOrDefault(item => item.Handle == abilityHandle);
+        if (spec?.Ability?.GetFName().ToString() is not { Length: > 0 } ability) return false;
+
+        return ability.Contains("WithTrajectory", StringComparison.OrdinalIgnoreCase)
+               || ability.Contains("Throw", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     ///     Logs what the client reported hitting. Map geometry is almost never something this server
     ///     has a NetGUID for, so <see cref="FHitResult.Actor"/> is usually null and the exported path
     ///     is the only name available - "Athena_Tree_Medium_01_12" is a perfectly good answer even
     ///     though no object backs it here.
     /// </summary>
-    private static void ReportTargetData(AActor actor, FGameplayAbilityTargetDataHandle? targetData, string source) {
+    /// <param name="thrown">
+    ///     True when this batch belongs to a THROW ability, in which case the hits are reported and
+    ///     LOGGED but nothing is damaged or harvested - see <see cref="IsThrowAbility" />.
+    /// </param>
+    private static void ReportTargetData(AActor actor, FGameplayAbilityTargetDataHandle? targetData, string source,
+                                         bool thrown = false) {
         if (targetData == null) {
             Console.WriteLine($"NativeRpcHandlers: {source} on {actor.GetFName()} carried no target data " +
                               "(its send bit was clear, or the decode stopped before it)");
@@ -2832,6 +2878,16 @@ internal static class NativeRpcHandlers {
             if (hit.ComponentPath.Length > 0 || hit.PhysMaterialPath.Length > 0) {
                 Console.WriteLine($"NativeRpcHandlers:   component='{hit.ComponentPath}' " +
                                   $"physMaterial='{hit.PhysMaterialPath}' item={hit.Item} face={hit.FaceIndex}");
+            }
+
+            // A THROW REPORTS WHERE IT LANDED, NOT A HIT THAT COSTS ANYTHING. Everything below
+            // prices the hit with the held weapon's stats, and the player is still holding whatever
+            // they had before they threw - see IsThrowAbility. The throw's own damage is this
+            // server's to apply, from the projectile's row, in FortProjectileSystem.Explode.
+            if (thrown) {
+                Console.WriteLine($"NativeRpcHandlers:   ...from a THROW - logged, not damaged " +
+                                  "(the projectile's own explosion is what damages).");
+                continue;
             }
 
             // A hit's Actor only ever resolves to a real object when the thing hit has its own

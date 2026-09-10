@@ -626,7 +626,7 @@ internal static class FortProjectileSystem {
     ///     server has less collision than the client does, so turning it on trades a flight that looks
     ///     right for a flight that is HONEST about what the server believes. See where it is used.
     /// </summary>
-    private static bool ReplicateMovement =>
+    internal static bool ReplicateMovement =>
         Environment.GetEnvironmentVariable("PROJECTILE_REPLICATE_MOVEMENT") is "1";
 
     /// <summary>
@@ -766,6 +766,18 @@ internal static class FortProjectileSystem {
             environmentDamage = 0f;
         }
 
+        // A DEPLOYABLE DOES NOT EXPLODE, and the stat row cannot say so any more than it could for
+        // the boogie bomb. `Athena_FireworksMortar`'s row is 10/40 - that is what one of the ROCKETS
+        // does when it goes off, and the thing that lands is the mortar's HOLDER, which places an
+        // emplacement and then fires them. Left alone, the holder detonated for the rocket's damage
+        // the moment it touched the ground and the emplacement never got a chance to be the item.
+        // The snowman and the shield bubble are already 0/0 in the table and are unaffected either
+        // way; naming the rule here rather than per item is what keeps the next one right.
+        if (FortDeployables.For(projectile.SourceItemName) != null) {
+            playerDamage = 0f;
+            environmentDamage = 0f;
+        }
+
         if (stats is null && projectile.SourceItemName is { Length: > 0 } unknown)
             Console.WriteLine($"FortProjectileSystem: '{unknown}' has no row in FortProjectileStats - " +
                               $"exploding for the frag grenade's {PlayerDamage:F0}/{EnvironmentDamage:F0}.");
@@ -820,6 +832,21 @@ internal static class FortProjectileSystem {
             }
 
             switch (actor) {
+                // AN ITEM THAT DOES NO ENVIRONMENTAL DAMAGE TOUCHES NOTHING, and the guard belongs
+                // here rather than being left to ApplyDamage's own `amount <= 0` early-out. That
+                // early-out does protect the hit points - a 0 never moved a building's health, which
+                // was checked rather than assumed - but ApplyDamage answers "not destroyed" and the
+                // caller then plays the DAMAGE REACTION anyway: EBA_Breaking and a damage cue with a
+                // magnitude of zero. So an impulse or a shockwave landing among player builds made
+                // every one of them flash as though hit, for nothing, which is not what either item
+                // does (`Default.KnockGrenade`/`ShockwaveGrenade` do no environmental damage at all -
+                // see FortGrenadeEffects.Damages).
+                //
+                // The counter is not incremented either: "hit 6 building(s) for 0" was a true
+                // sentence about a thing that did not happen.
+                case ABuildingActor when environmentDamage <= 0f:
+                    break;
+
                 case ABuildingActor building when !building.bDestroyed
                         && !BuildingStructuralSupportSystem.IsLineBlocked(origin, building.GetActorLocation(), building)
                         && !WorldLineBlocked(origin, building.GetActorLocation()):
@@ -869,6 +896,13 @@ internal static class FortProjectileSystem {
                           $"{pawnsHit} pawn(s) for {playerDamage:F0} and {buildingsHit} building(s) for {environmentDamage:F0}" +
                           $"{(blocked > 0 ? $", {blocked} shielded by player builds" : "")}" +
                           $"{(blockedByWorld > 0 ? $", {blockedByWorld} shielded by the map" : "")}.");
+
+        Deploy(world, projectile, origin);
+
+        // The AIR STRIKE's damage is not this explosion - it is sixty rockets over the next eight
+        // seconds. See FortAirstrike, and FortDeployables for the spawner that goes with it.
+        if (FortAirstrike.ItemName.Equals(projectile.SourceItemName, StringComparison.OrdinalIgnoreCase))
+            FortAirstrike.Begin(world, origin, projectile.GetInstigator());
 
         if (effect is { } grenade) ApplyGrenadeEffect(world, projectile, origin, grenade, caught);
 
@@ -1041,8 +1075,8 @@ internal static class FortProjectileSystem {
     private static void ApplyGrenadeEffect(
         UWorld world, AFortProjectileBase projectile, FVector origin,
         (EGrenadeEffect Kind, float Radius, float LaunchVelocity, float AddToZ,
-         float Duration, float Period, float HitDelay, bool FriendlyFire,
-         bool Damages, bool FallDamage) effect,
+         float Duration, float Period, float HitDelay, float DestroyDistance,
+         bool FriendlyFire, bool Damages, bool FallDamage) effect,
         List<APawn> caught) {
 
         switch (effect.Kind) {
@@ -1051,7 +1085,22 @@ internal static class FortProjectileSystem {
                 foreach (var pawn in caught) {
                     var launch = FortGrenadeEffects.LaunchVelocityFor(origin, pawn.GetActorLocation(),
                                                                      effect.LaunchVelocity, effect.AddToZ);
+                    // TWO CHANNELS, AND ONLY ONE OF THEM CAN LIFT ANYBODY.
+                    //
+                    // PushMomentum is the horizontal half and the one everyone else sees: the
+                    // client's OnRep writes it straight into CharacterMovement->Velocity.X and .Y
+                    // and feeds AddInputVector with its direction. It never touches Velocity.Z -
+                    // that is not a guess, it is the disassembly of AFortPawn::OnRep_PushMomentum
+                    // (see APawn.PendingLaunchVelocity) - so no Z sent this way has ever arrived,
+                    // at any magnitude. "The upward impact is weak" was really "there is none".
+                    //
+                    // The launch is what the projectile Blueprint actually does: LaunchCharacter
+                    // with the whole vector, which on a dedicated server reaches the owning client
+                    // as a movement correction carrying NewVelocity and MOVE_Falling. The falling
+                    // mode is half the point - an upward velocity given to a character that still
+                    // thinks it is walking is projected onto the floor and lost.
                     pawn.SetPushMomentum(launch);
+                    pawn.RequestLaunch(launch);
                     world.NetDriver?.FlushActorProperties(pawn);
 
                     // THE "LOW GRAVITY" HALF OF A SHOCKWAVE, which in the data is not gravity at all:
@@ -1064,11 +1113,14 @@ internal static class FortProjectileSystem {
                         SendLowGravityCues(world, pawn);
                     }
 
-                    // Set back after a moment. PushMomentum is a HELD push on the client
-                    // (StartPushMomentum takes a duration, StopPushMomentum exists), so a value left
-                    // standing is a pawn that never stops being shoved - and the next shockwave would
-                    // see no change on the wire and send nothing at all.
-                    _pushesToClear.Add((pawn, world.TimeSeconds + PushMomentumSeconds));
+                    // AND IT HAS TO BE TAKEN BACK OFF WHEN THEY LAND, not on a timer. A value
+                    // left standing is a pawn that never stops being shoved, and the next throw
+                    // would be no change on the wire and send nothing at all - but clearing it in
+                    // the AIR zeroes the client's whole velocity and drops them where they are.
+                    // See PushMomentumMaxSeconds.
+                    WatchFlight(world, pawn, clearPush: true);
+
+                    SmashThroughBuildings(world, origin, pawn, effect.DestroyDistance);
                 }
 
                 Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} threw {caught.Count} pawn(s) " +
@@ -1166,19 +1218,38 @@ internal static class FortProjectileSystem {
     private static short _nextDancePredictionKey = 1;
 
     /// <summary>
-    ///     How long a knockback's PushMomentum stays set before it is cleared.
+    ///     CLEARING PushMomentum STOPS THE VICTIM DEAD IN MID-AIR, and that is not a side effect -
+    ///     it is the whole of what the zero branch does.
     ///
-    ///     NOT A ROW - AthenaGameData has no duration for it, and the client's own
-    ///     StartPushMomentum(vector, duration) suggests the duration lives at the call site rather
-    ///     than in the table. Long enough for the push to be applied and short enough that the next
-    ///     one is a fresh CHANGE on the wire. PUSH_MOMENTUM_SECONDS overrides it.
+    ///     `AFortPawn::OnRep_PushMomentum` (0x1419347C0) branches on the length: non-zero writes
+    ///     Velocity.X/Y, and ZERO calls the movement component's vtable slot 0x400. For the real
+    ///     PlayerPawn_Athena that slot is 0x140C5DB60, whose first three instructions are:
+    ///
+    ///         movsd  qword ptr [rcx+0xC4], xmm0     ; Velocity.X = Velocity.Y = 0
+    ///         mov    dword ptr [rcx+0xCC], eax      ; Velocity.Z = 0
+    ///
+    ///     **All three components.** So the old fixed 0.5s clear was, half a second into every
+    ///     throw, telling the client to freeze in the air - which is exactly the reported "it flies
+    ///     a certain distance, then the impulse suddenly vanishes and it drops straight down".
+    ///     (The engine's own UCharacterMovementComponent::StopActiveMovement only clears
+    ///     Acceleration, which is what the vtable slot's NAME says and what this was reasoned from
+    ///     the first time. Fortnite's override is the one that runs, and reading it was the only
+    ///     way to know.)
+    ///
+    ///     Nothing else decays the throw. The client's own falling physics leaves lateral velocity
+    ///     completely alone on this build: `BrakingDecelerationFalling` and `FallingLateralFriction`
+    ///     are BOTH 0 in AFortPlayerPawnAthena's CDO, read out of the dump
+    ///     (PriveDev/dumpwork/movedefaults.py), so ApplyVelocityBraking returns without touching
+    ///     anything and a launched player keeps their speed until they hit something.
+    ///
+    ///     So the push is now taken off on LANDING instead of on a timer - where zeroing the
+    ///     velocity is what landing means anyway - and the timeout below is only a backstop for a
+    ///     landing this server never sees.
     /// </summary>
-    private static float PushMomentumSeconds =>
-        float.TryParse(Environment.GetEnvironmentVariable("PUSH_MOMENTUM_SECONDS"), out var seconds)
+    private static float PushMomentumMaxSeconds =>
+        float.TryParse(Environment.GetEnvironmentVariable("PUSH_MOMENTUM_MAX_SECONDS"), out var seconds)
             ? seconds
-            : 0.5f;
-
-    private static readonly List<(APawn Pawn, float ClearAt)> _pushesToClear = new();
+            : 12.0f;
 
     /// <summary>A stink bomb's cloud: where, how big, until when, and when it next bites.</summary>
     private static readonly List<(FVector Origin, float Radius, float EndsAt, float NextTickAt,
@@ -1190,23 +1261,8 @@ internal static class FortProjectileSystem {
     ///     which already runs every frame.
     /// </summary>
     private static void TickGrenadeEffects(UWorld world, float timeSeconds) {
-        for (var i = _landingCues.Count - 1; i >= 0; i--) {
-            if (timeSeconds < _landingCues[i].At) continue;
-
-            var landing = _landingCues[i];
-            _landingCues.RemoveAt(i);
-            SendCueToEveryone(world, landing.Pawn, FortGrenadeEffects.LowGravLandingCue);
-        }
-
-        for (var i = _pushesToClear.Count - 1; i >= 0; i--) {
-            if (timeSeconds < _pushesToClear[i].ClearAt) continue;
-
-            var pawn = _pushesToClear[i].Pawn;
-            _pushesToClear.RemoveAt(i);
-
-            pawn.SetPushMomentum(new FVector());
-            world.NetDriver?.FlushActorProperties(pawn);
-        }
+        TickLowGravity(world, timeSeconds);
+        FortAirstrike.Tick(world, timeSeconds);
 
         for (var i = _gasClouds.Count - 1; i >= 0; i--) {
             var cloud = _gasClouds[i];
@@ -1245,7 +1301,25 @@ internal static class FortProjectileSystem {
     ///     bumps a wall does not keep resetting its own timer and never explode.
     /// </summary>
     private static bool ArmOnHitDelay(UWorld world, AFortProjectileBase projectile) {
-        if (FortGrenadeEffects.For(projectile.SourceItemName) is not { } effect) return false;
+        // A DEPLOYABLE ARMS ON CONTACT WITH NO DELAY AT ALL, and its Blueprint says so twice over.
+        //
+        // It stops rather than bounces: `Bounciness` is 0.1 on the sneaky snowman and 0.2 on the
+        // firework mortar's holder, against the frag grenade's own value that this server was using
+        // for everything - so what should have been a dead landing was several visible hops. And it
+        // deploys on **OnStop**, not on a fuse: both projectiles' OnStop event is the one that jumps
+        // into the ubergraph where the spawn happens (statement 2215 on the snowman, 2048 on the
+        // shield bubble). With a bounciness of 0.1 that stop is a fraction of a second after first
+        // contact, which is why arming here - stop dead where it first touched - is the faithful
+        // reading and not a shortcut.
+        //
+        // What it replaces is worse than a bounce: with no row in FortGrenadeEffects these fell
+        // through to the frag's 2.75-second FUSE, so a snowman thrown at your feet bounced away and
+        // appeared somewhere else nearly three seconds later. The real item has no such timer.
+        var deployable = FortDeployables.For(projectile.SourceItemName) != null;
+
+        var effect = FortGrenadeEffects.For(projectile.SourceItemName);
+
+        if (effect == null && !deployable) return false;
         if (projectile.bLandedAndDeploying) return true;
 
         projectile.bLandedAndDeploying = true;
@@ -1259,7 +1333,7 @@ internal static class FortProjectileSystem {
         // and a firework mortar sailed off the far side of the island.
         projectile.Velocity = new FVector();
 
-        var delay = effect.HitDelay;
+        var delay = deployable ? 0f : effect!.Value.HitDelay;
         var deadline = world.TimeSeconds + delay;
         if (deadline < projectile.ExplodesAtWorldTime) projectile.ExplodesAtWorldTime = deadline;
 
@@ -1270,24 +1344,27 @@ internal static class FortProjectileSystem {
     }
 
     /// <summary>
-    ///     The visible half of a shockwave's low gravity: the two gameplay cues the game itself puts
-    ///     on the thrown player.
+    ///     The visible half of a shockwave's low gravity - all three of the cues the game itself
+    ///     puts on the player it throws, and now including the one that lasts.
     ///
-    ///     Found by following what the projectile actually applies - `GE_Athena_ShockGrenade_FX`,
-    ///     which grants `GA_Athena_ShockGrenade_RemoveFX`, whose entire content is a LOOPING cue and
-    ///     a LANDING one, both named after the Low Gravity Rock. So the effect is not something to
-    ///     invent; it is two tags this server can now send, because the tag table exists.
+    ///     Found by following what the projectile actually applies: `GE_Athena_ShockGrenade_FX`
+    ///     grants `GA_Athena_ShockGrenade_RemoveFX`, whose entire content is a LOOPING cue and a
+    ///     LANDING one, both named after the Low Gravity Rock - the shockwave reuses that item's
+    ///     effects, which is exactly what being thrown by one looks like.
     ///
-    ///     THE LIFTOFF ONE, not the looping one, and the difference is the notify's CLASS rather
-    ///     than the tag: `GCN_Athena_LowGravity_C` is a FortGameplayCueNotify_**Looping** and answers
-    ///     only to Added/WhileActive, so sending it as Executed - which is what this did first - is a
-    ///     no-op, and "there is still no low gravity effect" was exactly that. Its siblings
-    ///     `_Liftoff_C` and `_Land_C` are FortGameplayCueNotify_**Simple** and do answer to Executed.
+    ///     WHICH RPC A CUE NEEDS IS DECIDED BY ITS NOTIFY'S CLASS, and getting that wrong is what
+    ///     "there is still no low gravity effect" was:
     ///
-    ///     So the burst at the throw is sent here and the thump on landing rides the same path when
-    ///     the immunity ends. The continuous aura between them is still missing: it needs Added, and
-    ///     needs a REMOVE afterwards that this server has no way to send (removal rides the ASC's
-    ///     replicated cue list, not an RPC), and a loop that cannot be stopped is worse than none.
+    ///         GCN_Athena_LowGravity_Liftoff_C  FortGameplayCueNotify_Simple    Executed
+    ///         GCN_Athena_LowGravity_Land_C     FortGameplayCueNotify_Simple    Executed
+    ///         GCN_Athena_LowGravity_C          FortGameplayCueNotify_Looping   Added / WhileActive / Removed
+    ///
+    ///     The two Simple ones are one-shots and go out as Executed. The Looping one is sent the way
+    ///     real UE sends it (AbilitySystemComponent.cpp:1144) - the Added RPC for OnActive AND an
+    ///     element in the ASC's ActiveGameplayCues array for WhileActive - because only the array
+    ///     can take it off again. See TickLowGravity for when that happens, and FActiveGameplayCue
+    ///     for why the array is the only removal channel there is.
+    ///
     ///     SHOCKWAVE_FX=0 turns the whole thing off.
     /// </summary>
     private static void SendLowGravityCues(UWorld world, APawn pawn) {
@@ -1295,8 +1372,468 @@ internal static class FortProjectileSystem {
 
         SendCueToEveryone(world, pawn, FortGrenadeEffects.LowGravLiftoffCue);
 
-        // ...and the landing thump, when the immunity that marks the flight runs out.
-        _landingCues.Add((pawn, world.TimeSeconds + LandingCueDelay));
+        if (pawn.PlayerState?.AbilitySystemComponent is not { } asc) return;
+        if (!asc.AddGameplayCue(FortGrenadeEffects.LowGravLoopingCue)) return;
+
+        // OnActive for everyone who can see the pawn, then the array element that keeps it alive.
+        // The two halves are independent on purpose: if the ASC block is delayed the cue still
+        // starts from the RPC, and if the RPC is lost WhileActive still starts it.
+        foreach (var connection in world.NetDriver?.ClientConnections ?? Enumerable.Empty<UNetConnection>()) {
+            if (connection.FindActorChannel(pawn) is not { } channel) continue;
+            channel.SendNetMulticastInvokeGameplayCueAddedWithParams(FortGrenadeEffects.LowGravLoopingCue, null);
+        }
+
+        world.NetDriver?.FlushAbilitySystemComponent(pawn.PlayerState);
+
+        WatchFlight(world, pawn, endLowGravity: true);
+
+        Console.WriteLine($"FortProjectileSystem: {pawn.GetFName()} is in low gravity - aura on until they land " +
+                          $"(or {LowGravityMaxSeconds:F0}s, whichever comes first).");
+    }
+
+    /// <summary>
+    ///     Ends a low-gravity flight WHEN THE PLAYER LANDS, which is the one thing a fixed timer
+    ///     could never get right: a shockwave throw lasts as long as it lasts.
+    ///
+    ///     Landing is read off the movement mode the client sends with every move - falling is 3
+    ///     (see APawn.TrackMoveFlags) - and only after the pawn has actually been seen falling, so
+    ///     the throw's own first frames, where the client is still walking, cannot end it instantly.
+    ///
+    ///     THE CAP IS NOT A TIDINESS MEASURE. If the aura is left on, nothing else will ever take it
+    ///     off: a looping cue has no timeout of its own, so a player whose landing frame is simply
+    ///     lost would glow for the rest of the match. Ending late is recoverable; not ending is not.
+    /// </summary>
+    private static void TickLowGravity(UWorld world, float timeSeconds) {
+        const byte falling = 3;
+
+        for (var i = _flights.Count - 1; i >= 0; i--) {
+            var flight = _flights[i];
+            var mode = flight.Pawn.LastClientMovementMode;
+
+            if (mode == falling) flight.SeenFalling = true;
+
+            var landed = flight.SeenFalling && mode is { } current && current != falling;
+            var expired = timeSeconds - flight.StartedAt >= FlightMaxSeconds(flight);
+            if (!landed && !expired) continue;
+
+            _flights.RemoveAt(i);
+            EndFlight(world, flight, landed ? "landed" : "timed out");
+        }
+    }
+
+    /// <summary>
+    ///     Starts watching one thrown player until they land. Both things that have to be undone
+    ///     after a throw end at the same moment - the low-gravity aura and the PushMomentum - so
+    ///     they share one watcher rather than racing two timers.
+    ///
+    ///     A pawn already being watched has the new job added to its existing entry instead of a
+    ///     second entry: a shockwave caught by a second blast mid-flight would otherwise be landed
+    ///     twice, and the first landing would clear the push the second one still needs.
+    /// </summary>
+    private static void WatchFlight(UWorld world, APawn pawn, bool clearPush = false, bool endLowGravity = false) {
+        foreach (var existing in _flights) {
+            if (existing.Pawn != pawn) continue;
+
+            existing.ClearPush |= clearPush;
+            existing.EndLowGravity |= endLowGravity;
+            existing.StartedAt = world.TimeSeconds;
+            existing.SeenFalling = false;
+            return;
+        }
+
+        _flights.Add(new FThrownFlight {
+            Pawn = pawn,
+            StartedAt = world.TimeSeconds,
+            ClearPush = clearPush,
+            EndLowGravity = endLowGravity
+        });
+    }
+
+    /// <summary>Whichever backstop is longer, since one entry can carry both jobs.</summary>
+    private static float FlightMaxSeconds(FThrownFlight flight) =>
+        flight.EndLowGravity ? MathF.Max(LowGravityMaxSeconds, PushMomentumMaxSeconds) : PushMomentumMaxSeconds;
+
+    /// <summary>
+    ///     The end of a throw: the aura comes off, the landing thump plays, and the push is taken
+    ///     back. See PushMomentumMaxSeconds for why taking the push back is a LANDING event and not
+    ///     a timed one - doing it in the air freezes the victim where they are.
+    /// </summary>
+    private static void EndFlight(UWorld world, FThrownFlight flight, string why) {
+        if (flight.EndLowGravity) EndLowGravity(world, flight.Pawn, why);
+
+        if (flight.ClearPush) {
+            flight.Pawn.SetPushMomentum(new FVector());
+            world.NetDriver?.FlushActorProperties(flight.Pawn);
+        }
+    }
+
+    /// <summary>
+    ///     Takes the aura off and plays the landing thump. Removing the ActiveGameplayCues element
+    ///     is the whole of the first half - there is no "cue removed" RPC to send instead. The
+    ///     client runs PreReplicatedRemove, and therefore the notify's Removed event, purely because
+    ///     the element stopped being there.
+    /// </summary>
+    private static void EndLowGravity(UWorld world, APawn pawn, string why) {
+        if (pawn.PlayerState?.AbilitySystemComponent is { } asc &&
+            asc.RemoveGameplayCue(FortGrenadeEffects.LowGravLoopingCue)) {
+            world.NetDriver?.FlushAbilitySystemComponent(pawn.PlayerState);
+        }
+
+        SendCueToEveryone(world, pawn, FortGrenadeEffects.LowGravLandingCue);
+
+        Console.WriteLine($"FortProjectileSystem: {pawn.GetFName()} is out of low gravity ({why}).");
+    }
+
+    /// <summary>
+    ///     The shockwave's other half: whoever it throws SMASHES THROUGH what is in front of them.
+    ///
+    ///     Straight out of `B_Prj_Athena_ShockGrenade`'s graph, which runs this right after
+    ///     LaunchCharacter - see FortGrenadeEffects.DestructionCapsuleRadius for the disassembled
+    ///     shape of it. A person-sized capsule is swept from the victim, along the direction the
+    ///     blast threw them, for DestructionDistance (1400 on the shockwave, and 0 - i.e. never - on
+    ///     everything else, including the impulse grenade, whose Blueprint has no such property).
+    ///
+    ///     NOT A BLAST RADIUS, and that is the part worth keeping straight: nothing behind the
+    ///     grenade is touched, and nothing beside the victim. The wall you were standing against
+    ///     goes, and so does whatever is a storey or two further along the same line.
+    ///
+    ///     WHAT IT CAN AND CANNOT REACH. Player builds, chests, and any map scenery this server has
+    ///     already built a stand-in for are all ABuildingActors in the net driver's list, so one loop
+    ///     covers them. Map props nobody has touched yet are NOT there at all - a tree exists on the
+    ///     client until some client names it by path (NativeRpcHandlers.DamageLevelActor), and this
+    ///     server cannot address one it has never been told about. That is a limit of the whole
+    ///     map-actor design here, not of this sweep; it is logged rather than hidden.
+    /// </summary>
+    private static void SmashThroughBuildings(UWorld world, FVector origin, APawn pawn, float destroyDistance) {
+        if (destroyDistance <= 0f) return;
+        if (Environment.GetEnvironmentVariable("SHOCKWAVE_DESTRUCTION") is "0") return;
+
+        var start = pawn.GetActorLocation();
+
+        // GetDirectionUnitVector(HitLocation, victim) - the blast toward the victim, which is the
+        // launch direction BEFORE the Z floor is applied. Straight up when the grenade went off
+        // under someone's feet, which is the case that lifts them through their own floor.
+        var dx = start.X - origin.X;
+        var dy = start.Y - origin.Y;
+        var dz = start.Z - origin.Z;
+        var length = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+        if (length < 1e-3f) return;
+
+        var end = new FVector {
+            X = start.X + dx / length * destroyDistance,
+            Y = start.Y + dy / length * destroyDistance,
+            Z = start.Z + dz / length * destroyDistance
+        };
+
+        var smashed = 0;
+        var candidates = 0;
+
+        // WHAT WAS NEARLY HIT, for the case that matters more than the hits: "0 destroyed" has three
+        // completely different causes - no ABuildingActor exists at all (a map prop this server has
+        // never been told about), one exists but the swept capsule misses it, or one is in the way
+        // and the box test is wrong - and the count alone cannot tell them apart. So the nearest few
+        // are named with their distance FROM THE SEGMENT, which is the number the test actually
+        // turns on.
+        var nearest = new List<(ABuildingActor Building, float Distance)>();
+
+        foreach (var actor in world.NetDriver?.NetworkObjectList.ToArray() ?? Array.Empty<AActor>()) {
+            if (actor is not ABuildingActor building || building.bDestroyed) continue;
+
+            // The same guard the explosion loop needs: an actor whose position this server never
+            // learned reads as (0,0,0), and a sweep passing near the world origin would take out
+            // every one of them at once. See AActor.bHasKnownLocation.
+            if (!building.bHasKnownLocation) continue;
+
+            candidates++;
+            nearest.Add((building, DistanceToSegment(building.GetActorLocation(), start, end)));
+
+            if (!BuildingStructuralSupportSystem.SweptCapsuleTouches(
+                    building, start, end,
+                    FortGrenadeEffects.DestructionCapsuleRadius,
+                    FortGrenadeEffects.DestructionCapsuleHalfHeight)) continue;
+
+            BuildingStructuralSupportSystem.ApplyDamage(building, (int) FortGrenadeEffects.DestructionDamage);
+            smashed++;
+        }
+
+        var props = SmashThroughMapProps(world, pawn, start, end);
+
+        Console.WriteLine($"FortProjectileSystem: {pawn.GetFName()} was thrown through {smashed} building(s) " +
+                          $"and {props} map prop(s) - a {FortGrenadeEffects.DestructionCapsuleRadius:F0}-radius " +
+                          $"capsule swept {destroyDistance:F0} units from {start} toward {end}, " +
+                          $"{candidates} building actor(s) considered.");
+
+        if (smashed > 0 || props > 0) return;
+
+        // NAMED ONE BY ONE when nothing broke. A map prop nobody has damaged yet is not in the list
+        // at all - it only becomes a server-side actor once some client names it by path (see
+        // NativeRpcHandlers.DamageLevelActor) - so "0 considered" and "12 considered, nearest 900
+        // units off the line" are different problems with different fixes, and this is the line that
+        // says which.
+        if (candidates == 0) {
+            Console.WriteLine("FortProjectileSystem:   ...nothing to destroy: this server has no building " +
+                              "ACTOR anywhere. Player builds and already-damaged map props would be here; " +
+                              "an untouched tree or house is only ever a client-side actor.");
+            return;
+        }
+
+        foreach (var (building, distance) in nearest.OrderBy(entry => entry.Distance).Take(3))
+            Console.WriteLine($"FortProjectileSystem:   ...missed {building.GetFName()} " +
+                              $"({building.ClassName}) at {building.GetActorLocation()}, its pivot " +
+                              $"{distance:F0} units from the swept line.");
+    }
+
+    /// <summary>
+    ///     The map's own scenery - trees, walls, furniture - along the same swept line.
+    ///
+    ///     SEPARATE FROM THE BUILDING LOOP ABOVE BECAUSE THE POPULATION IS SEPARATE, and that is the
+    ///     whole difficulty of destroying map geometry from outside the game. A player build is an
+    ///     actor this server spawned and can enumerate; a tree is an actor in a streaming sublevel
+    ///     this server never loads, which exists here only once somebody has NAMED it - the client
+    ///     supplies the path when it reports a hit (NativeRpcHandlers.DamageLevelActor). So the
+    ///     server cannot ask what is nearby; it has to have been told in advance, which is what the
+    ///     FortMapProps bake is.
+    ///
+    ///     Once a prop is picked, the rest is the path DamageLevelActor already walks: build a
+    ///     stably-named stand-in for the path, give it the real hit points its class resolves to,
+    ///     register it for replication, then destroy it. The client resolves the path to the actor it
+    ///     already has and plays its own destruction.
+    ///
+    ///     WHAT IS DELIBERATELY NOT DONE: the stand-in is given no location. A level actor's position
+    ///     belongs to the client's copy, and pushing one would be this server telling the client to
+    ///     MOVE a tree - see DamageLevelActor, which sets none either. The consequence is that these
+    ///     actors read as position-unknown to everything else (an ordinary explosion skips them), and
+    ///     that is the safe direction to be wrong in.
+    /// </summary>
+    private static int SmashThroughMapProps(UWorld world, APawn pawn, FVector start, FVector end) {
+        if (world.NetDriver is not { } netDriver) return 0;
+
+        var margin = FortMapProps.PropMargin;
+        var smashed = 0;
+        var failed = 0;
+
+        // WHOSE CLIENT'S NAME FOR THE LEVEL. A POI sublevel is streamed as an INSTANCE, so the
+        // package the client holds carries a suffix the cooked path does not have, and only the
+        // client can say what it is (see UNetConnection.ClientLevelInstances). The victim's own
+        // connection is the one used: they are the player who must see the wall go.
+        //
+        // WITH SEVERAL CLIENTS THIS IS INCOMPLETE and says so rather than pretending: one stand-in
+        // carries one path, and another client that streamed the same level under a different name
+        // would not resolve it. Single-client is the case this server is exercised in; the honest
+        // fix is per-connection relevancy, which this server has no shape for yet.
+        var connection = world.NetDriver?.ClientConnections
+            .FirstOrDefault(candidate => candidate.PlayerController?.Pawn == pawn)
+                         ?? world.NetDriver?.ClientConnections.FirstOrDefault();
+
+        if (connection == null) return 0;
+
+        var picked = FortMapProps.Along(start, end, margin, out var nearMisses);
+        var unresolved = 0;
+
+        foreach (var prop in picked) {
+            // NOT LOADED ON THIS CLIENT = NOT DESTROYABLE, and skipping it is the point rather than a
+            // giving-up. Opening a channel for an actor the client cannot find is exactly the
+            // "SerializeNewActor failed to find/spawn actor. Actor: None" / NMT_ActorChannelFailure
+            // pair this check exists to stop, and a failed channel is worse than a wall left standing.
+            if (prop.PathFor(connection) is not { } path) {
+                unresolved++;
+                continue;
+            }
+
+            ABuildingActor standIn;
+            try {
+                standIn = UAssetRegistry.GetOrCreateSubObject<ABuildingActor>(path);
+            } catch (Exception ex) {
+                Console.WriteLine($"FortProjectileSystem:   could not name '{path}' - {ex.Message}");
+                continue;
+            }
+
+            // Already gone, or already something this server treats specially. A chest is not
+            // scenery and neither is a llama - the same two exclusions DamageLevelActor makes, for
+            // the same reason, and needed again here because the bake cannot tell what a path will
+            // turn out to have been registered as.
+            if (standIn.bDestroyed) continue;
+            if (standIn is ABuildingContainer or AFortAthenaSupplyDropLlama) continue;
+
+            standIn.MarkAsLevelActor();
+
+            if (!netDriver.NetworkObjectList.Contains(standIn)) {
+                    if (FortHarvestResources.MaxHealthFor(path) is { } maxHealth) {
+                    standIn.InitializeLevelActorHitPoints(maxHealth);
+                }
+
+                standIn.SetReplicates(true);
+                netDriver.AddNetworkActor(standIn);
+            }
+
+            // The same flat 10,000 the real GE carries, so this destroys whatever it touches rather
+            // than chipping it - see FortGrenadeEffects.DestructionDamage.
+            //
+            // NAMED WHEN IT REFUSES, because "the prop was chosen and nothing happened" is a
+            // different failure from "no prop was chosen" and the totals cannot separate them.
+            if (!standIn.ApplyDamage((int) FortGrenadeEffects.DestructionDamage)) {
+                Console.WriteLine($"FortProjectileSystem:   '{path}' survived 10000 damage " +
+                                  $"({standIn.CurrentHitPoints}/{standIn.MaxHitPoints} HP) - not destroyed.");
+                failed++;
+                continue;
+            }
+
+            if (!standIn.MarkDestroyed()) {
+                Console.WriteLine($"FortProjectileSystem:   '{path}' would not mark destroyed " +
+                                  "(already flagged?).");
+                failed++;
+                continue;
+            }
+
+            Console.WriteLine($"FortProjectileSystem:   destroyed map prop '{path}' " +
+                              $"({standIn.MaxHitPoints} HP) at {prop.Location}");
+            smashed++;
+        }
+
+        if (smashed > 0) return smashed;
+
+        if (FortMapProps.Count == 0) {
+            Console.WriteLine("FortProjectileSystem:   ...and no map props, because the prop bake is not loaded " +
+                              "(see FortMapProps).");
+            return 0;
+        }
+
+        // THE MAP HALF'S OWN MISS REPORT. The bake holds 59,722 actors and their positions are
+        // exact (every one of FortDoorPlacements' 19,284 entries matches it), so a miss is about
+        // this SWEEP, not the data - and the number that decides it is the distance from the line.
+        Console.WriteLine($"FortProjectileSystem:   ...{picked.Count} map prop(s) touched the line " +
+                          $"(capsule margin {margin:F0}), {failed} refused, {unresolved} in a level this " +
+                          $"client has not reported " +
+                          $"(it knows {connection.ClientLevelInstances.Count} instanced and " +
+                          $"{connection.ClientVisibleLevelNames.Count} plain level(s)). Nearest misses:");
+
+        foreach (var (prop, distance) in nearMisses)
+            Console.WriteLine($"FortProjectileSystem:     {distance,6:F0} away (radius {prop.RadiusXY:F0}, " +
+                              $"Z {prop.Location.Z + prop.CenterZ - prop.HalfZ:F0}.." +
+                              $"{prop.Location.Z + prop.CenterZ + prop.HalfZ:F0})  {prop.CookedPath}");
+
+        return smashed;
+    }
+
+    /// <summary>Distance from a point to a segment - diagnostics only, so the miss can be quantified.</summary>
+    private static float DistanceToSegment(FVector point, FVector from, FVector to) {
+        var dx = to.X - from.X;
+        var dy = to.Y - from.Y;
+        var dz = to.Z - from.Z;
+
+        var lengthSquared = dx * dx + dy * dy + dz * dz;
+        if (lengthSquared < 1e-6f) return MathF.Sqrt(FVector.DistSquared(point, from));
+
+        var t = ((point.X - from.X) * dx + (point.Y - from.Y) * dy + (point.Z - from.Z) * dz) / lengthSquared;
+        t = MathF.Max(0f, MathF.Min(1f, t));
+
+        var closest = new FVector { X = from.X + dx * t, Y = from.Y + dy * t, Z = from.Z + dz * t };
+        return MathF.Sqrt(FVector.DistSquared(point, closest));
+    }
+
+    /// <summary>
+    ///     The items that LEAVE SOMETHING BEHIND rather than exploding - a sneaky snowman, a shield
+    ///     bubble, a firework mortar's emplacement.
+    ///
+    ///     All three projectiles do the same thing in their own Blueprint: spawn a class named by one
+    ///     of their own properties at the point they stopped. See FortDeployables for the three rows
+    ///     and for where each class name was read from.
+    ///
+    ///     THE CLASS COMES FROM THE PATH, NOT FROM THE C# TYPE - ABuildingActor.ClassForPath is what
+    ///     tells the client what to build, and the C# type only picks the RepLayout this server
+    ///     writes with. Those are two different decisions and conflating them is what
+    ///     `SpawnActor&lt;ABuildingWall&gt;` threw an InvalidCastException over once already.
+    ///
+    ///     WHICH C# TYPE IS NOT COSMETIC. A BuildingGameplayActor is ABuildingSMActor's SIBLING, so
+    ///     the ordinary building layout would name handles its class does not have and the client
+    ///     would close the connection - see AFortDeployedActor. The table says which fork each class
+    ///     is on, checked with `pakreader supers` rather than inferred from the name.
+    /// </summary>
+    private static void Deploy(UWorld world, AFortProjectileBase projectile, FVector origin) {
+        if (FortDeployables.For(projectile.SourceItemName) is not { } deployable) return;
+        if (Environment.GetEnvironmentVariable("DEPLOYABLES") is "0") return;
+
+        var location = new FVector { X = origin.X, Y = origin.Y, Z = origin.Z + deployable.ZOffset };
+
+        ABuildingActor? actor;
+        try {
+            actor = deployable.GameplayActor
+                ? world.SpawnActor<AFortDeployedActor>(
+                    ABuildingActor.ClassForPath(deployable.ClassPath),
+                    new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient })
+                : world.SpawnActor<ABuildingActor>(
+                    ABuildingActor.ClassForPath(deployable.ClassPath),
+                    new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
+        } catch (Exception ex) {
+            Console.WriteLine($"FortProjectileSystem: could not deploy '{deployable.ClassPath}' - {ex.Message}");
+            return;
+        }
+
+        if (actor == null) {
+            Console.WriteLine($"FortProjectileSystem: SpawnActor returned null for '{deployable.ClassPath}'");
+            return;
+        }
+
+        actor.SetActorLocation(location);
+
+        // FACING THE THROWER'S HEADING, not the projectile's. A grenade tumbles, and a snowman that
+        // came to rest upside down is not something the item ever does; the yaw a player would expect
+        // is the one they were facing. Yaw only - these all stand upright.
+        if (projectile.GetInstigator()?.GetActorRotation().Yaw is { } yaw) {
+            actor.SetActorRotation(new FRotator { Yaw = yaw });
+        }
+
+        actor.SetRole(ENetRole.ROLE_Authority);
+        actor.SetReplicates(true);
+
+        Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} deployed " +
+                          $"'{deployable.ClassPath}' at {location} " +
+                          $"({(deployable.GameplayActor ? "BuildingGameplayActor layout" : "building-piece layout")}).");
+    }
+
+    /// <summary>
+    ///     One explosion at a point: everything in radius takes it, players and structures alike.
+    ///
+    ///     Extracted so the AIR STRIKE's sixty rockets are the same blast a grenade is rather than a
+    ///     second implementation that drifts from it - the alternative was copying the loop, and a
+    ///     copied damage loop is how "the shockwave stopped hurting buildings" would arrive later.
+    ///
+    ///     DELIBERATELY SIMPLER THAN Explode's OWN LOOP in one respect: no line-of-sight test. A
+    ///     rocket falls from twelve thousand units up (`Default.AppleSauce.RocketHeight`), so the
+    ///     ceiling between it and its target is the thing it just came through - tracing from the
+    ///     blast to the victim would have the roof shield them from a rocket that hit the roof.
+    /// </summary>
+    public static void Blast(UWorld world, FVector origin, float radius,
+                             float playerDamage, float environmentDamage, APawn? instigator) {
+        var radiusSquared = radius * radius;
+        var killer = instigator?.PlayerState ?? instigator?.Controller?.PlayerState;
+
+        var pawns = 0;
+        var buildings = 0;
+
+        foreach (var actor in world.NetDriver?.NetworkObjectList.ToArray() ?? Array.Empty<AActor>()) {
+            if (!actor.bHasKnownLocation) continue;
+            if (actor.GetActorLocation() is not { } location) continue;
+            if (FVector.DistSquared(origin, location) > radiusSquared) continue;
+
+            switch (actor) {
+                case ABuildingActor building when !building.bDestroyed && environmentDamage > 0f:
+                    BuildingStructuralSupportSystem.ApplyDamage(building, (int) environmentDamage);
+                    buildings++;
+                    break;
+
+                case APawn pawn when playerDamage > 0f:
+                    if (pawn.PlayerState is not { } victim) break;
+                    FortDamageSystem.ApplyDamage(victim, playerDamage, EDeathCause.Grenade, killer);
+                    pawns++;
+                    break;
+            }
+        }
+
+        if (pawns > 0 || buildings > 0) {
+            Console.WriteLine($"FortProjectileSystem.Blast: {origin} r{radius:F0} hit {pawns} pawn(s) " +
+                              $"for {playerDamage:F0} and {buildings} building(s) for {environmentDamage:F0}.");
+        }
     }
 
     private static void SendCueToEveryone(UWorld world, APawn pawn, string cueTag) {
@@ -1307,14 +1844,32 @@ internal static class FortProjectileSystem {
     }
 
     /// <summary>
-    ///     How long after the throw the landing cue goes out. NOT a row - the game fires it from the
-    ///     pawn actually landing, which this server does not watch closely enough to hang an effect
-    ///     on. Close to a long throw's flight time. SHOCKWAVE_LANDING_CUE_DELAY overrides it.
+    ///     The longest a low-gravity aura may stay on without the pawn being seen to land. Not a row
+    ///     - the game ends it from the landing itself - but a backstop; see TickLowGravity for why
+    ///     there has to be one. SHOCKWAVE_LOWGRAV_MAX_SECONDS overrides it.
     /// </summary>
-    private static float LandingCueDelay =>
-        float.TryParse(Environment.GetEnvironmentVariable("SHOCKWAVE_LANDING_CUE_DELAY"), out var seconds)
+    private static float LowGravityMaxSeconds =>
+        float.TryParse(Environment.GetEnvironmentVariable("SHOCKWAVE_LOWGRAV_MAX_SECONDS"), out var seconds)
             ? seconds
-            : 2.0f;
+            : 12.0f;
 
-    private static readonly List<(APawn Pawn, float At)> _landingCues = new();
+    /// <summary>One player mid-throw, and what has to be undone when they land.</summary>
+    private sealed class FThrownFlight {
+        public required APawn Pawn;
+        public float StartedAt;
+
+        /// <summary>
+        ///     Set once the client has reported falling. Until then a landing cannot be detected,
+        ///     because as far as this server knows the pawn never left the ground.
+        /// </summary>
+        public bool SeenFalling;
+
+        /// <summary>Take PushMomentum back off - see PushMomentumMaxSeconds.</summary>
+        public bool ClearPush;
+
+        /// <summary>Remove the low-gravity aura and play the landing thump.</summary>
+        public bool EndLowGravity;
+    }
+
+    private static readonly List<FThrownFlight> _flights = new();
 }

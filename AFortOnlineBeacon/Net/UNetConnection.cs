@@ -164,6 +164,36 @@ public abstract class UNetConnection : UPlayer {
     public HashSet<AActor> DormantActors { get; } = new();
 
     public HashSet<string> ClientVisibleLevelNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    ///     COOKED package name -&gt; the name that package is actually LOADED UNDER on this client,
+    ///     for the levels where the two differ.
+    ///
+    ///     THIS IS THE DIFFERENCE BETWEEN A MAP ACTOR THIS SERVER CAN NAME AND ONE IT CANNOT.
+    ///     Fortnite's POI sublevels are streamed as INSTANCES, so the package the client holds is not
+    ///     the one on disk:
+    ///
+    ///         cooked   /Game/Athena/Maps/POI/Athena_POI_Lobby_004
+    ///         loaded   /Temp/Game/Athena/Maps/POI/Athena_POI_Lobby_004_3f5ab45c
+    ///
+    ///     and an actor inside it is
+    ///     `/Temp/Game/.../Athena_POI_Lobby_004_3f5ab45c.Athena_POI_Lobby_004:PersistentLevel.Foo` -
+    ///     note the WORLD object keeps the original name and only the PACKAGE is suffixed. Naming
+    ///     such an actor by its cooked path produces a NetGUID the client cannot resolve, which is
+    ///     `SerializeNewActor failed to find/spawn actor. Actor: None` on its side and
+    ///     NMT_ActorChannelFailure on ours.
+    ///
+    ///     Every client-initiated hit on scenery already carries the LOADED path, which is why
+    ///     DamageLevelActor has always worked - it echoes back what it was given. Anything the SERVER
+    ///     names first (see FortMapProps) has to translate, and this is the table for it.
+    ///
+    ///     Learned rather than baked, from the ServerUpdateLevelVisibility pair the client sends
+    ///     thousands of times a session (FUpdateLevelVisibilityLevelInfo carries both names). The
+    ///     suffix does appear to be deterministic - `3f5ab45c` is the same in three unrelated
+    ///     captures, one of them a different server implementation entirely - but learning it costs
+    ///     nothing and cannot drift, where a bake of a hash nobody has reverse-engineered could.
+    /// </summary>
+    public Dictionary<string, string> ClientLevelInstances { get; } = new(StringComparer.OrdinalIgnoreCase);
     
     /// <summary>
     ///     Maximum packet size.

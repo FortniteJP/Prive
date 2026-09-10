@@ -37,6 +37,7 @@ WRITERS = [
     ("WriteAbilitySpecDeltaStruct", "FGameplayAbilitySpec"),
     ("WriteActiveGameplayEffectDeltaStruct", "FActiveGameplayEffect"),
     ("WriteItemEntryDeltaStruct", "FFortItemEntry"),
+    ("WriteActiveGameplayCueDeltaStruct", "FActiveGameplayCue"),
 ]
 
 # (C# method, element struct, the `* N` the method must use for it). Only arrays whose element is a

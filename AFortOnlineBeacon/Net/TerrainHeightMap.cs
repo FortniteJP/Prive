@@ -63,6 +63,32 @@ public static class TerrainHeightMap {
         private long _loadedLength = -1;
         private bool _reportedMissing;
 
+        /// <summary>
+        ///     When the file was last STATTED, so hot-reload does not cost a syscall per sample.
+        ///
+        ///     ReloadIfChanged used to run on every Height() call - two or three filesystem stats,
+        ///     measured at 20-29 microseconds each on this machine - and Height() is called once per
+        ///     SAMPLE, of which Highest() takes hundreds. That is how a support check came to cost
+        ///     seconds; see Highest for the other half of it.
+        ///
+        ///     Two seconds is far below the time it takes to re-bake a heightmap and far above the
+        ///     tick rate, so the reload stays as responsive as it ever was in practice.
+        /// </summary>
+        private long _lastCheckedMs = long.MinValue;
+
+        private static readonly long ReloadCheckMs =
+            long.TryParse(Environment.GetEnvironmentVariable("TERRAIN_RELOAD_CHECK_MS"), out var ms) && ms >= 0
+                ? ms
+                : 2000;
+
+        /// <summary>Whether this grid has data at all - the cheap question, asked before sampling.</summary>
+        public bool HasData {
+            get {
+                ReloadIfChanged();
+                return _heights != null;
+            }
+        }
+
         public Grid(string environmentVariable, string defaultFileName, string what, bool announceMissing) {
             _what = what;
             AnnounceMissing = announceMissing;
@@ -115,6 +141,11 @@ public static class TerrainHeightMap {
         }
 
         private void ReloadIfChanged() {
+            // Throttled, and the throttle is load-bearing rather than tidiness - see _lastCheckedMs.
+            var now = Environment.TickCount64;
+            if (now - _lastCheckedMs < ReloadCheckMs) return;
+            _lastCheckedMs = now;
+
             try {
                 var path = _candidates.FirstOrDefault(File.Exists) ?? _candidates[0];
 
@@ -273,6 +304,19 @@ public static class TerrainHeightMap {
     public static bool LandscapeLoaded => Landscape.Loaded;
 
     private static float? Highest(Grid grid, float x, float y, float radius, float ceiling) {
+        // AN EMPTY GRID IS ANSWERED WITHOUT SAMPLING IT, and skipping this cost 92 seconds of frozen
+        // server in one tick. A Grid that never loaded keeps its constructed CellSize of 1, so the
+        // step below became ONE UNIT and this loop ran 513x513 = 263,169 times over a radius of 256 -
+        // every one of them a Height() call that returned null after two failed File.Exists. Measured
+        // at 5.38 seconds PER QUERY for the placed-mesh grid, which is optional and normally absent;
+        // seventeen pieces asking it is the 92-second tick FTickWatchdog caught.
+        //
+        // The throttle added to ReloadIfChanged fixes the per-sample syscall, and this fixes the
+        // sample count. Either alone would have left the other, and the sample count is the one that
+        // is wrong on its own terms: sampling a grid with no data cannot produce an answer however
+        // cheap each sample is.
+        if (!grid.HasData) return null;
+
         float? highest = null;
         var step = MathF.Max(grid.CellSize, 1f);
 

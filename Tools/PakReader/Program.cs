@@ -86,6 +86,7 @@ public static class Program {
                 case "connectivity": return Connectivity(provider, args);
                 case "nameref": return NameRef(provider, args);
                 case "grenadespeeds": return GrenadeSpeeds(provider, args);
+                case "mapprops": return MapProps(provider, args);
                 default:
                     Console.Error.WriteLine($"unknown command '{args[0]}'");
                     return 2;
@@ -629,6 +630,142 @@ public static class Program {
         return 0;
     }
 
+    /// <summary>
+    ///     EVERY placed actor on the Athena map, in world space, WITH THE PATH THE CLIENT WOULD NAME
+    ///     IT BY - `X,Y,Z&lt;TAB&gt;Class&lt;TAB&gt;/Game/...:PersistentLevel.ActorName`.
+    ///
+    ///     WHY THE PATH IS THE WHOLE POINT. AFortOnlineBeacon can already damage and destroy a map
+    ///     actor - see NativeRpcHandlers.DamageLevelActor - but only ever REACTIVELY, because the
+    ///     path is something the CLIENT supplies when it reports a hit. A server that wants to
+    ///     destroy scenery on its own (a shockwave grenade throwing somebody through a wall) needs to
+    ///     know both where the actors are and what to call them, and nothing at runtime can tell it:
+    ///     these actors live in streaming sublevels the server never loads.
+    ///
+    ///     The format is the client's own, confirmed against a live capture:
+    ///     `/Game/Athena/Maps/Athena_POI_Foundations.Athena_POI_Foundations:PersistentLevel.LF_Athena_POI_50x50_446`
+    ///     - package, then the WORLD object (same leaf name), then a colon, then PersistentLevel and
+    ///     the actor. Getting a single separator wrong here produces a GUID the client cannot resolve,
+    ///     which is silent.
+    ///
+    ///     Emits everything with a RootComponent and leaves the filtering to the generator, which is
+    ///     the side that knows which classes are destructible (Tools/HarvestTable's stem tables).
+    ///
+    ///     EACH ACTOR'S SIZE COMES WITH IT, and it is not decoration. The server tests a swept
+    ///     capsule against these, and with only a POSITION that test has to become "is the pivot
+    ///     within some fixed radius of the line" - which fails in exactly the case the game makes
+    ///     most use of: standing under a 512-unit floor tile, whose pivot is up to 362 units away
+    ///     (half its diagonal) while the tile itself is directly overhead. Measured misses of 361,
+    ///     382 and 394 against a 320 radius are that, and no single radius fixes it without
+    ///     destroying barrels four metres away.
+    ///
+    ///     The size is the union of the actor's own StaticMeshComponents' mesh bounds, taken in the
+    ///     ACTOR's local space, and emitted as a horizontal half-diagonal plus a Z half-height - a
+    ///     cylinder. A cylinder rather than a box because it needs no rotation: the actor's yaw does
+    ///     not change it, so nothing downstream has to carry or compose one.
+    /// </summary>
+    /// <summary>
+    ///     Mesh bounds by mesh name, so the same wall mesh placed 1,779 times is loaded once. Loading
+    ///     is by far the expensive part of this sweep.
+    ///
+    ///     BOTH HALVES OF FBoxSphereBounds ARE KEPT - the ORIGIN as well as the extent - and leaving
+    ///     the origin out is a bug that hides for a long time. A mesh's pivot is not its centre: a
+    ///     wall or a tree is authored with its pivot on the FLOOR, so its bounds sit entirely above
+    ///     it. Modelling such a prop as pivot +/- extent puts half the box underground and stops
+    ///     halfway up the real thing, which reads as "sometimes it breaks and sometimes it does not"
+    ///     depending on which half the sweep happened to cross.
+    /// </summary>
+    private static readonly Dictionary<string, (CUE4Parse.UE4.Objects.Core.Math.FVector Origin,
+                                                CUE4Parse.UE4.Objects.Core.Math.FVector Extent)> MeshBoundsCache = new();
+
+    /// <summary>
+    ///     One actor's size in its own local space: the union of its StaticMeshComponents' bounds,
+    ///     each offset by that component's own RelativeLocation and scaled by its RelativeScale3D.
+    ///
+    ///     Each component's eight bound corners are transformed by its own relative placement - the
+    ///     same treatment the `meshes` command gives a placement, rather than an abs() approximation -
+    ///     and the actor's box is the union. What comes out is a rotation-invariant horizontal radius
+    ///     plus a Z range, so nothing downstream has to carry the actor's yaw.
+    ///
+    ///     THE ROOT AND ITS CHILDREN DO NOT MEAN THE SAME THING BY "RelativeLocation", and this took
+    ///     two wrong bakes to get right. A ROOT component has no parent, so its RelativeLocation is
+    ///     its position in the LEVEL - that is exactly how the walker above reads an actor's position.
+    ///     A CHILD's is relative to its parent, and is usually (0,0,0) for a mesh sitting on the
+    ///     actor's origin. Treating them alike either way is wrong in both directions and loudly:
+    ///     using the root's value as an offset gave a BARREL an 18,000-unit radius, and then
+    ///     subtracting the root from a child's own (0,0,0) gave a STREET LIGHT an 11,000-unit one.
+    ///     So the root contributes no offset and a child contributes its own.
+    /// </summary>
+    private static (float RadiusXY, float CenterZ, float HalfZ) ActorExtent(
+        string actorName, string? rootName,
+        IReadOnlyDictionary<string, List<CUE4Parse.UE4.Assets.Exports.Component.StaticMesh.UStaticMeshComponent>> byOwner) {
+
+        if (!byOwner.TryGetValue(actorName, out var components)) return (0f, 0f, 0f);
+
+        var radiusXY = 0f;
+        var minZ = float.MaxValue;
+        var maxZ = float.MinValue;
+
+        foreach (var component in components) {
+            CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh? mesh = null;
+            try { mesh = component.GetLoadedStaticMesh(); } catch { /* a mesh that will not load has no size to offer */ }
+            if (mesh?.Name is not { Length: > 0 } meshName) continue;
+
+            if (!MeshBoundsCache.TryGetValue(meshName, out var bounds)) {
+                if (mesh.RenderData?.Bounds is not { } loaded) continue;
+                bounds = (loaded.Origin, loaded.BoxExtent);
+                MeshBoundsCache[meshName] = bounds;
+            }
+
+            // THE ROOT CONTRIBUTES NO TRANSLATION AND NO ROTATION. Its RelativeLocation is its place
+            // in the LEVEL (it has no parent), which is how the walker reads the actor's position in
+            // the first place, and its rotation is the actor's own - which this deliberately does not
+            // apply, since the radius below is rotation-invariant and the Z range is unaffected by a
+            // yaw. Only its SCALE is real here. A child's placement is genuinely relative and is used
+            // whole.
+            var placement = component.Name == rootName
+                ? new Placement(new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0),
+                                CUE4Parse.UE4.Objects.Core.Math.FQuat.Identity,
+                                component.GetOrDefault("RelativeScale3D",
+                                    new CUE4Parse.UE4.Objects.Core.Math.FVector(1, 1, 1)))
+                : ComponentPlacement(component);
+
+            for (var corner = 0; corner < 8; corner++) {
+                var local = new CUE4Parse.UE4.Objects.Core.Math.FVector(
+                    bounds.Origin.X + ((corner & 1) == 0 ? -bounds.Extent.X : bounds.Extent.X),
+                    bounds.Origin.Y + ((corner & 2) == 0 ? -bounds.Extent.Y : bounds.Extent.Y),
+                    bounds.Origin.Z + ((corner & 4) == 0 ? -bounds.Extent.Z : bounds.Extent.Z));
+
+                var w = placement.TransformPosition(local);
+
+                radiusXY = MathF.Max(radiusXY, MathF.Sqrt(w.X * w.X + w.Y * w.Y));
+                minZ = MathF.Min(minZ, w.Z);
+                maxZ = MathF.Max(maxZ, w.Z);
+            }
+        }
+
+        if (minZ > maxZ) return (0f, 0f, 0f);
+
+        return (radiusXY, (minZ + maxZ) / 2f, (maxZ - minZ) / 2f);
+    }
+
+    private static int MapProps(DefaultFileProvider provider, string[] args) {
+        string[] foundationMaps = {
+            "FortniteGame/Content/Athena/Maps/Athena_Streaming_Grid.umap",
+            "FortniteGame/Content/Athena/Maps/Athena_POI_Foundations.umap",
+            "FortniteGame/Content/Athena/Maps/Athena_Terrain.umap"
+        };
+
+        var found = 0;
+        var onStack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var map in foundationMaps) {
+            found += WalkLevel(provider, map, new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0), 0f,
+                               "", onStack, 0, verbose: false, paths: true);
+        }
+
+        Console.Error.WriteLine($"pakreader: {found} placed actor(s) with a path");
+        return 0;
+    }
+
     /// <summary>How deep foundations may nest before this gives up. POI -> building kit is two.</summary>
     private const int MaxFoundationDepth = 8;
 
@@ -657,7 +794,7 @@ public static class Program {
     private static int WalkLevel(DefaultFileProvider provider, string packagePath,
                                  CUE4Parse.UE4.Objects.Core.Math.FVector origin, float yaw,
                                  string needle, HashSet<string> onStack, int depth,
-                                 bool verbose = false) {
+                                 bool verbose = false, bool paths = false) {
         if (depth > MaxFoundationDepth) return 0;
 
         // A level that places itself, directly or through a chain, would otherwise recurse forever.
@@ -673,6 +810,26 @@ public static class Program {
             var sin = MathF.Sin(radians);
             var found = 0;
 
+            // Components by the actor that owns them, for the size pass. A cooked map stores an
+            // actor's components as siblings in the same package with the actor as their Outer, so
+            // this is the only way round to the parts of a Blueprint actor.
+            // Keyed by the owner's NAME: an export's Outer is a ResolvedObject rather than the
+            // UObject itself, and a name is unique within a package, which is all this needs.
+            var componentsByOwner = new Dictionary<string,
+                List<CUE4Parse.UE4.Assets.Exports.Component.StaticMesh.UStaticMeshComponent>>();
+
+            if (paths) {
+                foreach (var export in package.GetExports()) {
+                    if (export is not CUE4Parse.UE4.Assets.Exports.Component.StaticMesh.UStaticMeshComponent smc) continue;
+                    if (smc.Outer?.Name.Text is not { Length: > 0 } owner) continue;
+
+                    if (!componentsByOwner.TryGetValue(owner, out var list))
+                        componentsByOwner[owner] = list = new List<CUE4Parse.UE4.Assets.Exports.Component.StaticMesh.UStaticMeshComponent>();
+
+                    list.Add(smc);
+                }
+            }
+
             foreach (var export in package.GetExports()) {
                 var root = export.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FPackageIndex>("RootComponent", null);
                 var component = root?.Load();
@@ -683,7 +840,19 @@ public static class Program {
                     var worldY = origin.Y + (local.X * sin + local.Y * cos);
                     var worldZ = origin.Z + local.Z;
 
-                    if (verbose) {
+                    if (paths) {
+                        // "FortniteGame/Content/X/Y.umap" -> "/Game/X/Y", then the world object and
+                        // the actor: /Game/X/Y.Y:PersistentLevel.ActorName
+                        var asset = packagePath.Replace("FortniteGame/Content/", "/Game/");
+                        if (asset.EndsWith(".umap", StringComparison.OrdinalIgnoreCase)) asset = asset[..^5];
+                        var leaf = asset[(asset.LastIndexOf('/') + 1)..];
+
+                        var (radiusXY, centerZ, halfZ) = ActorExtent(export.Name, component.Name, componentsByOwner);
+
+                        Console.WriteLine($"{worldX:F0},{worldY:F0},{worldZ:F0}\t{export.ExportType}\t" +
+                                          $"{asset}.{leaf}:PersistentLevel.{export.Name}\t" +
+                                          $"{radiusXY:F0},{centerZ:F0},{halfZ:F0}");
+                    } else if (verbose) {
                         // The actor's OWN yaw composes with the accumulated foundation yaw the same
                         // way its location does. Anything that has to face the way it was placed -
                         // a vehicle, a door - needs this and `spawnpoints` does not carry it.
@@ -714,7 +883,7 @@ public static class Program {
                     // "/Game/..." is the mount point; the provider indexes it as "FortniteGame/Content/...".
                     var sub = world.AssetPathName.Text.Split('.')[0]
                         .Replace("/Game/", "FortniteGame/Content/") + ".umap";
-                    found += WalkLevel(provider, sub, childOrigin, yaw + childYaw, needle, onStack, depth + 1, verbose);
+                    found += WalkLevel(provider, sub, childOrigin, yaw + childYaw, needle, onStack, depth + 1, verbose, paths);
                 }
             }
 
@@ -1604,9 +1773,16 @@ public static class Program {
     }
 
     private static int Props(DefaultFileProvider provider, string[] args) {
-        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader props <objectPath> [name,name,...]"); return 2; }
+        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader props <objectPath> [name,name,...] [-r]"); return 2; }
 
-        var filter = args.Length > 2
+        // -r EXPANDS NESTED STRUCTS instead of printing "FStructFallback", which is what the flat
+        // listing does to every FScalableFloat in the game. That matters more than it sounds: a
+        // projectile's InitialSpeed/MaxSpeed, a weapon's damage, an ability's cost are all
+        // FScalableFloat (a Value plus an optional curve row), so without this the interesting
+        // number is exactly the one you cannot see. Off by default - a CDO expanded in full is
+        // thousands of lines.
+        var recurse = args.Any(a => a is "-r");
+        var filter = args.Length > 2 && args[2] is not "-r"
             ? args[2].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : Array.Empty<string>();
 
@@ -1616,9 +1792,35 @@ public static class Program {
                 var name = prop.Name.Text;
                 if (filter.Length > 0 && !filter.Any(f => name.Contains(f, StringComparison.OrdinalIgnoreCase))) continue;
                 Console.WriteLine($"{name} = {prop.Tag}");
+                if (recurse) PrintNested(prop.Tag, "  ");
             }
         }
 
         return 0;
+    }
+
+    /// <summary>
+    ///     Prints a property's nested contents when it is a struct or an array of them. Depth-capped
+    ///     because object references in a CDO can form cycles.
+    /// </summary>
+    private static void PrintNested(CUE4Parse.UE4.Assets.Objects.Properties.FPropertyTagType? tag, string indent) {
+        if (indent.Length > 12) return;
+
+        switch (tag) {
+            case CUE4Parse.UE4.Assets.Objects.Properties.StructProperty { Value.StructType:
+                     CUE4Parse.UE4.Assets.Objects.FStructFallback fallback }:
+                foreach (var inner in fallback.Properties) {
+                    Console.WriteLine($"{indent}{inner.Name.Text} = {inner.Tag}");
+                    PrintNested(inner.Tag, indent + "  ");
+                }
+                break;
+
+            case CUE4Parse.UE4.Assets.Objects.Properties.ArrayProperty { Value: { } array }:
+                for (var i = 0; i < array.Properties.Count; i++) {
+                    Console.WriteLine($"{indent}[{i}] = {array.Properties[i]}");
+                    PrintNested(array.Properties[i], indent + "  ");
+                }
+                break;
+        }
     }
 }

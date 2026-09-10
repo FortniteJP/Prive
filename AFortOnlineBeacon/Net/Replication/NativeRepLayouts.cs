@@ -2994,10 +2994,23 @@ internal static class NativeRepLayouts {
     ///     SpawnContext (18-19), and AFortProjectileBase's own from 20 (ReplicatedMaxSpeed,
     ///     GravityScale, ChargePercent, SimulationStoppingHit, ResumeSimulationCount, CurrentSkyTube).
     ///
-    ///     Only 16 is real. Everything between it and the actor handles it inherits is Reserved -
-    ///     the client has correct CDO defaults for all of them, and the flight already looks right
-    ///     without a single one being sent, because the client simulates it from the spawn header's
-    ///     velocity. GravityScale (21) is the first candidate if an arc ever looks wrong.
+    ///     16, 17, 20 and 21 are real; the rest stay Reserved, because the client has correct CDO
+    ///     defaults for them and a thrown grenade's flight already looks right without a single one
+    ///     being sent - it simulates that from the spawn header's velocity alone.
+    ///
+    ///     20 AND 21 EXIST FOR PROJECTILES NOBODY THREW. A grenade is spawned at its own Blueprint's
+    ///     authored speed, so the client's UFortProjectileMovementComponent needs telling nothing;
+    ///     the AIR STRIKE's rocket is not. `B_Prj_AppleSauce_Rocket_Athena_C` carries InitialSpeed
+    ///     2000 / MaxSpeed 2250 (AthenaProjectiles rows Rocket_InitialSpeed_Athena and
+    ///     Rocket_MaxSpeed_Athena), and the strike fires it at `Default.AppleSauce.RocketSpeed`,
+    ///     7000 - the real game does that through UFortKismetLibrary::SpawnProjectile's explicit
+    ///     InitialSpeed/GravityScale parameters (read out of FireAirStrikeRocket's bytecode). Those
+    ///     are per-spawn overrides on the SERVER's component, and ReplicatedMaxSpeed/GravityScale -
+    ///     both `Net, Transient, RepNotify` on AFortProjectileBase - are the only channel that tells
+    ///     a client about them. Without 20 the client clamps every rocket to 2250 in
+    ///     UProjectileMovementComponent::LimitVelocity, so it covers 3,900 of the 12,288 units it
+    ///     was given to fall and is still a hundred metres up when the server retires it. That is
+    ///     the whole of "the rockets are not visible": they were never getting down here.
     /// </summary>
     private static readonly FRepPropertyDef[] ProjectileProps = ActorProps.Concat(new FRepPropertyDef[] {
         new() {                                                                   // 16
@@ -3012,8 +3025,16 @@ internal static class NativeRepLayouts {
         },
         Reserved("SpawnContext.Team"),                                            // 18
         Reserved("SpawnContext.Tags"),                                            // 19
-        Reserved("ReplicatedMaxSpeed", ERepPropertyKind.Float),                   // 20
-        Reserved("GravityScale", ERepPropertyKind.Float),                         // 21
+        new() {                                                                   // 20
+            Name = "ReplicatedMaxSpeed",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortProjectileBase) obj).ReplicatedMaxSpeed
+        },
+        new() {                                                                   // 21
+            Name = "GravityScale",
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((AFortProjectileBase) obj).GravityScale
+        },
         Reserved("ChargePercent", ERepPropertyKind.Float),                        // 22
         Reserved("SimulationStoppingHit"),                                        // 23
         Reserved("ResumeSimulationCount", ERepPropertyKind.Int32),                // 24
@@ -3062,12 +3083,30 @@ internal static class NativeRepLayouts {
 
     private static readonly FRepLayout Vehicle = new(VehicleProps);
 
+    /// <summary>
+    ///     A deployed BuildingGameplayActor - a shield bubble, a firework mortar's emplacement.
+    ///
+    ///     ABuildingActor'S OWN HANDLES AND NOT ONE MORE. ABuildingGameplayActor is a SIBLING of
+    ///     ABuildingSMActor, not a descendant (checked in the 10.40 SDK, not assumed), so everything
+    ///     BuildingActorProps carries from handle 38 on - TextureData, MinimalReplicationProxy,
+    ///     BuildingAnimation, the damage cue - belongs to a class these actors are not. Sending one
+    ///     of those handles is what closed the connection when the supply llama was first built with
+    ///     a `Take(37)`; see HandlePrefix for why the cut is by HANDLE and not by entry.
+    ///
+    ///     Nothing is added after the prefix on purpose. A shield bubble's own replicated state is
+    ///     its Blueprint's, and this server sets none of it - the actor exists, at a place, and the
+    ///     client's own class does the rest.
+    /// </summary>
+    private static readonly FRepLayout Deployed = new(HandlePrefix(BuildingActorProps, 37));
+
     public static FRepLayout Get(AActor actor) => actor switch {
         AFortAthenaVehicle => Vehicle,
         // Before ABuildingActor: a container IS one, and the first arm wins.
         ABuildingContainer => BuildingContainer,
         // Likewise - a llama derives from ABuildingActor but has its OWN handles from 38 on.
         AFortAthenaSupplyDropLlama => SupplyDropLlama,
+        // Same fork, same reason: a BuildingGameplayActor is ABuildingSMActor's sibling.
+        AFortDeployedActor => Deployed,
         // Also before ABuildingActor: a spray decal IS one, and adds handles 69-72.
         AFortSprayDecalInstance => SprayDecal,
         ABuildingWall => BuildingWall,

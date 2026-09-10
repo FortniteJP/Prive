@@ -248,35 +248,101 @@ public static class BuildingStructuralSupportSystem {
     ///     grid change has elapsed - see <see cref="_recheckPending"/>.
     /// </summary>
     public static void Tick(float timeSeconds) {
+        // WHERE THE 92 SECONDS WENT. FTickWatchdog named this method and stopped there, which is one
+        // level too coarse to act on: four independent things happen below and only one of them is a
+        // graph algorithm. Times each, with the sizes they ran over, and prints only when the whole
+        // thing crosses the threshold - so it is silent in every normal tick and self-explaining in
+        // the one that is not.
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+
         _lastTickTime = timeSeconds;
 
         // Build-in health ramp. Only pieces actually constructing are in this list, so a settled
         // match pays nothing for it.
+        var constructing = Constructing.Count;
         for (var i = Constructing.Count - 1; i >= 0; i--) {
             if (!Constructing[i].TickConstruction(timeSeconds)) Constructing.RemoveAt(i);
         }
 
+        var constructionMs = timer.Elapsed.TotalMilliseconds;
+
+        var damaged = Damaged.Count;
         for (var i = Damaged.Count - 1; i >= 0; i--) {
             if (!Damaged[i].TickDamageState(timeSeconds)) Damaged.RemoveAt(i);
         }
 
+        var damageMs = timer.Elapsed.TotalMilliseconds;
+
+        var destroyed = 0;
         for (var i = PendingDestroy.Count - 1; i >= 0; i--) {
             if (timeSeconds < PendingDestroy[i].DestroyAt) continue;
 
             var building = PendingDestroy[i].Building;
             PendingDestroy.RemoveAt(i);
             building.Destroy();
+            destroyed++;
         }
 
-        if (!_recheckPending) return;
+        var destroyMs = timer.Elapsed.TotalMilliseconds;
 
-        if (_recheckAt == 0f) _recheckAt = timeSeconds + RecheckDelaySeconds;
-        if (timeSeconds < _recheckAt) return;
+        var recheckRan = false;
 
-        _recheckPending = false;
-        _recheckAt = 0f;
-        RecheckSupport();
+        if (_recheckPending) {
+            if (_recheckAt == 0f) _recheckAt = timeSeconds + RecheckDelaySeconds;
+
+            if (timeSeconds >= _recheckAt) {
+                _recheckPending = false;
+                _recheckAt = 0f;
+                RecheckSupport();
+                recheckRan = true;
+            }
+        }
+
+        ReportIfSlow(timer, constructing, constructionMs, damaged, damageMs, destroyed, destroyMs, recheckRan);
     }
+
+    /// <summary>
+    ///     Prints the breakdown of a slow structural tick, with the SIZES each part ran over.
+    ///
+    ///     The sizes are the point. Every step below is cheap per element and there is no obvious way
+    ///     for any of them to cost tens of seconds, which means the interesting number is not "which
+    ///     step" but "over how many" - a registry or a cell bucket that has grown far past what the
+    ///     player actually built would explain it, and nothing else in this file would.
+    /// </summary>
+    private static void ReportIfSlow(System.Diagnostics.Stopwatch timer,
+                                     int constructing, double constructionMs,
+                                     int damaged, double damageMs,
+                                     int destroyed, double destroyMs,
+                                     bool recheckRan) {
+        var totalMs = timer.Elapsed.TotalMilliseconds;
+        if (totalMs < SlowTickMs) return;
+
+        var cellPieces = 0;
+        var biggestCell = 0;
+        foreach (var cell in Cells.Values) {
+            cellPieces += cell.Count;
+            if (cell.Count > biggestCell) biggestCell = cell.Count;
+        }
+
+        Console.WriteLine($"BuildingStructuralSupportSystem: SLOW TICK {totalMs:F0}ms - " +
+                          $"construction {constructionMs:F0}ms over {constructing}, " +
+                          $"damage {damageMs - constructionMs:F0}ms over {damaged}, " +
+                          $"destroy {destroyMs - damageMs:F0}ms over {destroyed}, " +
+                          $"recheck {(recheckRan ? $"{totalMs - destroyMs:F0}ms" : "did not run")}. " +
+                          $"Registry: {Buildings.Count} piece(s) in {Cells.Count} cell(s) " +
+                          $"({cellPieces} bucket entries, biggest cell {biggestCell}). " +
+                          $"Flood: {_lastFloodSeeds} seed(s), {_lastFloodVisited} visited, " +
+                          $"{_lastFloodNeighbourTests} neighbour test(s).");
+    }
+
+    private static float SlowTickMs =>
+        float.TryParse(Environment.GetEnvironmentVariable("STRUCTURAL_SLOW_MS"), out var ms) && ms > 0f
+            ? ms
+            : 250f;
+
+    private static int _lastFloodSeeds;
+    private static int _lastFloodVisited;
+    private static long _lastFloodNeighbourTests;
 
     /// <summary>
     ///     Full connectivity flood from every ground-touching piece; anything the flood never reaches
@@ -288,6 +354,10 @@ public static class BuildingStructuralSupportSystem {
     ///     that only comes apart once its first layer is gone still resolves - on the next pass.
     /// </summary>
     private static void RecheckSupport() {
+        _lastFloodSeeds = 0;
+        _lastFloodVisited = 0;
+        _lastFloodNeighbourTests = 0;
+
         if (Buildings.Count == 0) return;
 
         var supported = new HashSet<ABuildingActor>();
@@ -297,9 +367,13 @@ public static class BuildingStructuralSupportSystem {
             if (IsSupportedByWorld(b) && supported.Add(b)) queue.Enqueue(b);
         }
 
+        _lastFloodSeeds = queue.Count;
+
         var groundSeeded = new HashSet<ABuildingActor>(supported);
 
         while (queue.Count > 0) {
+            _lastFloodVisited++;
+
             foreach (var neighbor in NeighborsOf(queue.Dequeue())) {
                 if (supported.Add(neighbor)) queue.Enqueue(neighbor);
             }
@@ -536,6 +610,60 @@ public static class BuildingStructuralSupportSystem {
         }
 
         return false;
+    }
+
+    /// <summary>
+    ///     Whether a vertical capsule swept from <paramref name="from" /> to <paramref name="to" />
+    ///     touches this piece - what a shockwave's victim smashes through on their way out.
+    ///
+    ///     Approximated as the piece's own box GROWN by the capsule, which is the standard reduction:
+    ///     sweeping a shape against a box is the same as sweeping a point against the box expanded by
+    ///     that shape's extent. It over-reports only at the box's corners, by at most the capsule
+    ///     radius, and over-reporting here costs a wall that was very nearly in the way.
+    ///
+    ///     The box is the piece's REAL baked bounds wherever the bake knows the class - the same ones
+    ///     the projectile sweep uses - so a doorway is still a wall-sized obstacle here even though
+    ///     bullets pass through it. That is correct for this: you are thrown through the WALL, not
+    ///     through its doorway.
+    ///
+    ///     Takes the piece rather than walking the registry because the caller has a wider population
+    ///     than the structural grid does: map scenery reaches this server as a stand-in built from a
+    ///     client-supplied path and is never registered here (see NativeRpcHandlers.DamageLevelActor).
+    /// </summary>
+    public static bool SweptCapsuleTouches(ABuildingActor piece, FVector from, FVector to,
+                                           float radiusXY, float halfHeightZ) {
+        var (min, max) = BoxOf(piece);
+
+        min = new FVector { X = min.X - radiusXY, Y = min.Y - radiusXY, Z = min.Z - halfHeightZ };
+        max = new FVector { X = max.X + radiusXY, Y = max.Y + radiusXY, Z = max.Z + halfHeightZ };
+
+        // The ordinary slab test, the same one FirstHit runs - a segment misses a box exactly when
+        // the per-axis entry/exit intervals fail to overlap.
+        var d = new[] { to.X - from.X, to.Y - from.Y, to.Z - from.Z };
+        var o = new[] { from.X, from.Y, from.Z };
+        var lo = new[] { min.X, min.Y, min.Z };
+        var hi = new[] { max.X, max.Y, max.Z };
+
+        var enter = 0f;
+        var exit = 1f;
+
+        for (var axis = 0; axis < 3; axis++) {
+            if (MathF.Abs(d[axis]) < 1e-6f) {
+                // Parallel to this slab: inside it for the whole segment, or never.
+                if (o[axis] < lo[axis] || o[axis] > hi[axis]) return false;
+                continue;
+            }
+
+            var t1 = (lo[axis] - o[axis]) / d[axis];
+            var t2 = (hi[axis] - o[axis]) / d[axis];
+            if (t1 > t2) (t1, t2) = (t2, t1);
+
+            enter = MathF.Max(enter, t1);
+            exit = MathF.Min(exit, t2);
+            if (enter > exit) return false;
+        }
+
+        return true;
     }
 
     /// <summary>How many pieces are registered within a radius - a diagnostic, so "nothing was hit" can be told from "nothing was there".</summary>
@@ -775,6 +903,8 @@ public static class BuildingStructuralSupportSystem {
 
             foreach (var other in cell) {
                 if (ReferenceEquals(other, building)) continue;
+
+                _lastFloodNeighbourTests++;
                 if (AreTouching(building, other)) yield return other;
             }
         }

@@ -100,6 +100,8 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // touched again, which quietly broke anything that measures an interval against
         // TimeSeconds - UActorChannel.SafeRetryClientRestart's throttle compared 0 against 0 every
         // time and so fired exactly once, which looked exactly like "the client stopped asking".
+        _watchdog.Begin();
+
         DeltaTimeSeconds = deltaTime;
         TimeSeconds += deltaTime;
         UnpausedTimeSeconds += deltaTime;
@@ -120,65 +122,90 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // BuildingRetestSupportedByWorldDelay) rather than running inline off each destruction.
         // Ahead of the NetDriver below so a cascade's channel closes go out on this same tick.
         BuildingStructuralSupportSystem.Tick(TimeSeconds);
+        _watchdog.Mark("BuildingStructuralSupport");
 
         // Finishes any death that has been started this frame or an earlier one. Ahead of the
         // storm tick so a storm kill is reported on the same tick the damage landed.
         Net.FortDamageSystem.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortDamage");
 
         // Collected pickups still flying to whoever took them - see FortPickupFlightSystem.
         Net.FortPickupFlightSystem.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortPickupFlight");
 
         // WELCOME_MESSAGE resends, so a HUD that is not up yet can be told apart from a channel
         // nobody reads. No-op unless that variable is set - see FortWelcomeMessage.
         Net.FortWelcomeMessage.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortWelcomeMessage");
 
         // Dropped items still in the air, when PICKUP_TOSS_STREAM asks for a toss to be watched
         // rather than solved up front. No-op otherwise - see FortPickupToss.
         Net.FortPickupToss.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortPickupToss");
 
         // Emoji cues waiting for the throw to leave the hand - the montage notify this server cannot
         // run. No-op unless someone is mid-emoji; see FortEmoteSystem.EmojiCueDelay.
         Net.FortEmoteSystem.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortEmote");
 
         // The storm. Off unless SAFEZONE_ENABLED=1 - see FortSafeZoneSystem for why it is opt-in.
         // Placed with the structural tick rather than after the NetDriver so a radius change and the
         // damage it causes go out on the same tick they happen.
         FortSafeZoneSystem.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortSafeZone");
 
         // Floor loot, rolled lazily near players rather than all at match start - see FortFloorLoot
         // for why. On by default (FLOOR_LOOT_ENABLED=0 turns it off); unlike the storm and the bus it
         // cannot strand or kill anyone, it only adds pickups.
         FortFloorLoot.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortFloorLoot");
         FortVehicleSpawns.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortVehicleSpawns");
         FortSupplyLlamas.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortSupplyLlamas");
 
         // One of every throwable on the warmup island, so the grenade effects can actually be
         // tried rather than waited for. WARMUP_THROWABLES=0 turns it off - see FortWarmupThrowables.
         Net.Actors.FortWarmupThrowables.Tick(this, TimeSeconds);
+        _watchdog.Mark("FortWarmupThrowables");
 
         // Prints the ABSENCE of a jump, with everything a jump depends on, until one happens - see
         // Net.JumpDiagnostics for why an absent log line is not good enough.
         Net.JumpDiagnostics.Tick(this, TimeSeconds);
+        _watchdog.Mark("JumpDiagnostics");
 
         // The running verdict on the baked height map, measured against where players actually
         // stand. Silent unless TERRAIN_GROUNDTRUTH names a file.
         Net.TerrainGroundTruth.Tick(TimeSeconds);
+        _watchdog.Mark("TerrainGroundTruth");
 
         // Diagnostic only, off unless HEALTH_DEBUG_RAMP=1 - see FortDamageSystem.DebugRamp for the
         // question it answers.
         FortDamageSystem.DebugRamp(this, TimeSeconds);
+        _watchdog.Mark("DebugRamp");
 
         // Warmup -> Aircraft. Nothing happens until the first player joins and starts the clock.
         _AuthorityGameMode?.TickPhases(this, TimeSeconds);
+        _watchdog.Mark("TickPhases");
 
         if (NetDriver != null) {
             NetDriver.TickDispatch(deltaTime);
             NetDriver.PostTickDispatch();
-            
+            _watchdog.Mark("NetDriver.TickDispatch");
+
             NetDriver.TickFlush(deltaTime);
             NetDriver.PostTickFlush();
+            _watchdog.Mark("NetDriver.TickFlush");
         }
+
+        // LAST, and it prints only when this tick was slow. A stalled tick sends the client nothing
+        // at all - keepalives go out from inside NetDriver.TickFlush above - so a freeze here and a
+        // client timeout are the same event seen from two sides. See FTickWatchdog.
+        _watchdog.End();
     }
+
+    /// <summary>Times each phase of the tick, and names the slow one. See FTickWatchdog.</summary>
+    private readonly FTickWatchdog _watchdog = new();
 
     private float _nextServerTimeUpdate;
 

@@ -20,20 +20,21 @@ internal enum EGrenadeEffect { None, Knockback, Dance, Chill, Gas, Smoke, Sticky
 internal static partial class FortGrenadeEffects {
     private static readonly (string Item, EGrenadeEffect Kind, float Radius, float LaunchVelocity,
                              float AddToZ, float Duration, float Period, float HitDelay,
+                             float DestroyDistance,
                              bool FriendlyFire, bool Damages, bool FallDamage)[] Rows = {
         // Impulse Grenade - lands, waits half a second, throws everyone. No damage at all.
-        ("Athena_KnockGrenade", EGrenadeEffect.Knockback, 500f, 2500f, 50f, 0f, 0f, 0.5f, true, false, true),
+        ("Athena_KnockGrenade", EGrenadeEffect.Knockback, 500f, 2500f, 50f, 0f, 0f, 0.5f, 0f, true, false, true),
         // Shockwave Grenade - the same but harder (3800), and nobody takes fall damage afterwards.
-        ("Athena_ShockGrenade", EGrenadeEffect.Knockback, 500f, 3800f, 0f, 0f, 0f, 0.5f, true, false, false),
+        ("Athena_ShockGrenade", EGrenadeEffect.Knockback, 500f, 3800f, 50f, 0f, 0f, 0.5f, 1400f, true, false, false),
         // Boogie Bomb - no damage; everyone in range dances for five seconds.
-        ("Athena_DanceGrenade", EGrenadeEffect.Dance, 0f, 0f, 0f, 5f, 0f, 0f, true, false, true),
+        ("Athena_DanceGrenade", EGrenadeEffect.Dance, 0f, 0f, 0f, 5f, 0f, 0f, 0f, true, false, true),
         // Chiller - a small launch plus slippery feet.
-        ("Athena_IceGrenade", EGrenadeEffect.Chill, 500f, 1500f, 0f, 7f, 0f, 0.5f, true, false, true),
+        ("Athena_IceGrenade", EGrenadeEffect.Chill, 500f, 1500f, 0f, 7f, 0f, 0.5f, 0f, true, false, true),
         // Stink Bomb - the blast does nothing; the CLOUD is what damages, every half second.
-        ("Athena_GasGrenade", EGrenadeEffect.Gas, 512f, 0f, 0f, 9f, 0.5f, 0f, true, false, true),
+        ("Athena_GasGrenade", EGrenadeEffect.Gas, 512f, 0f, 0f, 9f, 0.5f, 0f, 0f, true, false, true),
         // Smoke Grenade - cover, and nothing else. Lifetime is its own row rather than a Duration.
-        ("Athena_SmokeGrenade", EGrenadeEffect.Smoke, 0f, 0f, 0f, 20f, 0f, 0f, true, false, true),
+        ("Athena_SmokeGrenade", EGrenadeEffect.Smoke, 0f, 0f, 0f, 20f, 0f, 0f, 0f, true, false, true),
         // Clinger - sticks where it lands and goes off 2.5s later, for real damage.
-        ("Athena_StickyGrenade", EGrenadeEffect.Sticky, 0f, 0f, 0f, 0f, 0f, 2.5f, true, true, true),
+        ("Athena_StickyGrenade", EGrenadeEffect.Sticky, 0f, 0f, 0f, 0f, 0f, 2.5f, 0f, true, true, true),
     };
 }

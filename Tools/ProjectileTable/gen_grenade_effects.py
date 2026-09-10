@@ -67,10 +67,25 @@ for item, kind, family, damages, note in FAMILIES:
                    row("%s.GasDuration" % family,
                        row("%sLifetime" % family)))          # SmokeGrenadeLifetime has no dot
 
+    # HOW FAR THE THROWN PLAYER SMASHES THROUGH BUILDINGS, and only the shockwave does it: it is the
+    # only projectile Blueprint carrying a ShouldDestroy/DestroyDistance pair at all
+    # (B_Prj_Athena_KnockGrenade has neither), which is the difference between an impulse grenade
+    # throwing you INTO a wall and a shockwave throwing you THROUGH it. Folded into one number here -
+    # a distance of 0 means "no" - because ShouldDestroyStructure is a bool wearing a float's clothes
+    # and nothing ever reads it on its own.
+    should_destroy = row("%s.ShouldDestroyStructure" % family)
+
     rows.append((item, kind, note, damages, {
+        "DestroyDistance": row("%s.DestructionDistance" % family) if should_destroy > 0 else 0.0,
         "Radius": row("%s.Radius" % family, row("%s.FXRadius" % family, 0.0)),
         "LaunchVelocity": row("%s.LaunchVelocity" % family),
-        "AddToZBeforeLaunch": row("%s.AddToZBeforeLaunch" % family),
+        # THE SHOCKWAVE HAS NO SUCH ROW and does not need one: its own projectile Blueprint adds a
+        # LITERAL 50 in the graph (`Add_FloatFloat(v.Z, 50)`, read out of the bytecode of
+        # B_Prj_Athena_ShockGrenade), where the impulse grenade next door reads
+        # `Default.KnockGrenade.AddToZBeforeLaunch` from this table - which is also 50. Taking the
+        # missing row as 0 made the shockwave the ONE launcher without it.
+        "AddToZBeforeLaunch": row("%s.AddToZBeforeLaunch" % family,
+                                  50.0 if family == "ShockwaveGrenade" else 0.0),
         "Duration": duration,
         "Period": row("%s.DamagePeriod" % family),
         "HitDelay": row("%s.OnHitExplodeDelay" % family),
@@ -102,13 +117,14 @@ with io.open(out, "w", encoding="utf-8-sig", newline="\r\n") as f:
     w("internal static partial class FortGrenadeEffects {\n")
     w("    private static readonly (string Item, EGrenadeEffect Kind, float Radius, float LaunchVelocity,\n")
     w("                             float AddToZ, float Duration, float Period, float HitDelay,\n")
+    w("                             float DestroyDistance,\n")
     w("                             bool FriendlyFire, bool Damages, bool FallDamage)[] Rows = {\n")
 
     for item, kind, note, damages, v in rows:
         w("        // %s\n" % note)
-        w('        ("%s", EGrenadeEffect.%s, %gf, %gf, %gf, %gf, %gf, %gf, %s, %s, %s),\n'
+        w('        ("%s", EGrenadeEffect.%s, %gf, %gf, %gf, %gf, %gf, %gf, %gf, %s, %s, %s),\n'
           % (item, kind, v["Radius"], v["LaunchVelocity"], v["AddToZBeforeLaunch"],
-             v["Duration"], v["Period"], v["HitDelay"],
+             v["Duration"], v["Period"], v["HitDelay"], v["DestroyDistance"],
              "true" if v["FriendlyFire"] >= 0.5 else "false",
              "true" if damages else "false",
              "true" if v["FallDamage"] >= 0.5 else "false"))
@@ -118,5 +134,5 @@ with io.open(out, "w", encoding="utf-8-sig", newline="\r\n") as f:
 
 print("wrote %d grenade effect(s) to %s" % (len(rows), out))
 for item, kind, note, damages, v in rows:
-    print("  %-22s %-9s radius=%-6g launch=%-6g duration=%-5g period=%-4g hitDelay=%-4g damages=%s"
-          % (item, kind, v["Radius"], v["LaunchVelocity"], v["Duration"], v["Period"], v["HitDelay"], damages))
+    print("  %-22s %-9s radius=%-6g launch=%-6g duration=%-5g period=%-4g hitDelay=%-4g destroy=%-6g damages=%s"
+          % (item, kind, v["Radius"], v["LaunchVelocity"], v["Duration"], v["Period"], v["HitDelay"], v["DestroyDistance"], damages))

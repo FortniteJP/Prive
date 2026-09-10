@@ -605,6 +605,51 @@ internal static class FFastArraySerializerWriter {
     }
 
     /// <summary>
+    ///     One FActiveGameplayCue - an element of UAbilitySystemComponent::ActiveGameplayCues, and
+    ///     what keeps a LOOPING gameplay cue alive on every client that can see this actor.
+    ///
+    ///     Three replicated members, each of them a struct with its own native NetSerialize, so each
+    ///     is one atomic leaf rather than something RepLayout recurses into:
+    ///
+    ///         GameplayCueTag  14-bit net index          (FGameplayTag::NetSerialize)
+    ///         PredictionKey   conditional, empty here   (FPredictionKey::NetSerialize)
+    ///         Parameters      12 rep bits + 2 empty containers + the flagged members
+    ///
+    ///     bPredictivelyRemoved is UPROPERTY(NotReplicated) and never on the wire - it is the
+    ///     client's own note that it already ran the Removed event predictively.
+    /// </summary>
+    public static void WriteActiveGameplayCue(FNetBitWriter payload, FActiveGameplayCue cue) {
+        FGameplayTypes.WriteTag(payload, cue.GameplayCueTag);
+        FPredictionKey.Write(payload, cue.PredictionKey);
+        FGameplayTypes.WriteCueParameters(payload, (UPackageMapClient) payload.PackageMap!,
+                                          cue.SourceObject, cue.Location);
+    }
+
+    /// <summary>
+    ///     One FActiveGameplayCue, delta-struct format. Handles:
+    ///
+    ///         1  GameplayCueTag  FGameplayTag            (atomic - has a NetSerializer)
+    ///         2  PredictionKey   FPredictionKey          (atomic)
+    ///         3  Parameters      FGameplayCueParameters  (atomic)
+    ///
+    ///     THE STRUCT FORMAT IS NOT OPTIONAL FOR THIS ARRAY. The reference 10.40 client takes the
+    ///     delta-struct path for ActiveGameplayCue 18,193 times in one session - more than for
+    ///     GameplayAbilitySpec or ActiveGameplayEffect - so writing the plain format here would be
+    ///     read as struct and corrupt the item. See the class doc on the latch.
+    /// </summary>
+    public static void WriteActiveGameplayCueDeltaStruct(FNetBitWriter payload, FActiveGameplayCue cue) {
+        WriteHandle(payload, 1);
+        FGameplayTypes.WriteTag(payload, cue.GameplayCueTag);
+
+        WriteHandle(payload, 2);
+        FPredictionKey.Write(payload, cue.PredictionKey);
+
+        WriteHandle(payload, 3);
+        FGameplayTypes.WriteCueParameters(payload, (UPackageMapClient) payload.PackageMap!,
+                                          cue.SourceObject, cue.Location);
+    }
+
+    /// <summary>
     ///     One FFortItemEntry, delta-struct format. Handles:
     ///
     ///          1  Count                     int32

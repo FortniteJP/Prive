@@ -77,6 +77,35 @@ public class AFortProjectileBase : AActor {
     public bool bIsBeingKilled { get; set; }
 
     /// <summary>
+    ///     AFortProjectileBase::ReplicatedMaxSpeed - wire handle 20, and the only way to tell a
+    ///     client that THIS projectile is faster than its Blueprint says.
+    ///
+    ///     A thrown grenade never needs it: it flies at the speed its own asset authored, so the
+    ///     client's UFortProjectileMovementComponent already agrees. The air strike's rocket does.
+    ///     `B_Prj_AppleSauce_Rocket_Athena_C` carries InitialSpeed 2000 and MaxSpeed 2250 (the
+    ///     AthenaProjectiles rows `Rocket_InitialSpeed_Athena` / `Rocket_MaxSpeed_Athena`), while
+    ///     the strike fires it at `Default.AppleSauce.RocketSpeed` = 7000. Real Fortnite applies
+    ///     that as a per-spawn override - FireAirStrikeRocket passes InitialSpeed and GravityScale
+    ///     straight into UFortKismetLibrary::SpawnProjectile - and this field, `Net, Transient,
+    ///     RepNotify` with an OnRep of its own, is how the client is let in on it.
+    ///
+    ///     Zero means "no override", which is why it is not simply the speed: a projectile that
+    ///     never sets it must not have its Blueprint's own MaxSpeed overwritten with 0.
+    /// </summary>
+    public float ReplicatedMaxSpeed { get; set; }
+
+    /// <summary>
+    ///     AFortProjectileBase::GravityScale - wire handle 21, ReplicatedMaxSpeed's sibling and the
+    ///     other half of SpawnProjectile's per-spawn override pair.
+    ///
+    ///     Left at zero for everything this server spawns so far, which is also the air strike's
+    ///     correct value: the rocket's own ProjectileMovementComponent already authors
+    ///     ProjectileGravityScale 0, so its fall is a straight line and the flight time is simply
+    ///     height over speed.
+    /// </summary>
+    public float GravityScale { get; set; }
+
+    /// <summary>
     ///     When the fuse runs out, in world seconds. FuseTime is read from the projectile Blueprint
     ///     (B_Prj_Athena_Grenade_Base carries 2.75), not chosen here.
     /// </summary>

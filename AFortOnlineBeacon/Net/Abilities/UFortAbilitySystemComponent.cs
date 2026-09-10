@@ -108,6 +108,60 @@ public class UFortAbilitySystemComponent : UObject {
     }
 
     /// <summary>
+    ///     UAbilitySystemComponent::ActiveGameplayCues - the third fast array on this component, and
+    ///     the only cue channel that can be turned OFF again.
+    ///
+    ///     A cue sent through NetMulticast_InvokeGameplayCueExecuted_WithParams is a one-shot; a
+    ///     LOOPING notify needs an element to exist here for as long as the effect should last, and
+    ///     stops when that element goes away. See FActiveGameplayCue for the whole lifecycle and for
+    ///     why this array rather than MinimalReplicationGameplayCues.
+    /// </summary>
+    public FFastArraySerializer<FActiveGameplayCue> ActiveGameplayCues { get; } = new();
+
+    /// <summary>
+    ///     UAbilitySystemComponent::AddGameplayCue_Internal's authority branch, minus the RPC - the
+    ///     caller sends that, because only the channel knows how (see
+    ///     UActorChannel.SendNetMulticastInvokeGameplayCueAddedWithParams).
+    ///
+    ///     Adding the SAME tag twice is refused rather than stacked. Real UE does allow duplicates
+    ///     here and leans on RemoveCue deleting only the first match, but this server has exactly one
+    ///     producer of continuous cues and a second copy of an aura is a leak with no way back:
+    ///     nothing would remove the extra element.
+    /// </summary>
+    public bool AddGameplayCue(string cueTagName, UObject? sourceObject = null, FVector? location = null) {
+        if (HasGameplayCue(cueTagName)) return false;
+
+        ActiveGameplayCues.Add(new FActiveGameplayCue {
+            GameplayCueTag = cueTagName, SourceObject = sourceObject, Location = location
+        });
+
+        Console.WriteLine($"UFortAbilitySystemComponent.AddGameplayCue: {cueTagName} - now " +
+                          $"{ActiveGameplayCues.Count} active cue(s)");
+        return true;
+    }
+
+    /// <summary>
+    ///     FActiveGameplayCueContainer::RemoveCue - and the whole point of the array. Removing the
+    ///     element is what makes the client run PreReplicatedRemove and therefore the notify's
+    ///     Removed event; there is no RPC that can say this.
+    /// </summary>
+    public bool RemoveGameplayCue(string cueTagName) {
+        var cue = ActiveGameplayCues.Items.FirstOrDefault(
+            item => item.GameplayCueTag.Equals(cueTagName, StringComparison.OrdinalIgnoreCase));
+
+        if (cue == null) return false;
+
+        ActiveGameplayCues.Remove(cue);
+
+        Console.WriteLine($"UFortAbilitySystemComponent.RemoveGameplayCue: {cueTagName} - now " +
+                          $"{ActiveGameplayCues.Count} active cue(s)");
+        return true;
+    }
+
+    public bool HasGameplayCue(string cueTagName) =>
+        ActiveGameplayCues.Items.Any(item => item.GameplayCueTag.Equals(cueTagName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     ///     UAbilitySystemComponent::SpawnedAttributes - wire handle 4, and the reason a player could
     ///     only crawl. Fortnite reads walk speed through the ASC
     ///     (GetNumericAttribute -> GetAttributeSubobject), which searches THIS array; an empty one

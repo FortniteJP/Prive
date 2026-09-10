@@ -964,6 +964,14 @@ public class APawn : AActor {
     public const byte PackedMovementModeWalking = 1;
 
     /// <summary>
+    ///     EMovementMode::MOVE_Falling, packed - plain 3, by the same rule as
+    ///     <see cref="PackedMovementModeWalking" />. What a LAUNCH has to put the client into: an
+    ///     upward velocity handed to a character that still thinks it is Walking is projected onto
+    ///     the floor it is standing on and lost, which is the whole of "the upward impact is weak".
+    /// </summary>
+    public const byte PackedMovementModeFalling = 3;
+
+    /// <summary>
     ///     Asks for a movement-mode correction on the next update - see
     ///     <see cref="PendingMovementModeCorrection" />.
     /// </summary>
@@ -975,6 +983,63 @@ public class APawn : AActor {
         PendingMovementModeCorrection = null;
         return mode;
     }
+
+    /// <summary>
+    ///     The velocity this pawn is being LAUNCHED at - a shockwave or impulse grenade's throw -
+    ///     waiting for the next correction to carry it. Null when there is none, which is nearly
+    ///     always.
+    ///
+    ///     WHY A CORRECTION AND NOT PushMomentum, which is what this used to be and what the name
+    ///     promises. `AFortPawn::OnRep_PushMomentum` was disassembled out of the client
+    ///     (0x1419347C0) and it writes exactly two floats:
+    ///
+    ///         CharacterMovement->Velocity.X = PushMomentum.X;      // [cmc+0xC4]
+    ///         CharacterMovement->Velocity.Y = PushMomentum.Y;      // [cmc+0xC8]
+    ///         CharacterMovement->AddInputVector(PushMomentum.GetSafeNormal(), true);   // slot 0x548
+    ///
+    ///     **Velocity.Z (+0xCC) is never touched.** So PushMomentum cannot lift anybody, at any
+    ///     magnitude - it is a horizontal shove by construction, and no Z this server sends in it
+    ///     will ever arrive. (UMovementComponent::Velocity is at 0xC4 per the 10.40 SDK; slots 0x548
+    ///     AddInputVector and 0x400 StopActiveMovement were identified from the exec thunks of those
+    ///     same UFUNCTIONs, which call through the vtable at exactly those offsets.)
+    ///
+    ///     The real game does not use PushMomentum here either. Both grenade projectiles
+    ///     (`B_Prj_Athena_ShockGrenade`, `B_Prj_Athena_KnockGrenade`) call **LaunchCharacter** on the
+    ///     server, and on a dedicated server that reaches the owning client one way only: a movement
+    ///     correction carrying NewVelocity and ServerMovementMode. See
+    ///     UActorChannel.SendMovementCorrection.
+    /// </summary>
+    public FVector? PendingLaunchVelocity { get; private set; }
+
+    /// <summary>
+    ///     Launch this pawn on the next correction. Sets the movement mode too, because the two are
+    ///     inseparable: ClientAdjustPosition applies `Velocity = NewVelocity` and
+    ///     `ApplyNetworkMovementMode(mode)` in that order, and a walking character's next floor
+    ///     check would eat the upward half before it ever moved.
+    /// </summary>
+    public void RequestLaunch(FVector velocity) {
+        PendingLaunchVelocity = velocity;
+        RequestMovementModeCorrection(PackedMovementModeFalling);
+    }
+
+    /// <summary>Consumes the pending launch - one request, one launch.</summary>
+    public FVector? TakeLaunchVelocity() {
+        var velocity = PendingLaunchVelocity;
+        PendingLaunchVelocity = null;
+        return velocity;
+    }
+
+    /// <summary>
+    ///     Whether <see cref="AActor.GetActorLocation" /> is a position the client itself reported
+    ///     just now, rather than a stale one from before it boarded something.
+    ///
+    ///     A correction TELEPORTS without a collision sweep, so naming a stale position is worse
+    ///     than sending nothing at all. Half a second is about three metres at a sprint.
+    /// </summary>
+    public bool HasFreshUnbasedLocation =>
+        (GetWorld()?.TimeSeconds ?? 0f) - LastUnbasedMoveTime <= FreshLocationSeconds;
+
+    private const float FreshLocationSeconds = 0.5f;
 
     private int _exitReportMovesLeft;
 
