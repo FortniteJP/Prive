@@ -99,6 +99,8 @@ public sealed class FRepLayout {
                 return def.GetFloatValue == null ? NotComparable : def.GetFloatValue(instance);
             case ERepPropertyKind.String:
                 return def.GetStringValue == null ? NotComparable : def.GetStringValue(instance);
+            case ERepPropertyKind.MinimalTagCountMap:
+                return def.GetTagListValue == null ? NotComparable : string.Join('|', def.GetTagListValue(instance));
             case ERepPropertyKind.Name:
                 return def.GetNameValue == null ? NotComparable : def.GetNameValue(instance).ToString();
             case ERepPropertyKind.NetId:
@@ -341,7 +343,22 @@ public sealed class FRepLayout {
     }
 
     /// <summary>One leaf's VALUE, with its handle already written.</summary>
+    /// <summary>FMinimalReplicationTagCountMap's count width - UAbilitySystemGlobals::MinimalReplicationTagCountBits.</summary>
+    private const int MinimalReplicationTagCountBits = 5;
+
     private static unsafe void WriteLeafValue(FNetBitWriter payload, object instance, FRepPropertyDef def) {
+        if (def.Kind == ERepPropertyKind.MinimalTagCountMap) {
+            if (def.GetTagListValue == null) {
+                throw new InvalidOperationException($"FRepLayout: '{def.Name}' has no tag-list serializer yet, can't be in a changed set.");
+            }
+
+            var tags = def.GetTagListValue(instance);
+            var count = (uint) Math.Min(tags.Count, (1 << MinimalReplicationTagCountBits) - 1);
+            payload.SerializeBits(&count, MinimalReplicationTagCountBits);
+            for (var i = 0; i < count; i++) FGameplayTypes.WriteTag(payload, tags[i]);
+            return;
+        }
+
         if (def.Kind == ERepPropertyKind.ObjectRef) {
             if (def.GetObjectValue == null) {
                 throw new InvalidOperationException($"FRepLayout: '{def.Name}' has no object value serializer yet, can't be in a changed set.");

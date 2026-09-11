@@ -155,6 +155,21 @@ public class UActorChannel : UChannel {
     ///     Instigator because its BeginPlay reads the wearer off it, and its attachment because that is
     ///     how it follows the wearer at all.
     /// </summary>
+    /// <summary>The handles only some trap Blueprints have - 74/75 on the launch pad, 74 on the campfire.</summary>
+    private static HashSet<string> WithTrapExtras(ABuildingTrap trap, HashSet<string> names) {
+        switch (trap.Kind) {
+            case ETrapKind.LaunchPad:
+                names.Add("ServerLaunchInfo.LaunchServerTime");
+                names.Add("ServerLaunchInfo.LaunchedPawn");
+                break;
+            case ETrapKind.Campfire:
+                names.Add("IsActive");
+                break;
+        }
+
+        return names;
+    }
+
     private static HashSet<string> WithContextTrap(AFortDecoTool tool, HashSet<string> names) {
         if (tool.ContextTrapItemDefinition != null) names.Add("ContextTrapItemDefinition");
         return names;
@@ -513,6 +528,8 @@ public class UActorChannel : UChannel {
             // Handles 103, 104 and 106 - the descent. All three have their own OnRep, which is what
             // makes them the ones the animation is actually driven by.
             "bIsSkydiving", "bIsParachuteOpen", "bIsSkydivingFromBus",
+            // Handle 107 - the launch pad's version of the same fact. See APawn.
+            "bIsSkydivingFromLaunchPad",
             // Handle 145. Without it the client dereferences a null glider a second into the
             // skydive - see APawn.CosmeticGlider.
             "CosmeticLoadout.Glider",
@@ -636,9 +653,9 @@ public class UActorChannel : UChannel {
         // animation and health proxy are a player-built piece's, and a trap has no build-in. What it
         // is (69), what it sits on (71) and its level (72), plus the two flags every placed piece
         // carries. See ABuildingTrap.
-        ABuildingTrap => new HashSet<string> {
+        ABuildingTrap trap => WithBuildingAttributeSet(trap, WithTrapExtras(trap, new HashSet<string> {
             "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced", "TrapData", "AttachedTo", "TrapLevel"
-        },
+        })),
         ABuildingActor placedBuilding => WithDoorProperties(placedBuilding,
             WithBuildingAttributeSet(placedBuilding, new HashSet<string> {
             "RemoteRole", "Role", "HealthBarIndicatorDifficultyRating",
@@ -707,7 +724,10 @@ public class UActorChannel : UChannel {
     ///     sources of health" for "one dangling pointer", which is not obviously better.
     /// </summary>
     private static HashSet<string> WithBuildingAttributeSet(ABuildingActor building, HashSet<string> properties) {
-        if (building.bPlayerPlaced && building.WorldOptions.Get("BUILDING_ATTR_SET") != "1") {
+        // A TRAP ALWAYS GETS THEM: the PBWA reasoning below does not apply (a trap's health is not
+        // carried by MinimalReplicationProxy), and without 19/20 the client never initialises the
+        // trap's ability side - see ABuildingActor.EnsureAbilitySystemComponent.
+        if (building.bPlayerPlaced && building is not ABuildingTrap && building.WorldOptions.Get("BUILDING_ATTR_SET") != "1") {
             return properties;
         }
 
@@ -1683,7 +1703,8 @@ public class UActorChannel : UChannel {
         var layout = NativeRepLayouts.AbilitySystemComponent;
         var changed = fastArraysOnly
             ? new List<(string Name, object? Value)>()
-            : layout.CompareProperties(asc, AbilitySystemProperties, _ascShadowState);
+            : layout.CompareProperties(asc, asc.bMinimalTagsEverSet ? AbilitySystemPropertiesWithTags : AbilitySystemProperties,
+                                       _ascShadowState);
         var changedNames = changed.Select(entry => entry.Name).ToHashSet();
 
         if (changedNames.Count > 0) layout.WriteChangedProperties(payload, asc, changedNames);
@@ -1974,7 +1995,7 @@ public class UActorChannel : UChannel {
         // stairs, so NONE of them was ever damaged, and "no health traffic" there is as consistent
         // with "nothing to send" as with "never sent". BUILDING_ATTR_SET=1 restores the old
         // behaviour for a side-by-side, which is the only way to settle it.
-        if (buildingActor.bPlayerPlaced && WorldOptions.Get("BUILDING_ATTR_SET") != "1") {
+        if (buildingActor.bPlayerPlaced && buildingActor is not ABuildingTrap && WorldOptions.Get("BUILDING_ATTR_SET") != "1") {
             return false;
         }
 
@@ -2032,7 +2053,8 @@ public class UActorChannel : UChannel {
         if (Connection == null || Actor is not APlayerState { MovementSet: { } movementSet }) return false;
 
         var layout = NativeRepLayouts.MovementSet;
-        var changed = layout.CompareProperties(movementSet, MovementSetProperties, _movementSetShadowState);
+        var candidates = movementSet.bGravityZScaleEverChanged ? MovementSetPropertiesWithGravity : MovementSetProperties;
+        var changed = layout.CompareProperties(movementSet, candidates, _movementSetShadowState);
         if (changed.Count == 0) return false;
 
         var changedNames = changed.Select(entry => entry.Name).ToHashSet();
@@ -2075,6 +2097,10 @@ public class UActorChannel : UChannel {
         "BackwardSpeedMultiplier.BaseValue", "BackwardSpeedMultiplier.CurrentValue",
         "SpeedMultiplier.BaseValue", "SpeedMultiplier.CurrentValue"
     };
+
+    /// <summary>The same set plus GravityZScale (73/74), once a low-gravity effect has touched it.</summary>
+    private static readonly HashSet<string> MovementSetPropertiesWithGravity =
+        new(MovementSetProperties) { "GravityZScale.BaseValue", "GravityZScale.CurrentValue" };
 
     private readonly Dictionary<string, object?> _movementSetShadowState = new();
 
@@ -2195,6 +2221,10 @@ public class UActorChannel : UChannel {
     private static readonly HashSet<string> AbilitySystemProperties = new() {
         "SpawnedAttributes", "OwnerActor", "AvatarActor"
     };
+
+    /// <summary>The same, plus MinimalReplicationTags (28) - only on a component that has used it.</summary>
+    private static readonly HashSet<string> AbilitySystemPropertiesWithTags =
+        new(AbilitySystemProperties) { "MinimalReplicationTags" };
 
     /// <summary>The component's own shadow buffer, kept apart from the actor's.</summary>
     private readonly Dictionary<string, object?> _ascShadowState = new();
@@ -3610,6 +3640,37 @@ public class UActorChannel : UChannel {
     ///     why only the FIRST ServerTryActivateAbility ever arrived: it predicts, waits, and does
     ///     not ask again.
     /// </summary>
+    /// <summary>
+    ///     UAbilitySystemComponent::NetMulticast_InvokeGameplayCueExecuted_WithParams, on the
+    ///     COMPONENT - for an actor that is its own ASC's avatar and is not a pawn, so has no
+    ///     replication proxy to route it through (a placed trap). Same three parameters and the same
+    ///     encoding as the pawn-proxy sender. On arrival the client's ASC hands it to its avatar's
+    ///     IGameplayCueInterface, which is what runs a Blueprint's `GameplayCue.X.Y` event.
+    /// </summary>
+    public void SendAbilitySystemCueExecuted(UObject abilitySystem, string cueTagName, FVector? location = null) =>
+        SendAbilitySystemCue(abilitySystem, cueTagName, added: false, location);
+
+    /// <summary>
+    ///     The same, as either event: <paramref name="added"/> sends
+    ///     NetMulticast_InvokeGameplayCueAdded_WithParams, which the client runs as OnActive (0)
+    ///     instead of Executed (2). A trap's own cue handler cares which - see FortTrapSystem's reload
+    ///     cues.
+    /// </summary>
+    public void SendAbilitySystemCue(UObject abilitySystem, string cueTagName, bool added, FVector? location = null) =>
+        SendSubObjectRpc(abilitySystem, NativeClassNetCache.FortAbilitySystemComponentCache,
+            added ? "NetMulticast_InvokeGameplayCueAdded_WithParams" : "NetMulticast_InvokeGameplayCueExecuted_WithParams",
+            writer => {
+                var packageMap = (UPackageMapClient) writer.PackageMap!;
+
+                writer.WriteBit(true);                  // GameplayCueTag
+                FGameplayTypes.WriteTag(writer, cueTagName);
+
+                writer.WriteBit(false);                 // PredictionKey: default
+
+                writer.WriteBit(true);                  // GameplayCueParameters
+                FGameplayTypes.WriteCueParameters(writer, packageMap, null, location);
+            });
+
     public void SendClientActivateAbilitySucceed(UObject abilitySystem, int abilityHandle, FPredictionKey predictionKey) =>
         SendSubObjectRpc(abilitySystem, NativeClassNetCache.FortAbilitySystemComponentCache,
             "ClientActivateAbilitySucceed", writer => {
@@ -3685,7 +3746,17 @@ public class UActorChannel : UChannel {
                 writer.WriteInt32(abilityHandle);
 
                 writer.WriteBit(true);              // ActivationInfo present
-                writer.WriteByte(3);                // EGameplayAbilityActivationMode::Confirmed
+
+                // EGameplayAbilityActivationMode::Confirmed in THREE bits, not a byte. ActivationMode
+                // is a TEnumAsByte, i.e. a UByteProperty with an Enum, and UByteProperty::
+                // NetSerializeItem writes CeilLogTwo(GetMaxEnumValue()) bits - MAX is 5, so 3. The
+                // byte this used to write left five bits over, and every ClientEndAbility this server
+                // ever sent was dropped by the client as
+                //     LogNet: Error: ReceivedRPC: ReceivePropertiesForRPC - Mismatch read.
+                //             Function: ClientEndAbility
+                // which is the "did not free the ability in testing" FortProjectileSystem works around.
+                var mode = new byte[] { 3 };
+                writer.SerializeBits(mode, 3);
                 writer.WriteBit(false);             // bCanBeEndedByOtherInstance
                 FPredictionKey.Write(writer, predictionKey);
             });

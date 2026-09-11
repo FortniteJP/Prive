@@ -225,7 +225,18 @@ public enum ERepPropertyKind {
     ///     replicated members, including the ones with no getter: they are what makes the divisor
     ///     right. A missing child does not lose a member, it corrupts every element after the first.
     /// </summary>
-    StructArray
+    StructArray,
+
+    /// <summary>
+    ///     UAbilitySystemComponent::MinimalReplicationTags - an FMinimalReplicationTagCountMap, a
+    ///     native NetSerialize (GameplayEffectTypes.cpp:1031): the tag COUNT in
+    ///     MinimalReplicationTagCountBits bits (5 - the 4.23 default; Fortnite's DefaultGame.ini does
+    ///     not override it), then each tag's own NetSerialize. The receiver resets every tag it knew
+    ///     to 0, sets each one on the wire to 1 and calls Owner->SetTagMapCount for all of them - so
+    ///     a tag DROPPING OUT of the list is a count going to zero, which fires the ASC's
+    ///     RegisterGameplayTagEvent delegates. That is what a trap's reload and arm events hang off.
+    /// </summary>
+    MinimalTagCountMap
 }
 
 /// <summary>
@@ -282,6 +293,9 @@ public sealed class FRepPropertyDef {
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.Rotator"/>.</summary>
     public Func<object, FRotator>? GetRotatorValue { get; init; }
 
+    /// <summary>For <see cref="ERepPropertyKind.MinimalTagCountMap"/>: the tag names currently present.</summary>
+    public Func<object, IReadOnlyList<string>>? GetTagListValue { get; init; }
+
     /// <summary>Only meaningful for <see cref="ERepPropertyKind.ByteEnum"/> - the enum's highest raw value (e.g. ENetRole.ROLE_MAX=4), matching UByteProperty::NetSerializeItem's CeilLogTwo(Enum-&gt;GetMaxEnumValue()).</summary>
     public int EnumMaxValue { get; init; }
 
@@ -317,6 +331,7 @@ public sealed class FRepPropertyDef {
         ERepPropertyKind.StructArray => GetStructArrayValue != null,
         ERepPropertyKind.Rotator => GetRotatorValue != null,
         ERepPropertyKind.RepMovement => GetRepMovementValue != null,
+        ERepPropertyKind.MinimalTagCountMap => GetTagListValue != null,
         ERepPropertyKind.Vector or ERepPropertyKind.VectorQuantize10 or ERepPropertyKind.VectorQuantize100
             or ERepPropertyKind.VectorNormal => GetVectorValue != null,
 

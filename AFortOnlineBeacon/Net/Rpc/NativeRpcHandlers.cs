@@ -2595,6 +2595,7 @@ internal static class NativeRpcHandlers {
 
             actor.SetActorLocation(clientLoc);
             pawn.LastUnbasedMoveTime = actor.GetWorld()?.TimeSeconds ?? 0f;
+            if (Param("TimeStamp") is float moveTimeStamp) pawn.RecordMoveSample(clientLoc, moveTimeStamp);
 
             // The ground the client is standing on, when it says it is standing on something.
             // See TerrainGroundTruth: this is the only source of true ground heights this server

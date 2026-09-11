@@ -24,11 +24,25 @@
             <LanguageStandard>stdcpp20</LanguageStandard>
             <LanguageStandard_C>stdc17</LanguageStandard_C>
             <PrecompiledHeader>NotUsing</PrecompiledHeader>
+            <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+            <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+            <MultiProcessorCompilation>true</MultiProcessorCompilation>
         </ClCompile>
         <Link>
             <SubSystem>Windows</SubSystem>
             <GenerateDebugInformation>true</GenerateDebugInformation>
         </Link>
+    </ItemDefinitionGroup>
+    <!-- Static CRT: adds no runtime dependency to the game process. -->
+    <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+        <ClCompile>
+            <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+        </ClCompile>
+    </ItemDefinitionGroup>
+    <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+        <ClCompile>
+            <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+        </ClCompile>
     </ItemDefinitionGroup>
 
     <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -37,5 +51,44 @@
 
     <ItemGroup>
         <ClCompile Include="dllmain.cpp" />
+        <ClCompile Include="Core\Config.cpp" />
+        <ClCompile Include="Core\CrashLog.cpp" />
+        <ClCompile Include="Core\GameVersion.cpp" />
+        <ClCompile Include="Core\GuardHook.cpp" />
+        <ClCompile Include="Core\Log.cpp" />
+        <ClCompile Include="Core\Memory.cpp" />
+        <ClCompile Include="Core\Paths.cpp" />
+        <ClCompile Include="Backend\CurlRedirect.cpp" />
+        <ClCompile Include="Backend\HostConfig.cpp" />
+        <ClCompile Include="Backend\LocalCloudStorage.cpp" />
+        <ClCompile Include="Unreal\Engine.cpp" />
+        <ClCompile Include="Unreal\InputBindings.cpp" />
+        <ClCompile Include="Unreal\Text.cpp" />
+        <ClCompile Include="Features\Console.cpp" />
+        <ClCompile Include="Features\DisablePreEdit.cpp" />
+        <ClCompile Include="Features\EditOnRelease.cpp" />
+        <ClCompile Include="Features\SettingsMenu.cpp" />
+    </ItemGroup>
+    <ItemGroup>
+        <ClInclude Include="Core\Config.h" />
+        <ClInclude Include="Core\CrashLog.h" />
+        <ClInclude Include="Core\GameVersion.h" />
+        <ClInclude Include="Core\GuardHook.h" />
+        <ClInclude Include="Core\Log.h" />
+        <ClInclude Include="Core\Memory.h" />
+        <ClInclude Include="Core\Paths.h" />
+        <ClInclude Include="Backend\CurlRedirect.h" />
+        <ClInclude Include="Backend\HostConfig.h" />
+        <ClInclude Include="Backend\LocalCloudStorage.h" />
+        <ClInclude Include="Backend\Url.h" />
+        <ClInclude Include="Unreal\Addresses.h" />
+        <ClInclude Include="Unreal\Engine.h" />
+        <ClInclude Include="Unreal\InputBindings.h" />
+        <ClInclude Include="Unreal\Text.h" />
+        <ClInclude Include="Unreal\Types.h" />
+        <ClInclude Include="Features\Console.h" />
+        <ClInclude Include="Features\DisablePreEdit.h" />
+        <ClInclude Include="Features\EditOnRelease.h" />
+        <ClInclude Include="Features\SettingsMenu.h" />
     </ItemGroup>
 </Project>

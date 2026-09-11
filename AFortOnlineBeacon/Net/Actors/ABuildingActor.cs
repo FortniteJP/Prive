@@ -623,6 +623,47 @@ public class ABuildingActor : AActor {
         SyncAttributeSet();
     }
 
+    /// <summary>
+    ///     An ability system component and nothing else - for a piece whose client-side Blueprint
+    ///     reacts to GAMEPLAY CUES on itself (a trap's `GameplayCue.Abilities.Activation.Traps.*`
+    ///     events), which need an ASC whose avatar is this actor to arrive through. The same
+    ///     component <see cref="InitializeFromClass"/> makes, minus the attribute set.
+    /// </summary>
+    public UFortAbilitySystemComponent? EnsureAbilitySystemComponent(bool withAttributeSet = false) {
+        // THE CLIENT INITIALISES A BUILDING'S ABILITY SIDE ONLY WHEN IT HAS BOTH. The 10.40 client's
+        // one-shot building init (0x1413512E0) returns early unless BuildingAttributeSet (+0x328)
+        // AND AbilitySystemComponent (+0x368) are set - the local copies its OnReps of handles 19/20
+        // fill in - and that init is what makes a trap register its Abilities.Traps.Cooldown
+        // listener (virtual slot 0x728). A trap therefore needs the set too, not just the ASC.
+        if (withAttributeSet && BuildingAttributeSet == null) {
+            BuildingAttributeSet = UObjectGlobals.NewObject<UFortBuildingActorSet>(
+                this, GUClassArray.StaticClass<UFortBuildingActorSet>(), new FName("BuildingAttributeSet"),
+                EObjectFlags.RF_Transient);
+        }
+
+        if (AbilitySystemComponent != null) {
+            if (BuildingAttributeSet != null && !AbilitySystemComponent.SpawnedAttributes.Contains(BuildingAttributeSet)) {
+                AbilitySystemComponent.SpawnedAttributes.Add(BuildingAttributeSet);
+            }
+
+            SyncAttributeSet();
+            return AbilitySystemComponent;
+        }
+
+        AbilitySystemComponent = UObjectGlobals.NewObject<UFortAbilitySystemComponent>(
+            this, GUClassArray.StaticClass<UFortAbilitySystemComponent>(), new FName("AbilitySystemComponent"),
+            EObjectFlags.RF_Transient);
+
+        if (AbilitySystemComponent != null) {
+            AbilitySystemComponent.OwnerActor = this;
+            AbilitySystemComponent.AvatarActor = this;
+            if (BuildingAttributeSet != null) AbilitySystemComponent.SpawnedAttributes.Add(BuildingAttributeSet);
+        }
+
+        SyncAttributeSet();
+        return AbilitySystemComponent;
+    }
+
     /// <summary>Mirrors this piece's authoritative int HP into the float attribute set the client reads. Called on every change, so the ordinary shadow-state comparison picks it up - no MarkPropertyDirty needed, the value genuinely differs.</summary>
     private void SyncAttributeSet() {
         // THE RAMP IS NOT REPLICATED ONE HIT POINT AT A TIME. CurrentHitPoints is recomputed every

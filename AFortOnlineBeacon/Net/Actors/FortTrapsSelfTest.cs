@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Core.Math;
 using AFortOnlineBeacon.Core.Objects;
 using AFortOnlineBeacon.Net.Rpc;
 using AFortOnlineBeacon.Runtime;
@@ -89,6 +89,46 @@ public static class FortTrapsSelfTest {
         var rifleClass = FortWeaponActorClasses.ClassFor(rifle);
         Check(rifleClass != null && world.SpawnActor<AFortWeapon>(rifleClass, new FActorSpawnParameters()) is not AFortDecoTool,
               "a rifle is still a plain AFortWeapon");
+
+        // ---------------------------------------------------------------- behaviours
+        // Every behaviour must be keyed on a class the table can actually place - a typo here is a
+        // trap that silently does nothing.
+        var placeable = FortTraps.PlaceableActorClasses.Select(path => path[(path.LastIndexOf('.') + 1)..])
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var className in FortTraps.BehaviourClassNames) {
+            Check(placeable.Contains(className), $"behaviour {className} names a placeable trap class");
+        }
+
+        // The trigger box follows the trap's rotation. Floor spikes: box centre at local (0,256).
+        var spikes = FortTraps.BehaviourFor("x.Trap_Athena_Spikes_C")!;
+        var floorTrap = world.SpawnActor<ABuildingTrap>(
+            GUClassArray.StaticClassForPath<ABuildingTrap>("/Game/Items/Traps/Blueprints/Athena/Trap_Athena_Spikes.Trap_Athena_Spikes_C"),
+            new FActorSpawnParameters());
+        floorTrap.SetActorLocation(new FVector { X = 1000f, Y = 2000f, Z = 0f });
+        floorTrap.SetActorRotation(new FRotator());
+        Check(FortTrapSystem.Overlaps(floorTrap, spikes, new FVector { X = 1000f, Y = 2256f, Z = 96f }),
+              "yaw 0: a player standing on the tile's middle is inside");
+        Check(!FortTrapSystem.Overlaps(floorTrap, spikes, new FVector { X = 1000f, Y = 1700f, Z = 96f }),
+              "yaw 0: a player on the next tile over is not");
+        Check(!FortTrapSystem.Overlaps(floorTrap, spikes, new FVector { X = 1000f, Y = 2256f, Z = 600f }),
+              "yaw 0: a player on the floor above is not");
+
+        floorTrap.SetActorRotation(new FRotator { Yaw = 90f });
+        Check(FortTrapSystem.Overlaps(floorTrap, spikes, new FVector { X = 744f, Y = 2000f, Z = 96f }),
+              "yaw 90: the box turned with the trap (local +Y is world -X)");
+        Check(!FortTrapSystem.Overlaps(floorTrap, spikes, new FVector { X = 1000f, Y = 2256f, Z = 96f }),
+              "yaw 90: ...and is no longer where it was at yaw 0");
+
+        // The bouncers' numbers.
+        var up = new FVector { Z = 1f };
+        var still = FortTrapSystem.FloorBounceVelocity(new FVector(), up);
+        Check(MathF.Abs(still.Z - 1600f) < 0.5f && MathF.Abs(still.X) < 0.01f, $"floor bouncer from rest: straight up at 1600 (got {still.Z:F1})");
+        var running = FortTrapSystem.FloorBounceVelocity(new FVector { X = 2000f, Z = -1200f }, up);
+        var runningSize = MathF.Sqrt(running.X * running.X + running.Y * running.Y + running.Z * running.Z);
+        Check(MathF.Abs(runningSize - 1600f) < 0.5f && running.X > 0f && running.Z > 0f,
+              $"floor bouncer at a run: still exactly 1600, carried forward ({running.X:F0}, {running.Z:F0})");
+        var wallBounce = FortTrapSystem.WallBounceVelocity(new FVector { Y = 1f });
+        Check(MathF.Abs(wallBounce.Y - 1600f) < 0.5f && MathF.Abs(wallBounce.Z - 800f) < 0.5f, "wall bouncer: 1600 out, 800 up");
 
         // ---------------------------------------------------------------- the RPC decode
         var rpcs = NativeRpcHandlers.Get(new AFortDecoTool())!;

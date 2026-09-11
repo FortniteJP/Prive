@@ -51,6 +51,22 @@ public class UFortMovementSet : UFortAttributeSet {
     public float SpeedMultiplier { get; set; } = 1.0f;
 
     /// <summary>
+    ///     UFortMovementSet::GravityZScale's CURRENT value - handles 73 (Base, always 1) and 74
+    ///     (Current). What low gravity really is: GE_Trap_BouncePad_LowGravity is a single
+    ///     Multiplicitive modifier on this attribute (x Default.BouncePad.LowGravity.GravityZScale =
+    ///     0.4, for Default.BouncePad.LowGravity.Duration = 2 s), so the base stays 1 and only the
+    ///     current value moves - exactly what a gameplay effect does.
+    ///
+    ///     Not sent until something changes it (see <see cref="bGravityZScaleEverChanged"/>): the
+    ///     client initialises the attribute itself, and a join-time 1.0 is a value nobody has checked
+    ///     it agrees with.
+    /// </summary>
+    public float GravityZScale { get; set; } = 1.0f;
+
+    /// <summary>Sticky: once set, handles 73/74 are in the replicated set for good (so the reset to 1 goes out too).</summary>
+    public bool bGravityZScaleEverChanged { get; set; }
+
+    /// <summary>
     ///     Loads this set's tunables from its WORLD's options. Called by AGameModeBase.Login right
     ///     after the set is created: a property initialiser runs in the constructor, before the set
     ///     belongs to any world, so the initialisers above hold only the shipped defaults and this is

@@ -119,6 +119,27 @@ public class UFortAbilitySystemComponent : UObject {
     public FFastArraySerializer<FActiveGameplayCue> ActiveGameplayCues { get; } = new();
 
     /// <summary>
+    ///     UAbilitySystemComponent::MinimalReplicationTags (handle 28) - loose gameplay tags the
+    ///     client's copy of this component holds with a count of 1 while they are listed here and 0
+    ///     the moment they are not. Only ever used for a placed trap's `Abilities.Traps.Cooldown`
+    ///     (see FortTrapSystem), so it is sent only once something has been put in it
+    ///     (<see cref="bMinimalTagsEverSet"/>) and a player's component never carries the handle.
+    /// </summary>
+    public List<string> MinimalReplicationTags { get; } = new();
+
+    /// <summary>Sticky, so the removal of the last tag is still sent.</summary>
+    public bool bMinimalTagsEverSet { get; private set; }
+
+    public void SetMinimalReplicationTag(string tag, bool present) {
+        if (present) {
+            if (!MinimalReplicationTags.Contains(tag)) MinimalReplicationTags.Add(tag);
+            bMinimalTagsEverSet = true;
+        } else {
+            MinimalReplicationTags.Remove(tag);
+        }
+    }
+
+    /// <summary>
     ///     UAbilitySystemComponent::AddGameplayCue_Internal's authority branch, minus the RPC - the
     ///     caller sends that, because only the channel knows how (see
     ///     UActorChannel.SendNetMulticastInvokeGameplayCueAddedWithParams).

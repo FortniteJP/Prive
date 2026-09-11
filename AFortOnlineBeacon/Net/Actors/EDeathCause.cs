@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Net.Actors;
+﻿namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     EDeathCause, straight out of the 10.40 SDK - what the client's elimination feed turns into
@@ -24,6 +24,9 @@ public enum EDeathCause : byte {
     C4 = 11,
     GrenadeLauncher = 12,
     RocketLauncher = 13,
+
+    /// <summary>A placed trap - damage trap, poison darts.</summary>
+    Trap = 16,
     /// <summary>What a death this server cannot attribute goes out as.</summary>
     Unspecified = 48
 }

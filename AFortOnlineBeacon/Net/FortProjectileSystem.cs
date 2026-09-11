@@ -1417,6 +1417,35 @@ internal static class FortProjectileSystem {
     ///
     ///     SHOCKWAVE_FX=0 turns the whole thing off.
     /// </summary>
+    /// <summary>
+    ///     A LAUNCH that did not come from a grenade - a bouncer or a launch pad (FortTrapSystem).
+    ///     The same delivery the shockwave's throw uses, and for the same reasons (see
+    ///     ApplyGrenadeEffect): a correction carrying the velocity and a movement mode, plus - for a
+    ///     sideways shove others must see - PushMomentum, taken back off on landing. The launch
+    ///     pads' "IgnoreFallDamage" is the fall-damage immunity; <paramref name="lowGravity"/> is the
+    ///     bouncer's GE_LowGravity aura.
+    /// </summary>
+    internal static void LaunchByTrap(UWorld world, APawn pawn, FVector velocity, bool horizontalPush, bool lowGravity,
+                                      byte packedMovementMode = APawn.PackedMovementModeFalling) {
+        if (horizontalPush) pawn.SetPushMomentum(velocity);
+        pawn.RequestLaunch(velocity, packedMovementMode);
+        world.NetDriver?.FlushActorProperties(pawn);
+
+        pawn.GrantFallDamageImmunity(world.TimeSeconds);
+        if (lowGravity) SendLowGravityCues(world, pawn);
+        // SendLowGravityCues watches the flight for its own aura; the push needs the same watch.
+        if (horizontalPush) WatchFlight(world, pawn, clearPush: true);
+    }
+
+    /// <summary>
+    ///     A trap launch the CLIENT already performed itself: only what the server owns - no fall
+    ///     damage, and the low-gravity aura for everyone watching. See FortTrapSystem.TickLaunchTrap.
+    /// </summary>
+    internal static void AfterClientTrapLaunch(UWorld world, APawn pawn, bool lowGravity) {
+        pawn.GrantFallDamageImmunity(world.TimeSeconds);
+        if (lowGravity) SendLowGravityCues(world, pawn);
+    }
+
     private static void SendLowGravityCues(UWorld world, APawn pawn) {
         var state = StateOf(world);
 

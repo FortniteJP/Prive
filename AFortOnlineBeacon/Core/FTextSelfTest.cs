@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Net;
 
 namespace AFortOnlineBeacon.Core;
 
@@ -27,13 +27,24 @@ public static class FTextSelfTest {
         //   01 00 00 00   bHasCultureInvariantString, as a 32-BIT archive bool
         //   03 00 00 00   FString length, null terminator included
         //   48 69 00      'H' 'i' '\0'
-        failures += Check("Hi", "120000 00FF01 00000003 000000486900");
+        failures += CheckInvariant("Hi", "120000 00FF01 00000003 000000486900");
+
+        // The form actually SENT (see FText.Serialize): flags 0, history Base, an empty namespace
+        // (length 0, no bytes), a 26-character key (27 with its terminator), and the source string.
+        var writer = new FNetBitWriter(null!, 2048);
+        FText.Serialize(writer, "Hi");
+        var bytes = writer.GetData()[..(int) ((writer.GetNumBits() + 7) / 8)];
+        var hex = Convert.ToHexString(bytes);
+        var baseOk = hex.StartsWith("00000000" + "00" + "00000000" + "1B000000")
+                     && hex.EndsWith("03000000" + "486900");
+        Console.WriteLine($"FTextSelfTest: base-history \"Hi\" = {hex} - {(baseOk ? "OK" : "WRONG")}");
+        if (!baseOk) failures++;
 
         // EMPTY IS NOT A ZERO-LENGTH STRING. FText::SerializeText only writes the string when
         // `!IsEmpty() && IsCultureInvariant()`, so an empty text ends after the bool - no length
         // field at all. Writing a 0 length here would leave four bytes the client reads as the next
         // parameter.
-        failures += Check("", "1200000 0FF00000000");
+        failures += CheckInvariant("", "1200000 0FF00000000");
 
         Console.WriteLine(failures == 0
             ? "FTextSelfTest: flags, the -1 history type, the 32-bit archive bool and the trailing " +
@@ -43,11 +54,11 @@ public static class FTextSelfTest {
         return failures == 0;
     }
 
-    private static int Check(string value, string expectedHex) {
+    private static int CheckInvariant(string value, string expectedHex) {
         var expected = expectedHex.Replace(" ", string.Empty).ToUpperInvariant();
 
         var writer = new FNetBitWriter(null!, 1024);
-        FText.Serialize(writer, value);
+        FText.SerializeCultureInvariant(writer, value);
 
         var actual = Convert.ToHexString(writer.GetData()[..(int) ((writer.GetNumBits() + 7) / 8)]);
 

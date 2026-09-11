@@ -477,6 +477,57 @@ public class APawn : AActor {
     public bool bIsSkydivingFromBus { get; set; }
 
     /// <summary>
+    ///     AFortPlayerPawn::bIsSkydivingFromLaunchPad - handle 107, no OnRep. Set by the launch pad
+    ///     (AFortLauncherAthena's launch does `pawn+0x1176 |= 8` in the 10.40 client) and read by the
+    ///     pawn's own descent logic - the launch-pad variants of the glider auto-deploy
+    ///     (LaunchPadParachuteDeployTraceForGroundDistance / ...ForDownwardSpeed). Cleared once the
+    ///     descent it started is over; see TrackMoveFlags.
+    /// </summary>
+    public bool bIsSkydivingFromLaunchPad { get; set; }
+
+    private bool _launchPadDescentSeen;
+    private float _launchPadSetAt;
+
+    public void BeginLaunchPadDescent(float timeSeconds) {
+        bIsSkydivingFromLaunchPad = true;
+        _launchPadDescentSeen = false;
+        _launchPadSetAt = timeSeconds;
+    }
+
+    /// <summary>
+    ///     This pawn's velocity as its own moves describe it - the server simulates nothing, so the
+    ///     one honest source is how far successive client positions are apart. A trap's launch reads
+    ///     it: the floor bouncer mirrors your velocity off its surface and the launch pad keeps your
+    ///     horizontal speed, so "standing still" would be wrong for anyone who ran onto one.
+    /// </summary>
+    public FVector EstimatedVelocity { get; private set; } = new();
+
+    private FVector? _velocitySampleLocation;
+    private float _velocitySampleTime;
+
+    /// <summary>Feeds <see cref="EstimatedVelocity"/> from an unbased move, on the CLIENT's clock.</summary>
+    public void RecordMoveSample(FVector location, float clientTimeStamp) {
+        if (_velocitySampleLocation is { } previous) {
+            var dt = clientTimeStamp - _velocitySampleTime;
+
+            // Moves arrive several to a frame; wait for enough spacing that the division means
+            // something. A timestamp that went BACKWARDS is the client's periodic reset - start over.
+            if (dt >= 0f && dt < 0.03f) return;
+
+            EstimatedVelocity = dt is > 0f and < 0.5f
+                ? new FVector {
+                    X = (location.X - previous.X) / dt,
+                    Y = (location.Y - previous.Y) / dt,
+                    Z = (location.Z - previous.Z) / dt
+                }
+                : new FVector();
+        }
+
+        _velocitySampleLocation = new FVector { X = location.X, Y = location.Y, Z = location.Z };
+        _velocitySampleTime = clientTimeStamp;
+    }
+
+    /// <summary>
     ///     ACharacter::ReplicatedBasedMovement - what a player standing on a moving thing is BASED on,
     ///     and how a driver rides a vehicle.
     ///
@@ -628,6 +679,15 @@ public class APawn : AActor {
 
         // Back on the ground - whatever started the descent, it is over.
         if (!bIsSkydiving && !bIsParachuteOpen) bIsSkydivingFromBus = false;
+
+        // The launch pad's flag, with one difference: it is set BEFORE the client is in the air -
+        // the moves already queued when the launch went out still say "walking" - so it only ends
+        // once a descent has actually been seen, or after a generous cap.
+        if (bIsSkydivingFromLaunchPad) {
+            var airborne = bIsSkydiving || bIsParachuteOpen || (customMode < 0 && clientMovementMode == PackedMovementModeFalling);
+            if (airborne) _launchPadDescentSeen = true;
+            else if (_launchPadDescentSeen || (GetWorld()?.TimeSeconds ?? 0f) - _launchPadSetAt > 30f) bIsSkydivingFromLaunchPad = false;
+        }
 
         // FSavedMove_Character::CompressedFlags. Only the first two are standard input; the Custom
         // ones are whatever the game's own movement component defines (Fortnite uses them for
@@ -1040,10 +1100,16 @@ public class APawn : AActor {
     ///     `ApplyNetworkMovementMode(mode)` in that order, and a walking character's next floor
     ///     check would eat the upward half before it ever moved.
     /// </summary>
-    public void RequestLaunch(FVector velocity) {
+    public void RequestLaunch(FVector velocity, byte packedMovementMode = PackedMovementModeFalling) {
         PendingLaunchVelocity = velocity;
-        RequestMovementModeCorrection(PackedMovementModeFalling);
+        RequestMovementModeCorrection(packedMovementMode);
     }
+
+    /// <summary>
+    ///     EFortCustomMovement::Skydiving packed the way PackNetworkMovementMode packs a custom mode:
+    ///     `CustomModeThr (16) + 4`. See TrackMoveFlags.
+    /// </summary>
+    public const byte PackedMovementModeSkydiving = 20;
 
     /// <summary>Consumes the pending launch - one request, one launch.</summary>
     public FVector? TakeLaunchVelocity() {

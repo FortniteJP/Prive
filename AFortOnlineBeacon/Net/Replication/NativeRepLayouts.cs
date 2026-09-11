@@ -837,7 +837,13 @@ internal static class NativeRepLayouts {
             Kind = ERepPropertyKind.Bool,
             GetByteValue = obj => (byte) (((APawn) obj).bIsSkydivingFromBus ? 1 : 0)
         },
-        Reserved("bIsSkydivingFromLaunchPad"), // 107, 0x1176 - uint8
+        new() {
+            // 107, 0x1176 bit 3 - off a LAUNCH PAD rather than the bus. No OnRep; read by the
+            // descent's glider auto-deploy. See APawn.bIsSkydivingFromLaunchPad.
+            Name = "bIsSkydivingFromLaunchPad",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((APawn) obj).bIsSkydivingFromLaunchPad ? 1 : 0)
+        },
         Reserved("bReplicatedIsInVortex"), // 108, 0x1176 - uint8
         Reserved("bInGliderRedeploy"), // 109, 0x1177 - uint8
         Reserved("bIsProxySimulationTimedOut"), // 110, 0x1177 - uint8
@@ -2300,6 +2306,35 @@ internal static class NativeRepLayouts {
             Name = "AvatarActor",
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((UFortAbilitySystemComponent) obj).AvatarActor
+        },
+
+        // 9-27: the fast arrays (sent as custom deltas, never through this stream), the montage
+        // struct and BlockedAbilityBindings - declared only so 28 lands where it must.
+        Reserved("ActivatableAbilities.Items", ERepPropertyKind.EmptyDynamicArray),            // 9
+        Reserved("ActivatableAbilities.Owner", ERepPropertyKind.ObjectRef),                    // 10
+        Reserved("RepAnimMontageInfo.AnimMontage", ERepPropertyKind.ObjectRef),                // 11
+        Reserved("RepAnimMontageInfo.PlayRate", ERepPropertyKind.Float),                       // 12
+        Reserved("RepAnimMontageInfo.Position", ERepPropertyKind.Float),                       // 13
+        Reserved("RepAnimMontageInfo.BlendTime", ERepPropertyKind.Float),                      // 14
+        Reserved("RepAnimMontageInfo.NextSectionID", ERepPropertyKind.ByteEnum),               // 15
+        Reserved("RepAnimMontageInfo.bSkipPlayRate"),                                          // 16
+        Reserved("RepAnimMontageInfo.ForcePlayBit"),                                           // 17
+        Reserved("RepAnimMontageInfo.IsStopped"),                                              // 18
+        Reserved("RepAnimMontageInfo.SkipPositionCorrection"),                                 // 19
+        Reserved("RepAnimMontageInfo.PredictionKey", ERepPropertyKind.StructAtomic),           // 20
+        Reserved("ActiveGameplayEffects.GameplayEffects_Internal", ERepPropertyKind.EmptyDynamicArray), // 21
+        Reserved("ActiveGameplayEffects.ApplicationImmunityQueryEffects", ERepPropertyKind.EmptyDynamicArray), // 22
+        Reserved("ActiveGameplayCues.GameplayCues", ERepPropertyKind.EmptyDynamicArray),       // 23
+        Reserved("ActiveGameplayCues.Owner", ERepPropertyKind.ObjectRef),                      // 24
+        Reserved("MinimalReplicationGameplayCues.GameplayCues", ERepPropertyKind.EmptyDynamicArray), // 25
+        Reserved("MinimalReplicationGameplayCues.Owner", ERepPropertyKind.ObjectRef),          // 26
+        Reserved("BlockedAbilityBindings", ERepPropertyKind.EmptyDynamicArray),                // 27
+        new() {
+            // 28, 0x1180 - FMinimalReplicationTagCountMap. A placed trap's reload/arm state: see
+            // UFortAbilitySystemComponent.MinimalReplicationTags.
+            Name = "MinimalReplicationTags",
+            Kind = ERepPropertyKind.MinimalTagCountMap,
+            GetTagListValue = obj => ((UFortAbilitySystemComponent) obj).MinimalReplicationTags
         }
     };
 
@@ -2466,6 +2501,14 @@ internal static class NativeRepLayouts {
         Send(46, "CrouchedSprintSpeed", set => set.CrouchedSprintSpeed);
         Send(55, "BackwardSpeedMultiplier", set => set.BackwardSpeedMultiplier);
         Send(64, "JumpHeight", set => set.JumpHeight);
+
+        // GravityZScale: the base is never modified - a gameplay effect's modifier only moves the
+        // current value - so 73 is the constant 1 and 74 the live one. See UFortMovementSet.
+        props[72] = new FRepPropertyDef { Name = "GravityZScale.BaseValue", Kind = ERepPropertyKind.Float, GetFloatValue = _ => 1f };
+        props[73] = new FRepPropertyDef {
+            Name = "GravityZScale.CurrentValue", Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((UFortMovementSet) obj).GravityZScale
+        };
 
         return props.Concat(new FRepPropertyDef[] {
         new() {
@@ -2944,6 +2987,36 @@ internal static class NativeRepLayouts {
         Reserved("OriginalTrapLevel", ERepPropertyKind.Int32)                     // 73, 0x0C2C
     }).ToArray();
 
+    /// <summary>
+    ///     The launch pad (AFortLauncherAthena): every trap handle, then ServerLaunchInfo - a struct
+    ///     with no native NetSerialize, so its two members are 74 and 75 (rep_handles.py
+    ///     ATrap_Floor_Player_Launch_Pad_C). See ABuildingTrap.LaunchServerTime.
+    /// </summary>
+    private static readonly FRepPropertyDef[] TrapLauncherProps = TrapProps.Concat(new FRepPropertyDef[] {
+        new() {
+            Name = "ServerLaunchInfo.LaunchServerTime",                          // 74, 0x0CD0
+            Kind = ERepPropertyKind.Float,
+            GetFloatValue = obj => ((ABuildingTrap) obj).LaunchServerTime
+        },
+        new() {
+            Name = "ServerLaunchInfo.LaunchedPawn",                              // 75, 0x0CD8
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((ABuildingTrap) obj).LaunchedPawn
+        }
+    }).ToArray();
+
+    /// <summary>
+    ///     The campfire: every trap handle, then its Blueprint's IsActive at 74 (rep_handles.py
+    ///     ATrap_Floor_Player_Campfire_C). See ABuildingTrap.IsActive.
+    /// </summary>
+    private static readonly FRepPropertyDef[] TrapCampfireProps = TrapProps.Concat(new FRepPropertyDef[] {
+        new() {
+            Name = "IsActive",                                                   // 74, 0x0D18
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((ABuildingTrap) obj).IsActive ? 1 : 0)
+        }
+    }).ToArray();
+
     private static readonly FRepPropertyDef[] SprayDecalProps = BuildingActorProps.Concat(new FRepPropertyDef[] {
         Reserved("ProxyGameplayCueDamagePhysical.EffectContext", ERepPropertyKind.StructAtomic), // 68
         new() {
@@ -3047,6 +3120,8 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout Weapon = new(WeaponProps);
     public static readonly FRepLayout DecoTool = new(DecoToolProps);
     public static readonly FRepLayout Trap = new(TrapProps);
+    public static readonly FRepLayout TrapLauncher = new(TrapLauncherProps);
+    public static readonly FRepLayout TrapCampfire = new(TrapCampfireProps);
 
     /// <summary>
     ///     AFortProjectileBase, and the one handle that makes a grenade go off.
@@ -3179,6 +3254,8 @@ internal static class NativeRepLayouts {
         // Also before ABuildingActor: a spray decal IS one, and adds handles 69-72.
         AFortSprayDecalInstance => SprayDecal,
         // Before ABuildingActor, and adds 69-73.
+        ABuildingTrap { Kind: ETrapKind.LaunchPad } => TrapLauncher,
+        ABuildingTrap { Kind: ETrapKind.Campfire } => TrapCampfire,
         ABuildingTrap => Trap,
         ABuildingWall => BuildingWall,
         ABuildingActor => BuildingActor,

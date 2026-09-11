@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Core;
+﻿namespace AFortOnlineBeacon.Core;
 
 /// <summary>
 ///     FText on the wire - the one property type this project had declared and never been able to
@@ -52,7 +52,33 @@ public static class FText {
     ///     text has no string field following the bool. Getting that wrong would desynchronise
     ///     everything after it in the same RPC.
     /// </summary>
+    /// <summary>
+    ///     Writes <paramref name="value"/> as a BASE-history text: Flags, HistoryType 0, then
+    ///     FTextHistory_Base::SerializeForDisplayString's Namespace, Key and SourceString. The client
+    ///     looks the namespace/key up, finds nothing, and displays the source string.
+    ///
+    ///     NOT THE CULTURE-INVARIANT FORM, although that is what FText::FromString would save. The
+    ///     10.40 client was sent that form (see <see cref="SerializeCultureInvariant"/>) in
+    ///     ClientSendMessage and rejected every one:
+    ///
+    ///         LogNet: Error: ReceivedRPC: ReceivePropertiesForRPC - Mismatch read. Function: ClientSendMessage
+    ///
+    ///     Mismatch read means bits LEFT OVER, i.e. the reader stopped early. Its None-history branch
+    ///     reads bHasCultureInvariantString only when the archive's FEditorObjectVersion is new enough
+    ///     (Text.cpp:972), so a net reader that does not report that version stops right after the
+    ///     history type and leaves the bool and the string behind. The Base branch has no such
+    ///     condition - it is what every localised text in a real bunch uses.
+    /// </summary>
     public static void Serialize(FArchive archive, string value) {
+        archive.WriteUInt32(0);                                // Flags
+        archive.WriteByte(HistoryTypeBase);
+        FString.Serialize(archive, string.Empty);              // Namespace
+        FString.Serialize(archive, KeyFor(value));             // Key
+        FString.Serialize(archive, value);                     // SourceString
+    }
+
+    /// <summary>The culture-invariant (None-history) form - kept for reference; see <see cref="Serialize"/>.</summary>
+    public static void SerializeCultureInvariant(FArchive archive, string value) {
         archive.WriteUInt32(FlagsFromString);
         archive.WriteByte(unchecked((byte) HistoryTypeNone));
 
@@ -60,6 +86,19 @@ public static class FText {
         WriteArchiveBool(archive, bHasCultureInvariantString);
 
         if (bHasCultureInvariantString) FString.Serialize(archive, value);
+    }
+
+    /// <summary>ETextHistoryType::Base.</summary>
+    private const byte HistoryTypeBase = 0;
+
+    /// <summary>
+    ///     A key no real localisation table has, stable per text so the same message maps to the same
+    ///     entry every time it is sent.
+    /// </summary>
+    private static string KeyFor(string value) {
+        var hash = 2166136261u;
+        foreach (var c in value) hash = (hash ^ c) * 16777619u;
+        return $"AFortOnlineBeacon_{hash:X8}";
     }
 
     /// <summary>

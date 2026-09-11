@@ -30,4 +30,24 @@ public class ABuildingTrap : ABuildingActor {
 
     /// <summary>Who placed it - credited with what it does.</summary>
     public APlayerState? PlacedBy { get; set; }
+
+    /// <summary>What it does, from its class - see FortTraps.BehaviourFor. Also picks its layout.</summary>
+    public ETrapKind Kind { get; set; }
+
+    /// <summary>
+    ///     AFortLauncherAthena::ServerLaunchInfo (handles 74/75, launch pad only) - when and whom it
+    ///     last launched. RepNotify: OnRepLaunchServerInfo plays the launch sound and effect for
+    ///     everyone watching. The 10.40 launch writes exactly these two, and only with authority.
+    /// </summary>
+    public float LaunchServerTime { get; set; }
+
+    public APawn? LaunchedPawn { get; set; }
+
+    /// <summary>
+    ///     Trap_Floor_Player_Campfire_C::IsActive (handle 74, campfire only) - lit. Its OnRep runs
+    ///     InitCampfireEffects, which draws the fire only while this is true; the server sets it on
+    ///     placement and clears it when the heals run out, exactly as the Blueprint's authority
+    ///     path does.
+    /// </summary>
+    public bool IsActive { get; set; }
 }

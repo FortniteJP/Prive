@@ -60,6 +60,10 @@ TABLES = [
     ("DecoToolProps", ["ActorProps", "WeaponProps:35"], "AFortDecoTool_ContextTrap"),
     # A placed trap: every building handle, 68, then ABuildingTrap's 69-73.
     ("TrapProps", ["ActorProps", "BuildingActorProps"], "ABuildingTrap"),
+    ("TrapLauncherProps", ["ActorProps", "BuildingActorProps", "TrapProps"], "ATrap_Floor_Player_Launch_Pad_C"),
+    ("TrapCampfireProps", ["ActorProps", "BuildingActorProps", "TrapProps"], "ATrap_Floor_Player_Campfire_C"),
+    # A component, so no ActorProps. MinimalReplicationTags (28) is what a trap's reload rides.
+    ("AbilitySystemComponentProps", [], "UFortAbilitySystemComponent"),
     ("VehicleSeatComponentProps", [], "UFortVehicleSeatComponent"),
     # A STRUCT, not a class: FAthenaCarPlayerSlot is the inner of UFortVehicleSeatComponent's
     # PlayerSlots, and this table is the per-element handle space. Its LENGTH is load-bearing in a

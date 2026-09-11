@@ -77,7 +77,7 @@ public class FRotator {
         MathF.Abs(NormalizeAxis(Roll)) <= epsilon;
 
     /// <summary>FRotator::NormalizeAxis - fold an angle into (-180, 180].</summary>
-    private static float NormalizeAxis(float angle) {
+    public static float NormalizeAxis(float angle) {
         angle %= 360f;
         if (angle > 180f) angle -= 360f;
         else if (angle <= -180f) angle += 360f;

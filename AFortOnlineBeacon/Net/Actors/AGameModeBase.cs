@@ -927,7 +927,10 @@ public class AGameModeBase : AInfo {
                                   "an EMPTY value will not do it, PowerShell deletes the variable instead.");
             }
 
-            foreach (var spec in consumables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+            // Commas OR WHITESPACE: run-beacon.ps1's overrides are a [string[]], and PowerShell turns an
+            // unquoted `STARTING_CONSUMABLES=a:1,b:1` into an array it then joins with SPACES - so a
+            // comma-only split read "a:1 b:1" as one item and handed out only the first.
+            foreach (var spec in consumables.Split(new[] { ',', ' ', '	' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
                 var parts = spec.Split(':', 2);
                 // Trap item names (TID_...) too - FortTraps.Generated.cs - so placing one can be tested
                 // without finding it first.

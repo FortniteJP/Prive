@@ -15,7 +15,7 @@ public class DefaultRuntimeOptions : CloudStorageFile {
                 new IniElementKeyValue("bShouldSkipAvailabilityCheck", "false"), // false
                 // new IniElementKeyValue("bEnableClientSettingsSaveToDisk", "true"),
                 // new IniElementKeyValue("bEnableClientSettingsSaveToCloud", "false"),
-                
+
                 new IniElementKeyValue("bEnableSidekick", "false"),
                 new IniElementKeyValue("bEnableSidekickFOMO", "false"),
                 new IniElementKeyValue("bEnableSidekickAvatars", "false"),
