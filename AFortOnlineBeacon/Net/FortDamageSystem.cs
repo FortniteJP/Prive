@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Every way a PLAYER loses health, in one place - the server half of what real Fortnite spreads
@@ -29,20 +30,74 @@
 ///     damage lives in a DataTable that needs the PAK directory and the AES key.
 /// </summary>
 public static class FortDamageSystem {
-    private static float Env(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    /// <summary>This world's share of FortDamageSystem's state - see FWorldSubsystem.</summary>
+    private sealed class FDamageState : FWorldSubsystem {
+        /// <summary>
+        ///     Flat per-hit damage to a player, used ONLY for a weapon Tools/WeaponStats has no row for.
+        ///
+        ///     This used to be the damage every weapon did - a pickaxe, a sniper rifle and a point-blank
+        ///     shotgun pellet all took exactly 20 off a player. The real numbers now come from the
+        ///     weapon's own stat row (see FortWeaponStats), with four range breakpoints and a crit
+        ///     multiplier each, so this is a fallback rather than the model. It is kept, and the caller
+        ///     names the weapon in the log when it is used, because an unknown weapon should be visible
+        ///     rather than silently doing assault-rifle damage.
+        /// </summary>
+        public float WeaponDamage => Options.Float("WEAPON_DAMAGE", 20.0f);
 
-    /// <summary>
-    ///     Flat per-hit damage to a player, used ONLY for a weapon Tools/WeaponStats has no row for.
-    ///
-    ///     This used to be the damage every weapon did - a pickaxe, a sniper rifle and a point-blank
-    ///     shotgun pellet all took exactly 20 off a player. The real numbers now come from the
-    ///     weapon's own stat row (see FortWeaponStats), with four range breakpoints and a crit
-    ///     multiplier each, so this is a fallback rather than the model. It is kept, and the caller
-    ///     names the weapon in the log when it is used, because an unknown weapon should be visible
-    ///     rather than silently doing assault-rifle damage.
-    /// </summary>
-    public static float WeaponDamage => Env("WEAPON_DAMAGE", 20.0f);
+        /// <summary>
+        ///     The GameplayEffect this server claims did the damage. The storm's is used because it is
+        ///     the one the reference capture proves resolvable on a live client, and because this server
+        ///     has no per-weapon effect to name; DAMAGE_EFFECT overrides it.
+        ///
+        ///     Nothing about it is applied - the client is being TOLD an effect executed, not asked to
+        ///     run one - but the class still has to resolve, or the cue has no definition to look up.
+        /// </summary>
+        public UObject DamageEffectDef => UAssetRegistry.GetOrCreate(
+            Options.Get("DAMAGE_EFFECT") is { Length: > 0 } path
+                ? path
+                : "/Game/Athena/SafeZone/GE_OutsideSafeZoneDamage.Default__GE_OutsideSafeZoneDamage_C");
+
+        public float _nextRampAt;
+
+        /// <summary>Alternates the HEALTH_BAR_NUDGE wobble so MaxHealth genuinely differs every time.</summary>
+        public bool _nudgeUp = true;
+
+        public readonly List<FPendingDeath> Pending = new();
+
+        /// <summary>
+        ///     How long after ClientOnPawnDied the pawn is torn off and the player becomes a spectator.
+        ///
+        ///     MEASURED NOW, at 0.01s. This was 4 seconds and its comment said "Not a sourced number" -
+        ///     it was a guess about how long a client needs to play its own death handling. The 0906
+        ///     capture's one death answers it: ClientOnPawnDied at 13:08:20.960, the pawn's channel
+        ///     closing at 13:08:20.970. TEN MILLISECONDS - one frame.
+        ///
+        ///     Four seconds was not merely too long, it was too long IN THE WRONG DIRECTION. The old
+        ///     code destroyed the body at the end of it, so the corpse stood about for four seconds and
+        ///     then vanished; the real server tears it off immediately and the corpse stays for good. The
+        ///     linger was compensating for the wrong teardown, which is why shortening it only makes
+        ///     sense together with AActor.TearOff.
+        ///
+        ///     Kept as a small delay rather than folded into the same frame on purpose: this project has
+        ///     paid three times for sending an RPC in the same frame as the actor change it refers to
+        ///     (see [[bus-camera-mode-hypothesis]]), and one tick of separation costs nothing.
+        ///     DEATH_LINGER_SECONDS still overrides it.
+        /// </summary>
+        public float LingerSeconds =>
+            float.TryParse(Options.Get("DEATH_LINGER_SECONDS"), out var v) ? v : 0.01f;
+
+        /// <summary>
+        ///     Server-initiated prediction keys for the death activation. Its own counter rather than
+        ///     FortEmoteSystem's, because the two are unrelated activations and sharing a counter would
+        ///     mean one system's numbering depended on how much the other had done.
+        /// </summary>
+        public short _nextDeathPredictionKey = 1;
+    }
+
+    private static FDamageState StateOf(UWorld world) => world.GetSubsystem<FDamageState>();
+
+    /// <summary>WEAPON_DAMAGE for this world - the flat fallback for a weapon with no baked stats.</summary>
+    public static float FallbackWeaponDamage(UWorld world) => StateOf(world).WeaponDamage;
 
     /// <summary>
     ///     Applies damage to a player. Shield absorbs first, then health, and health stops at zero -
@@ -54,6 +109,8 @@ public static class FortDamageSystem {
     public static float ApplyDamage(APlayerState? victim, float amount, EDeathCause cause,
                                     APlayerState? instigator = null) {
         if (victim == null || amount <= 0.0f) return 0.0f;
+        if (victim.GetWorld() is not { } world) return 0.0f;
+        var state = StateOf(world);
 
         // A dead player takes no further damage. Without this a burst already in flight would re-run
         // the death path per bullet, and the elimination feed would fire once for each.
@@ -96,9 +153,9 @@ public static class FortDamageSystem {
         // is a WORKAROUND, kept behind a knob and deliberately not on by default: the honest fix is
         // whatever raises OnValueChangedWithReason, and leaving this off keeps that question honest.
         // 0.01 is far below what the HUD renders (it prints integers), so nothing visibly lies.
-        if (Environment.GetEnvironmentVariable("HEALTH_BAR_NUDGE") == "1") {
-            health.MaxHealth += _nudgeUp ? 0.01f : -0.01f;
-            _nudgeUp = !_nudgeUp;
+        if (world.Options.Get("HEALTH_BAR_NUDGE") == "1") {
+            health.MaxHealth += state._nudgeUp ? 0.01f : -0.01f;
+            state._nudgeUp = !state._nudgeUp;
         }
 
         // The client-side half: a damage number, the hit flash, and the shield/fatal flags. Sent
@@ -145,7 +202,7 @@ public static class FortDamageSystem {
         //
         // The FromSpec cue below is NOT gated: the same capture DOES send that one on a storm tick,
         // and it is what makes the health bar redraw.
-        if (!bWeaponHit && Environment.GetEnvironmentVariable("STORM_DAMAGE_CUE") != "1") {
+        if (!bWeaponHit && victim.WorldOptions.Get("STORM_DAMAGE_CUE") != "1") {
             SendHealthChangeCue(pawnChannel, magnitude);
             return;
         }
@@ -167,7 +224,10 @@ public static class FortDamageSystem {
     ///     for every kind of damage, the storm included; see SendDamageCue for what is not.
     /// </summary>
     private static void SendHealthChangeCue(Channels.Actor.UActorChannel pawnChannel, float magnitude) {
-var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
+        if (pawnChannel.Actor?.GetWorld() is not { } world) return;
+        var state = StateOf(world);
+
+var spec = new FGameplayEffectSpecForRPC { Def = state.DamageEffectDef };
         spec.ModifiedAttributes.Add(new FGameplayEffectModifiedAttribute {
             // The DAMAGE meta attribute, not Health - that is what the reference capture's client
             // resolves out of this RPC, and it is how Fortnite models a hit: a GE moves Damage and
@@ -191,24 +251,6 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
     private const string HealthSetClassPath = "/Script/FortniteGame.FortHealthSet";
 
     /// <summary>
-    ///     The GameplayEffect this server claims did the damage. The storm's is used because it is
-    ///     the one the reference capture proves resolvable on a live client, and because this server
-    ///     has no per-weapon effect to name; DAMAGE_EFFECT overrides it.
-    ///
-    ///     Nothing about it is applied - the client is being TOLD an effect executed, not asked to
-    ///     run one - but the class still has to resolve, or the cue has no definition to look up.
-    /// </summary>
-    private static UObject DamageEffectDef => UAssetRegistry.GetOrCreate(
-        Environment.GetEnvironmentVariable("DAMAGE_EFFECT") is { Length: > 0 } path
-            ? path
-            : "/Game/Athena/SafeZone/GE_OutsideSafeZoneDamage.Default__GE_OutsideSafeZoneDamage_C");
-
-    private static float _nextRampAt;
-
-    /// <summary>Alternates the HEALTH_BAR_NUDGE wobble so MaxHealth genuinely differs every time.</summary>
-    private static bool _nudgeUp = true;
-
-    /// <summary>
     ///     A DIAGNOSTIC, off unless HEALTH_DEBUG_RAMP=1, and it exists to answer one question that
     ///     nothing else can: does ANY attribute change this server pushes mid-match reach the HUD,
     ///     or only Health?
@@ -225,10 +267,12 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
     ///     Delete this once the question is settled; it has no gameplay purpose.
     /// </summary>
     public static void DebugRamp(UWorld world, float now) {
-        var mode = Environment.GetEnvironmentVariable("HEALTH_DEBUG_RAMP");
+        var state = StateOf(world);
+
+        var mode = world.Options.Get("HEALTH_DEBUG_RAMP");
         if (string.IsNullOrEmpty(mode)) return;
-        if (now < _nextRampAt) return;
-        _nextRampAt = now + Env("HEALTH_DEBUG_RAMP_PERIOD", 3.0f);
+        if (now < state._nextRampAt) return;
+        state._nextRampAt = now + world.Options.Float("HEALTH_DEBUG_RAMP_PERIOD", 3.0f);
 
         foreach (var connection in world.NetDriver?.ClientConnections ?? Enumerable.Empty<UNetConnection>()) {
             if (connection.PlayerController?.PlayerState is not { HealthSet: { } set } playerState) continue;
@@ -307,6 +351,9 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
     ///     has to exist on the client first and this class has no way to know that.
     /// </summary>
     public static void Kill(APlayerState victim, EDeathCause cause, APlayerState? instigator = null) {
+        if (victim.GetWorld() is not { } world) return;
+        var state = StateOf(world);
+
         if (victim.bIsDead) return;
 
         victim.bIsDead = true;
@@ -328,7 +375,7 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
 
         if (victim.GetOwningController() is APlayerController controller) {
             controller.bMarkedAlive = false;
-            Pending.Add(new FPendingDeath(controller, victimPawn, killerPawn, instigator, float.NaN));
+            state.Pending.Add(new FPendingDeath(controller, victimPawn, killerPawn, instigator, float.NaN));
 
             // One fewer player alive. This is what the HUD's "N left" reads (handle 116), and it is
             // also the number the match-over check will want when there is one.
@@ -359,30 +406,6 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
         public float ReportedAt { get; set; } = ReportedAt;
     }
 
-    private static readonly List<FPendingDeath> Pending = new();
-
-    /// <summary>
-    ///     How long after ClientOnPawnDied the pawn is torn off and the player becomes a spectator.
-    ///
-    ///     MEASURED NOW, at 0.01s. This was 4 seconds and its comment said "Not a sourced number" -
-    ///     it was a guess about how long a client needs to play its own death handling. The 0906
-    ///     capture's one death answers it: ClientOnPawnDied at 13:08:20.960, the pawn's channel
-    ///     closing at 13:08:20.970. TEN MILLISECONDS - one frame.
-    ///
-    ///     Four seconds was not merely too long, it was too long IN THE WRONG DIRECTION. The old
-    ///     code destroyed the body at the end of it, so the corpse stood about for four seconds and
-    ///     then vanished; the real server tears it off immediately and the corpse stays for good. The
-    ///     linger was compensating for the wrong teardown, which is why shortening it only makes
-    ///     sense together with AActor.TearOff.
-    ///
-    ///     Kept as a small delay rather than folded into the same frame on purpose: this project has
-    ///     paid three times for sending an RPC in the same frame as the actor change it refers to
-    ///     (see [[bus-camera-mode-hypothesis]]), and one tick of separation costs nothing.
-    ///     DEATH_LINGER_SECONDS still overrides it.
-    /// </summary>
-    private static float LingerSeconds =>
-        float.TryParse(Environment.GetEnvironmentVariable("DEATH_LINGER_SECONDS"), out var v) ? v : 0.01f;
-
     /// <summary>
     ///     Finishes every death that <see cref="Kill"/> started. Two beats, both deferred for reasons
     ///     this project has hit before:
@@ -402,13 +425,15 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
     ///        bound to a destroyed actor.
     /// </summary>
     public static void Tick(UWorld world, float now) {
-        if (Pending.Count == 0) return;
+        var worldState = StateOf(world);
 
-        for (var i = Pending.Count - 1; i >= 0; i--) {
-            var death = Pending[i];
+        if (worldState.Pending.Count == 0) return;
+
+        for (var i = worldState.Pending.Count - 1; i >= 0; i--) {
+            var death = worldState.Pending[i];
             if (world.NetDriver?.ClientConnections.FirstOrDefault(c => c.PlayerController == death.Controller)
                 is not { } connection) {
-                Pending.RemoveAt(i);   // gone from the game entirely
+                worldState.Pending.RemoveAt(i);   // gone from the game entirely
                 continue;
             }
 
@@ -439,10 +464,10 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
                 continue;
             }
 
-            if (now < death.ReportedAt + LingerSeconds) continue;
-            Pending.RemoveAt(i);
+            if (now < death.ReportedAt + worldState.LingerSeconds) continue;
+            worldState.Pending.RemoveAt(i);
 
-            if (death.Pawn == null || Environment.GetEnvironmentVariable("DEATH_KEEP_BODY") is "1") continue;
+            if (death.Pawn == null || world.Options.Get("DEATH_KEEP_BODY") is "1") continue;
 
             // THE BODY IS TORN OFF, NOT DESTROYED - measured, and it is the whole difference between
             // a corpse and a body that pops out of existence. The 0906 capture's one death reads:
@@ -453,7 +478,7 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
             //
             // Ten milliseconds later, with reason TearOff. See AActor.TearOff for what the client
             // does with each of the three close reasons. DEATH_TEAR_OFF=0 restores the destroy.
-            var tearOff = Environment.GetEnvironmentVariable("DEATH_TEAR_OFF") is not "0";
+            var tearOff = world.Options.Get("DEATH_TEAR_OFF") is not "0";
 
             // WHERE THE CAMERA GOES. The killer's pawn is what a real match uses; failing that, any
             // other living player, which is what a real match falls back to when the killer has
@@ -483,7 +508,7 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
             // playing state off the back of ClientOnPawnDied - it answers within 126 ms with
             // ServerClientPawnLoaded and ServerClientIsReadyToRespawn without ever being told to.
             // DEATH_GOTO_STATE=1 sends it again for comparison.
-            if (Environment.GetEnvironmentVariable("DEATH_GOTO_STATE") is "1") pcChannel.SendClientGotoState(322);
+            if (world.Options.Get("DEATH_GOTO_STATE") is "1") pcChannel.SendClientGotoState(322);
 
             if (spectate != null) pcChannel.SendClientSetViewTarget(spectate);
 
@@ -515,7 +540,9 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
     ///     DEATH_ABILITY=0 skips it.
     /// </summary>
     private static void ActivateDeathAbility(UWorld world, APlayerController controller) {
-        if (Environment.GetEnvironmentVariable("DEATH_ABILITY") is "0") return;
+        var state = StateOf(world);
+
+        if (world.Options.Get("DEATH_ABILITY") is "0") return;
         if (controller.PlayerState is not { AbilitySystemComponent: { } abilitySystem } playerState) return;
 
         var spec = abilitySystem.ActivatableAbilities.Items
@@ -531,14 +558,14 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
         var predictionKey = new FPredictionKey {
             bValidKeyForConnection = true,
             bIsServerInitiated = true,
-            Current = _nextDeathPredictionKey++
+            Current = state._nextDeathPredictionKey++
         };
 
         // WITH EVENT DATA, because the client said so. The plain variant reached the ability and
         // the ability refused it: "expects event data but none is being supplied. Use Activate
         // Ability instead of Activate Ability From Event." DEATH_ABILITY_EVENT_DATA=0 sends the
         // plain one again, which is what reproduces that warning.
-        if (Environment.GetEnvironmentVariable("DEATH_ABILITY_EVENT_DATA") is "0") {
+        if (world.Options.Get("DEATH_ABILITY_EVENT_DATA") is "0") {
             world.NetDriver?.SendClientActivateAbilitySucceed(playerState, abilitySystem, spec.Handle, predictionKey);
         } else {
             world.NetDriver?.SendClientActivateAbilitySucceedWithEventData(
@@ -549,13 +576,6 @@ var spec = new FGameplayEffectSpecForRPC { Def = DamageEffectDef };
         Console.WriteLine($"FortDamageSystem: activated GA_DefaultPlayer_Death on {controller.GetFName()} " +
                           $"as spec handle {spec.Handle} (server prediction key {predictionKey.Current})");
     }
-
-    /// <summary>
-    ///     Server-initiated prediction keys for the death activation. Its own counter rather than
-    ///     FortEmoteSystem's, because the two are unrelated activations and sharing a counter would
-    ///     mean one system's numbering depended on how much the other had done.
-    /// </summary>
-    private static short _nextDeathPredictionKey = 1;
 
     /// <summary>Straight-line distance between two pawns, or 0 when there is no killer to measure to.</summary>
     private static float DistanceBetween(APawn? victim, APawn? killer) {

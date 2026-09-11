@@ -1,6 +1,11 @@
-﻿namespace AFortOnlineBeacon.Core.Objects;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Core.Objects;
 
 public class GUClassArray {
+    // A UClass is type metadata, so one shared instance per type stays correct however many worlds
+    // are running. The dictionaries still need guarding: those worlds tick on their own threads.
+    private static readonly object Gate = new();
+
     private static readonly Dictionary<Type, UClass> Classes = new();
 
     // Maps our C# actor classes to a REAL, always-loaded native UE class path the real client can
@@ -107,7 +112,7 @@ public class GUClassArray {
         //   SetupTimeOfDayCallbacks: ... FortTimeOfDayManager is "TODM_BR_C_2147478934"
         //
         // The same now goes for any other Blueprint class the client has not already loaded.
-        [typeof(AFortTimeOfDayManager)] = Environment.GetEnvironmentVariable("TODM_CLASS") is { Length: > 0 } todm
+        [typeof(AFortTimeOfDayManager)] = FBeaconProcess.Options.Get("TODM_CLASS") is { Length: > 0 } todm
             ? todm
             : "/Game/TimeOfDay/TODM/BR/TODM_BR.TODM_BR_C",
         // The battle bus. Read straight off the PR3.0 capture, which exports
@@ -168,23 +173,27 @@ public class GUClassArray {
         StaticClassForPath(typeof(T), nativePackagePath);
 
     public static UClass StaticClassForPath(Type type, string nativePackagePath) {
-        var key = (type, nativePackagePath);
-        if (PathClasses.TryGetValue(key, out var existing)) return existing;
+        lock (Gate) {
+            var key = (type, nativePackagePath);
+            if (PathClasses.TryGetValue(key, out var existing)) return existing;
 
-        var uClass = new UClass(type) { NativePackagePath = nativePackagePath };
-        PathClasses[key] = uClass;
-        return uClass;
+            var uClass = new UClass(type) { NativePackagePath = nativePackagePath };
+            PathClasses[key] = uClass;
+            return uClass;
+        }
     }
 
     private static readonly Dictionary<(Type, string), UClass> PathClasses = new();
 
     public static UClass StaticClass(Type type) {
-        if (Classes.TryGetValue(type, out var existing)) return existing;
+        lock (Gate) {
+            if (Classes.TryGetValue(type, out var existing)) return existing;
 
-        var uClass = new UClass(type);
-        if (NativePackagePaths.TryGetValue(type, out var nativePath)) uClass.NativePackagePath = nativePath;
+            var uClass = new UClass(type);
+            if (NativePackagePaths.TryGetValue(type, out var nativePath)) uClass.NativePackagePath = nativePath;
 
-        Classes[type] = uClass;
-        return uClass;
+            Classes[type] = uClass;
+            return uClass;
+        }
     }
 }

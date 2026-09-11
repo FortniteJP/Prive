@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -45,8 +46,8 @@ public class ABuildingWall : ABuildingActor {
     ///     one state change, and any further attempt arriving within this window is the same press
     ///     still being reported. DOOR_TOGGLE_COOLDOWN overrides it.
     /// </summary>
-    private static readonly float ToggleCooldownSeconds =
-        float.TryParse(Environment.GetEnvironmentVariable("DOOR_TOGGLE_COOLDOWN"), out var v) ? v : 0.5f;
+    private float ToggleCooldownSeconds =>
+        float.TryParse(WorldOptions.Get("DOOR_TOGGLE_COOLDOWN"), out var v) ? v : 0.5f;
 
     private float _lastToggleAt = float.NegativeInfinity;
 
@@ -116,8 +117,8 @@ public class ABuildingWall : ABuildingActor {
     ///     same for every door in the game. If doors swing INTO the player, set DOOR_OPEN_YAW=-90 and
     ///     every door is fixed at once.
     /// </summary>
-    private static readonly float DoorOpenYaw =
-        float.TryParse(Environment.GetEnvironmentVariable("DOOR_OPEN_YAW"), out var v) ? v : 90f;
+    private float DoorOpenYaw =>
+        float.TryParse(WorldOptions.Get("DOOR_OPEN_YAW"), out var v) ? v : 90f;
 
     /// <summary>
     ///     Says so in the log when DOOR_OPEN_YAW is overriding the default, because this variable
@@ -126,8 +127,8 @@ public class ABuildingWall : ABuildingActor {
     ///     rule compute +1 correctly and the override turn it into -90, and the numbers only stopped
     ///     agreeing with the behaviour once they were worked through by hand.
     /// </summary>
-    private static readonly string OpenYawNote =
-        Environment.GetEnvironmentVariable("DOOR_OPEN_YAW") is { Length: > 0 } set
+    private string OpenYawNote =>
+        WorldOptions.Get("DOOR_OPEN_YAW") is { Length: > 0 } set
             ? $", base {set} FROM DOOR_OPEN_YAW (default is 90)"
             : string.Empty;
 }

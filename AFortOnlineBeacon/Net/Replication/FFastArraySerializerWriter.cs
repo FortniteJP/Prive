@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Replication;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Replication;
 
 /// <summary>
 ///     Writes the payload half of a Custom Delta property whose struct is an FFastArraySerializer -
@@ -72,7 +73,7 @@ internal static class FFastArraySerializerWriter {
     ///     fastest way to tell "my encoding is wrong" from "something else broke" is to put the
     ///     known-good encoding back in one run without rebuilding.
     /// </summary>
-    private static bool UseDeltaStruct => Environment.GetEnvironmentVariable("FASTARRAY_DELTA_STRUCT") is not "0";
+    private static bool UseDeltaStruct => FBeaconProcess.Options.Get("FASTARRAY_DELTA_STRUCT") is not "0";
 
     /// <summary>
     ///     One property handle, exactly as WritePropertyHandle does it (RepLayout.cpp:1227) -

@@ -42,14 +42,42 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     who is nowhere near it yet.
 /// </summary>
 internal static class FortSupplyLlamas {
-    private static bool Enabled => Environment.GetEnvironmentVariable("LLAMAS_ENABLED") is not "0";
 
-    private static float EnvFloat(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    /// <summary>This world's share of FortSupplyLlamas's state - see FWorldSubsystem.</summary>
+    private sealed class FSupplyLlamaState : FWorldSubsystem {
+        public bool Enabled => Options.Get("LLAMAS_ENABLED") is not "0";
 
-    /// <summary>Default.Llamas.QuantityMin/Max, both 5 at index 0 in AthenaGameData.</summary>
-    private static int Quantity =>
-        int.TryParse(Environment.GetEnvironmentVariable("LLAMA_COUNT"), out var n) ? n : 5;
+        /// <summary>Default.Llamas.QuantityMin/Max, both 5 at index 0 in AthenaGameData.</summary>
+        public int Quantity =>
+            int.TryParse(Options.Get("LLAMA_COUNT"), out var n) ? n : 5;
+
+        /// <summary>
+        ///     TEMPORARY, AND ON BY DEFAULT ON PURPOSE. Puts the llamas in a ring on the warmup island
+        ///     instead of scattering them over the map.
+        ///
+        ///     Asked for because the real placement is untestable by hand: five llamas somewhere in a
+        ///     390km-square heightmap cannot be walked to, so nothing about them - do they stand on the
+        ///     ground, does the interact prompt appear, does opening one drop its 49 items, does the
+        ///     pinata burst play - could be checked at all. On the warmup island they are ten seconds
+        ///     away.
+        ///
+        ///     SPAWN_AT_WARMUP=0 restores the real placement. The log says loudly which mode is running,
+        ///     so this cannot be left on by accident.
+        /// </summary>
+        public bool AtWarmupIsland => Options.Get("SPAWN_AT_WARMUP") is not "0";
+
+        public bool _placed;
+
+        /// <summary>The llamas, so anything that needs to enumerate them (channel opening) can.</summary>
+        public readonly List<AFortAthenaSupplyDropLlama> Llamas = new();
+        public Random Rng = default!;
+        protected internal override void Initialize() {
+            Rng = new(
+                int.TryParse(Options.Get("LLAMA_SEED"), out var seed) ? seed : 20191001);
+        }
+    }
+
+    private static FSupplyLlamaState StateOf(UWorld world) => world.GetSubsystem<FSupplyLlamaState>();
 
     /// <summary>
     ///     AAthenaSupplyDrop_Llama_C's own CDO: SpawnOffsetZ = 87. The mesh's origin is at its feet
@@ -64,29 +92,6 @@ internal static class FortSupplyLlamas {
     /// </summary>
     private const float SeaLevel = 0f;
 
-    private static readonly Random Rng = new(
-        int.TryParse(Environment.GetEnvironmentVariable("LLAMA_SEED"), out var seed) ? seed : 20191001);
-
-    /// <summary>
-    ///     TEMPORARY, AND ON BY DEFAULT ON PURPOSE. Puts the llamas in a ring on the warmup island
-    ///     instead of scattering them over the map.
-    ///
-    ///     Asked for because the real placement is untestable by hand: five llamas somewhere in a
-    ///     390km-square heightmap cannot be walked to, so nothing about them - do they stand on the
-    ///     ground, does the interact prompt appear, does opening one drop its 49 items, does the
-    ///     pinata burst play - could be checked at all. On the warmup island they are ten seconds
-    ///     away.
-    ///
-    ///     SPAWN_AT_WARMUP=0 restores the real placement. The log says loudly which mode is running,
-    ///     so this cannot be left on by accident.
-    /// </summary>
-    public static bool AtWarmupIsland => Environment.GetEnvironmentVariable("SPAWN_AT_WARMUP") is not "0";
-
-    private static bool _placed;
-
-    /// <summary>The llamas, so anything that needs to enumerate them (channel opening) can.</summary>
-    public static readonly List<AFortAthenaSupplyDropLlama> Llamas = new();
-
     /// <summary>
     ///     Place them, once, on the first tick that has a world to place them in.
     ///
@@ -94,10 +99,12 @@ internal static class FortSupplyLlamas {
     ///     the tick keeps the "read a file off disk" out of the login path entirely.
     /// </summary>
     public static void Tick(UWorld world, float now) {
-        if (_placed || !Enabled) return;
-        _placed = true;
+        var state = StateOf(world);
 
-        if (AtWarmupIsland) {
+        if (state._placed || !state.Enabled) return;
+        state._placed = true;
+
+        if (state.AtWarmupIsland) {
             PlaceOnWarmupIsland(world);
             return;
         }
@@ -108,22 +115,22 @@ internal static class FortSupplyLlamas {
             return;
         }
 
-        var wanted = Quantity;
+        var wanted = state.Quantity;
         // Bounded so a heightmap that is mostly ocean or mostly holes cannot spin here forever - it
         // gives up and places fewer llamas rather than hanging the world tick, and says so.
         var attempts = wanted * 200;
 
-        while (Llamas.Count < wanted && attempts-- > 0) {
-            var x = minX + (float) Rng.NextDouble() * (maxX - minX);
-            var y = minY + (float) Rng.NextDouble() * (maxY - minY);
+        while (state.Llamas.Count < wanted && attempts-- > 0) {
+            var x = minX + (float) state.Rng.NextDouble() * (maxX - minX);
+            var y = minY + (float) state.Rng.NextDouble() * (maxY - minY);
 
             if (TerrainHeightMap.GetGroundHeight(x, y) is not { } z || z <= SeaLevel) continue;
 
             Spawn(world, x, y, z + SpawnOffsetZ);
         }
 
-        if (Llamas.Count < wanted) {
-            Console.WriteLine($"FortSupplyLlamas: only placed {Llamas.Count} of {wanted} - ran out of " +
+        if (state.Llamas.Count < wanted) {
+            Console.WriteLine($"FortSupplyLlamas: only placed {state.Llamas.Count} of {wanted} - ran out of " +
                               "attempts finding ground above sea level in the baked heightmap's extent.");
         }
     }
@@ -137,9 +144,11 @@ internal static class FortSupplyLlamas {
     ///     placed sublevel, not landscape, so the heightmap has nothing to say about it.
     /// </summary>
     private static void PlaceOnWarmupIsland(UWorld world) {
+        var state = StateOf(world);
+
         var anchor = FortWarmupStarts.Anchor;
-        var radius = EnvFloat("WARMUP_LLAMA_RADIUS", 1200f);
-        var wanted = Quantity;
+        var radius = world.Options.Float("WARMUP_LLAMA_RADIUS", 1200f);
+        var wanted = state.Quantity;
 
         Console.WriteLine($"FortSupplyLlamas: SPAWN_AT_WARMUP - placing {wanted} llama(s) in a {radius:F0}u " +
                           $"ring around the warmup island start ({anchor.X:F0}, {anchor.Y:F0}, {anchor.Z:F0}). " +
@@ -155,6 +164,8 @@ internal static class FortSupplyLlamas {
     }
 
     private static void Spawn(UWorld world, float x, float y, float z) {
+        var state = StateOf(world);
+
         var llama = world.SpawnActor<AFortAthenaSupplyDropLlama>(
             GUClassArray.StaticClass<AFortAthenaSupplyDropLlama>(),
             new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
@@ -162,13 +173,13 @@ internal static class FortSupplyLlamas {
         if (llama == null) return;
 
         llama.SetActorLocation(new FVector { X = x, Y = y, Z = z });
-        llama.SetActorRotation(new FRotator { Yaw = (float) (Rng.NextDouble() * 360.0 - 180.0) });
+        llama.SetActorRotation(new FRotator { Yaw = (float) (state.Rng.NextDouble() * 360.0 - 180.0) });
         llama.SetRole(ENetRole.ROLE_Authority);
 
         llama.SetReplicates(true);
 
-        Llamas.Add(llama);
+        state.Llamas.Add(llama);
 
-        Console.WriteLine($"FortSupplyLlamas: llama {Llamas.Count} at ({x:F0}, {y:F0}, {z:F0})");
+        Console.WriteLine($"FortSupplyLlamas: llama {state.Llamas.Count} at ({x:F0}, {y:F0}, {z:F0})");
     }
 }

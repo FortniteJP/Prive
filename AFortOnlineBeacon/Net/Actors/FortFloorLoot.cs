@@ -21,46 +21,50 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     rolled once and remembered), but a point nobody ever visits is never rolled at all.
 /// </summary>
 internal static partial class FortFloorLoot {
-    private static bool Enabled => Environment.GetEnvironmentVariable("FLOOR_LOOT_ENABLED") is not "0";
 
-    private static float EnvFloat(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    /// <summary>This world's share of FortFloorLoot's state - see FWorldSubsystem.</summary>
+    private sealed class FFloorLootState : FWorldSubsystem {
+        public bool Enabled => Options.Get("FLOOR_LOOT_ENABLED") is not "0";
 
-    private static int EnvInt(string name, int fallback) =>
-        int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+        /// <summary>
+        ///     One entry per spawn point; set once it has been rolled so it never repeats.
+        ///
+        ///     Built on first use, NOT in a field initializer, and that is not a style choice. SpawnPoints
+        ///     lives in this partial class's OTHER file (FortFloorLoot.Generated.cs), and a partial class's
+        ///     static field initializers run in the order the compiler happens to feed it the files - so
+        ///     `new bool[SpawnPoints.Length / 3]` as an initializer read SpawnPoints while it was still
+        ///     null and killed the very first world tick with a TypeInitializationException. By the time
+        ///     Tick runs the static constructor has finished, whatever order it ran in.
+        /// </summary>
+        public bool[]? _spawned;
 
-    /// <summary>
-    ///     One entry per spawn point; set once it has been rolled so it never repeats.
-    ///
-    ///     Built on first use, NOT in a field initializer, and that is not a style choice. SpawnPoints
-    ///     lives in this partial class's OTHER file (FortFloorLoot.Generated.cs), and a partial class's
-    ///     static field initializers run in the order the compiler happens to feed it the files - so
-    ///     `new bool[SpawnPoints.Length / 3]` as an initializer read SpawnPoints while it was still
-    ///     null and killed the very first world tick with a TypeInitializationException. By the time
-    ///     Tick runs the static constructor has finished, whatever order it ran in.
-    /// </summary>
-    private static bool[]? _spawned;
+        public bool[] Spawned => _spawned ??= new bool[SpawnPoints.Length / 3];
 
-    private static bool[] Spawned => _spawned ??= new bool[SpawnPoints.Length / 3];
+        public float _nextSweep;
+        public Random Rng = default!;
+        protected internal override void Initialize() {
+            Rng = new(
+                int.TryParse(Options.Get("LOOT_SEED"), out var seed) ? seed : 20191001);
+        }
+    }
 
-    private static readonly Random Rng = new(
-        int.TryParse(Environment.GetEnvironmentVariable("LOOT_SEED"), out var seed) ? seed : 20191001);
-
-    private static float _nextSweep;
+    private static FFloorLootState StateOf(UWorld world) => world.GetSubsystem<FFloorLootState>();
 
     /// <summary>How often the sweep runs. Loot does not need to appear the instant a player is in range.</summary>
     private const float SweepIntervalSeconds = 1f;
 
     public static void Tick(UWorld world, float now) {
-        if (!Enabled || now < _nextSweep) return;
-        _nextSweep = now + SweepIntervalSeconds;
+        var state = StateOf(world);
+
+        if (!state.Enabled || now < state._nextSweep) return;
+        state._nextSweep = now + SweepIntervalSeconds;
 
         if (world.NetDriver is not { } netDriver) return;
 
-        var radius = EnvFloat("FLOOR_LOOT_RADIUS", 12000f);
+        var radius = world.Options.Float("FLOOR_LOOT_RADIUS", 12000f);
         var radiusSquared = radius * radius;
-        var budget = EnvInt("FLOOR_LOOT_PER_SWEEP", 6);
-        var spawned = Spawned;
+        var budget = world.Options.Int("FLOOR_LOOT_PER_SWEEP", 6);
+        var spawned = state.Spawned;
 
         foreach (var connection in netDriver.ClientConnections) {
             if (connection.PlayerController is not { } pc) continue;
@@ -91,12 +95,12 @@ internal static partial class FortFloorLoot {
                 // across a valley, which is a legitimate case. This only refuses to deal loot out to
                 // someone who is nowhere near the ground it sits on, and they get it on the next
                 // sweep once they land.
-                if (z - origin.Z < -EnvFloat("FLOOR_LOOT_MAX_HEIGHT", 2500f)) continue;
+                if (z - origin.Z < -world.Options.Float("FLOOR_LOOT_MAX_HEIGHT", 2500f)) continue;
 
                 spawned[i] = true;
                 budget--;
 
-                var drops = FortLootTables.Roll(FortLootTables.FloorLootGroup, Rng);
+                var drops = FortLootTables.Roll(FortLootTables.FloorLootGroup, state.Rng);
                 foreach (var drop in drops) {
                     Spawn(world, drop, x, y, z);
                 }
@@ -121,7 +125,7 @@ internal static partial class FortFloorLoot {
         // Slightly above the spawner: the spawner's own Z is the floor it sits on, and a pickup buried
         // in the floor is one the client's interaction query cannot see - the same reason
         // SpawnDroppedPickup lifts its toss.
-        var rest = new FVector { X = x, Y = y, Z = z + EnvFloat("FLOOR_LOOT_Z_OFFSET", 40f) };
+        var rest = new FVector { X = x, Y = y, Z = z + world.Options.Float("FLOOR_LOOT_Z_OFFSET", 40f) };
 
         pickup.SetActorLocation(rest);
         pickup.RestLocation = rest;

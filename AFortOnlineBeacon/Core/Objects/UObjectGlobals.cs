@@ -1,4 +1,4 @@
-namespace AFortOnlineBeacon.Core.Objects;
+﻿namespace AFortOnlineBeacon.Core.Objects;
 
 public class UObjectGlobals {
     // Simplified port of MakeUniqueObjectName: real UE scopes uniqueness by (Outer, Class) and
@@ -8,8 +8,13 @@ public class UObjectGlobals {
 
     private static FName MakeUniqueObjectName(UObject? outer, UClass clazz) {
         var key = (outer, clazz);
-        _uniqueNameCounters.TryGetValue(key, out var counter);
-        _uniqueNameCounters[key] = counter + 1;
+        int counter;
+        // Locked: every world spawns through here, and a Dictionary written from two threads is
+        // corrupted rather than merely raced.
+        lock (_uniqueNameCounters) {
+            _uniqueNameCounters.TryGetValue(key, out counter);
+            _uniqueNameCounters[key] = counter + 1;
+        }
 
         return new FName(clazz.GetFName().GetPlainNameString(), counter);
     }

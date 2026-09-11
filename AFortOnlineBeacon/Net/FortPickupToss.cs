@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 using AFortOnlineBeacon.Core.Math;
 using AFortOnlineBeacon.Net.Actors;
 
@@ -34,7 +35,10 @@ namespace AFortOnlineBeacon.Net;
 ///     They cannot drift apart: `Settle` and `Tick` both call `Step`, so the streamed arc ends
 ///     exactly where the settled one would have put it.
 /// </summary>
-internal static class FortPickupToss {
+internal sealed class FortPickupToss : FWorldSubsystem {
+    /// <summary>This world's instance - see FWorldSubsystem.</summary>
+    public static FortPickupToss Of(UWorld world) => world.GetSubsystem<FortPickupToss>();
+
     /// <summary>
     ///     Fortnite's world gravity times FortPickupAthena's ProjectileGravityScale, in uu/s^2.
     ///
@@ -46,16 +50,16 @@ internal static class FortPickupToss {
     ///     FortProjectileSystem's own 2800 x 0.8 = 2240 for the grenade against an independent
     ///     measurement of 2243.2.
     /// </summary>
-    private static float Gravity =>
-        float.TryParse(Environment.GetEnvironmentVariable("PICKUP_GRAVITY"), out var g) && g > 0 ? g : 2800f;
+    private float Gravity =>
+        float.TryParse(Options.Get("PICKUP_GRAVITY"), out var g) && g > 0 ? g : 2800f;
 
     /// <summary>
     ///     The MaxSpeed clamp, in uu/s. MEASURED at 503.7 (IQR 12.2 over 332 clamped substeps) -
     ///     recognised as steps where the velocity's DIRECTION turned while its LENGTH did not, which
     ///     only a clamp does. A dropped item is a slow, short toss, not a throw.
     /// </summary>
-    private static float MaxSpeed =>
-        float.TryParse(Environment.GetEnvironmentVariable("PICKUP_MAX_SPEED"), out var s) && s > 0 ? s : 500f;
+    private float MaxSpeed =>
+        float.TryParse(Options.Get("PICKUP_MAX_SPEED"), out var s) && s > 0 ? s : 500f;
 
     /// <summary>
     ///     Restitution. MEASURED at 0.534 (IQR 0.071) across 22 bounces off WALLS - the ones whose
@@ -64,8 +68,8 @@ internal static class FortPickupToss {
     ///     reason: their answer depends on adding back exactly the right amount of gravity over the
     ///     post-bounce sub-step. The wall figure is the one to believe.
     /// </summary>
-    private static float Bounciness =>
-        float.TryParse(Environment.GetEnvironmentVariable("PICKUP_BOUNCINESS"), out var b) && b >= 0 ? b : 0.534f;
+    private float Bounciness =>
+        float.TryParse(Options.Get("PICKUP_BOUNCINESS"), out var b) && b >= 0 ? b : 0.534f;
 
     /// <summary>
     ///     Tangential loss per bounce, UE's Friction. THE LEAST CERTAIN NUMBER HERE, and worth saying
@@ -75,8 +79,8 @@ internal static class FortPickupToss {
     ///     them and is the one constant to reach for first if settled items slide too far or too
     ///     little.
     /// </summary>
-    private static float BounceFriction =>
-        float.TryParse(Environment.GetEnvironmentVariable("PICKUP_FRICTION"), out var f) && f >= 0 ? f : 0.5f;
+    private float BounceFriction =>
+        float.TryParse(Options.Get("PICKUP_FRICTION"), out var f) && f >= 0 ? f : 0.5f;
 
     /// <summary>
     ///     The substep, in seconds. The capture's every projectile line reads `step 0.033`, which is
@@ -156,11 +160,11 @@ internal static class FortPickupToss {
     ///
     ///     So C is a property of the actor, not of our arithmetic or of the height bake.
     /// </summary>
-    private static float RestClearance =>
-        float.TryParse(Environment.GetEnvironmentVariable("PICKUP_REST_CLEARANCE"), out var c) && c >= 0 ? c : 10f;
+    private float RestClearance =>
+        float.TryParse(Options.Get("PICKUP_REST_CLEARANCE"), out var c) && c >= 0 ? c : 10f;
 
     /// <summary>The simulated point, raised to where the actor's origin belongs.</summary>
-    private static FVector Lift(FVector point) =>
+    private FVector Lift(FVector point) =>
         new() { X = point.X, Y = point.Y, Z = point.Z + RestClearance };
 
     /// <summary>
@@ -172,7 +176,7 @@ internal static class FortPickupToss {
     ///     fall a whole clearance further than it should - invisible at 40, and impossible to ignore
     ///     at the measured 135.
     /// </summary>
-    private static FVector Drop(FVector actorPosition) =>
+    private FVector Drop(FVector actorPosition) =>
         new() { X = actorPosition.X, Y = actorPosition.Y, Z = actorPosition.Z - RestClearance };
 
     /// <summary>
@@ -192,7 +196,7 @@ internal static class FortPickupToss {
     ///     in the right place, immediately - which is still the right fallback if a drop ever lands
     ///     somewhere a player cannot reach.
     /// </summary>
-    private static bool Streaming => Environment.GetEnvironmentVariable("PICKUP_TOSS_STREAM") is not "0";
+    private bool Streaming => Options.Get("PICKUP_TOSS_STREAM") is not "0";
 
     /// <summary>
     ///     The simulated state of each toss in the air.
@@ -227,7 +231,7 @@ internal static class FortPickupToss {
     ///     Held per in-flight toss and set immediately before each Step - see Tick. A single shared
     ///     value would hand every item of a dropped STACK the last dropper's feet.
     /// </summary>
-    private static float _floorZ;
+    private float _floorZ;
 
     /// <summary>
     ///     Starts a toss the player can WATCH, when PICKUP_TOSS_STREAM is on. Returns true when it
@@ -299,7 +303,7 @@ internal static class FortPickupToss {
     ///     this project's frag grenades have always moved. All it ever needed was to be spawned
     ///     somewhere it could fall FROM.
     /// </summary>
-    public static bool BeginStreamed(AFortPickup pickup, FVector from, FVector velocity, float floorZ) {
+    public bool BeginStreamed(AFortPickup pickup, FVector from, FVector velocity, float floorZ) {
         if (!Streaming) return false;
 
         // DROPPED INTO CONTACT SPACE FIRST - `from` is where the ACTOR is launched, and Step tracks
@@ -412,7 +416,7 @@ internal static class FortPickupToss {
         // ByteComponents (the enum's 0), which is what NetSerializeWrite already does.
         // PICKUP_REP_SCALE overrides it: 1 or 100.
         pickup.ReplicatedMovement.LocationQuantization =
-            Environment.GetEnvironmentVariable("PICKUP_REP_SCALE") switch {
+            Options.Get("PICKUP_REP_SCALE") switch {
                 "1" => FRepMovement.RoundWholeNumber,
                 "100" => (100u, 30u),
                 _ => (10u, 27u)   // RoundOneDecimal - Default__FortPickupAthena's own level
@@ -434,7 +438,7 @@ internal static class FortPickupToss {
     ///     never read back off the actor - see the note about feeding an output back in as state.
     ///     Position is in CONTACT space (see Drop/Lift); the actor is drawn at Lift(Position).
     /// </summary>
-    private static readonly List<(AFortPickup Pickup, FVector Landing, float Seconds, float StartedAt,
+    private readonly List<(AFortPickup Pickup, FVector Landing, float Seconds, float StartedAt,
                                   FVector Position, FVector Velocity, int Steps)> InFlight = new();
 
     /// <summary>
@@ -448,8 +452,8 @@ internal static class FortPickupToss {
     ///     an item buried in the landscape is unreachable by the client's interaction query for that
     ///     reason alone. The confound is now removed, so this gets one more honest test.
     /// </summary>
-    private static bool ReplicateMovement =>
-        Environment.GetEnvironmentVariable("PICKUP_REPLICATE_MOVEMENT") is not "0";
+    private bool ReplicateMovement =>
+        Options.Get("PICKUP_REPLICATE_MOVEMENT") is not "0";
 
     /// <summary>
     ///     The horizontal speed a toss needs to travel <paramref name="distance" /> before it lands.
@@ -463,7 +467,7 @@ internal static class FortPickupToss {
     ///     wall or a slope first. That is the right order - aim, then simulate - and it is why an
     ///     authored fan point is now a target rather than a placement.
     /// </summary>
-    public static float SpeedForDistance(float launchZ, float floorZ, float upSpeed, float distance) {
+    public float SpeedForDistance(float launchZ, float floorZ, float upSpeed, float distance) {
         // The launch is an ACTOR position; the physics point that touches the ground is lower.
         var height = MathF.Max(launchZ - RestClearance - floorZ, 1f);
         var seconds = (upSpeed + MathF.Sqrt(upSpeed * upSpeed + 2f * Gravity * height)) / Gravity;
@@ -471,7 +475,7 @@ internal static class FortPickupToss {
         return MathF.Min(distance / seconds, MaxSpeed);
     }
 
-    private static FVector Normalize(FVector v) {
+    private FVector Normalize(FVector v) {
         var length = Speed(v);
         return length <= 0f ? new FVector { Z = 1f } : new FVector { X = v.X / length, Y = v.Y / length, Z = v.Z / length };
     }
@@ -493,7 +497,9 @@ internal static class FortPickupToss {
     ///     LIFTED value as the physics state and lifted it again every substep. Items climbed 40
     ///     units a step and left the map. The actor's location is an OUTPUT of this simulation.
     /// </summary>
-    public static void Tick(UWorld world, float now) {
+    public void Tick(float now) {
+        var world = World;
+
         if (InFlight.Count == 0) return;
 
         for (var i = InFlight.Count - 1; i >= 0; i--) {
@@ -569,7 +575,7 @@ internal static class FortPickupToss {
     ///     synchronous solve and the streamed one, so the two cannot drift apart - which is the whole
     ///     reason PICKUP_TOSS_STREAM is a fair comparison rather than two implementations.
     /// </summary>
-    private static (FVector Position, FVector Velocity, bool Rested) Step(FVector position, FVector velocity) {
+    private (FVector Position, FVector Velocity, bool Rested) Step(FVector position, FVector velocity) {
         var v = Clamp(new FVector { X = velocity.X, Y = velocity.Y, Z = velocity.Z - Gravity * SubStep });
 
         var next = new FVector {
@@ -645,7 +651,7 @@ internal static class FortPickupToss {
     ///     <see cref="Settle" />, raised to where the actor's origin belongs - what a caller placing
     ///     the actor wants. See <see cref="RestClearance" />.
     /// </summary>
-    public static FVector SettleActorLocation(FVector actorFrom, FVector velocity, float floorZ) {
+    public FVector SettleActorLocation(FVector actorFrom, FVector velocity, float floorZ) {
         // Contact space in, actor space out - see Drop and Lift.
         var landing = Settle(Drop(actorFrom), velocity, floorZ);
 
@@ -665,17 +671,17 @@ internal static class FortPickupToss {
     ///     <see cref="Settle" />, and HOW LONG it took. The duration is what the client needs for
     ///     PickupLocationData.FlyTime - an arc with no time on it is one it cannot pace.
     /// </summary>
-    public static (FVector Landing, float Seconds, bool Rested) SettleTimed(FVector from, FVector velocity, float floorZ) {
+    public (FVector Landing, float Seconds, bool Rested) SettleTimed(FVector from, FVector velocity, float floorZ) {
         var landing = Settle(from, velocity, floorZ);
         return (landing, _lastSettleSteps * SubStep, _lastSettleRested);
     }
 
-    private static int _lastSettleSteps;
+    private int _lastSettleSteps;
 
     /// <summary>Whether the last Settle came to rest, or merely ran out of substeps.</summary>
-    private static bool _lastSettleRested;
+    private bool _lastSettleRested;
 
-    public static FVector Settle(FVector from, FVector velocity, float floorZ = 0f) {
+    public FVector Settle(FVector from, FVector velocity, float floorZ = 0f) {
         _floorZ = floorZ;
 
         var position = from;
@@ -701,8 +707,8 @@ internal static class FortPickupToss {
         return position;
     }
 
-    private static (FVector Point, FVector Normal)? FirstContact(FVector from, FVector to) {
-        var buildHit = BuildingStructuralSupportSystem.SweepToBuild(from, to);
+    private (FVector Point, FVector Normal)? FirstContact(FVector from, FVector to) {
+        var buildHit = BuildingStructuralSupportSystem.Of(World).SweepToBuild(from, to);
         var hullHit = WorldCollision.Sweep(from, to);
         var wallHit = TerrainWalls.Sweep(from, to);
 
@@ -755,7 +761,7 @@ internal static class FortPickupToss {
     ///     pointing back the way the item came - the same conversion FortProjectileSystem does so
     ///     that one bounce rule can serve all three collision sources.
     /// </summary>
-    private static FVector AxisNormal(int axis, FVector to, FVector from) {
+    private FVector AxisNormal(int axis, FVector to, FVector from) {
         var sign = axis switch {
             0 => to.X > from.X ? -1f : 1f,
             1 => to.Y > from.Y ? -1f : 1f,
@@ -769,9 +775,9 @@ internal static class FortPickupToss {
         };
     }
 
-    private static float Speed(FVector v) => MathF.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+    private float Speed(FVector v) => MathF.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
 
-    private static FVector Clamp(FVector v) {
+    private FVector Clamp(FVector v) {
         var speed = Speed(v);
         if (speed <= MaxSpeed || speed <= 0f) return v;
 

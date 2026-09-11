@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Playing an emote - the server half of AFortPlayerController::ServerPlayEmoteItem.
@@ -65,31 +66,44 @@ public static class FortEmoteSystem {
     /// </summary>
     private const string EmojiCueTag = "GameplayCue.Abilities.Emotes.DisplayEmoji";
 
-    /// <summary>
-    ///     0.65 SECONDS, and it is read off the animation rather than tuned by eye.
-    ///
-    ///     A real server does not decide when the emoji appears - the MONTAGE does. Toss_Emoji (all
-    ///     153 emojis share it) carries exactly one notify, `FortPlayEmojiItem`, an absolute link at
-    ///     LinkValue **0.65** into its 1.333-second segment, and it is marked
-    ///     `bTriggerOnDedicatedServer: true`. That flag is the whole answer to "who fires the cue and
-    ///     when": the authority plays the montage, the notify fires on it 0.65s in - as the hand
-    ///     releases - and the cue goes out from there.
-    ///
-    ///     This server cannot play a montage, so it waits the same 0.65s instead. Sending on the
-    ///     frame the emote starts is what made the first working build show the emoji EARLY, before
-    ///     the throw.
-    ///
-    ///     Scaled by nothing, because EmoteMontagePlayRate is set to 1. EMOJI_CUE_DELAY overrides it;
-    ///     0 restores the immediate send.
-    /// </summary>
-    private static float EmojiCueDelay =>
-        float.TryParse(Environment.GetEnvironmentVariable("EMOJI_CUE_DELAY"), out var seconds)
-            ? seconds
-            : 0.65f;
+    /// <summary>This world's share of FortEmoteSystem's state - see FWorldSubsystem.</summary>
+    private sealed class FEmoteState : FWorldSubsystem {
+        /// <summary>
+        ///     0.65 SECONDS, and it is read off the animation rather than tuned by eye.
+        ///
+        ///     A real server does not decide when the emoji appears - the MONTAGE does. Toss_Emoji (all
+        ///     153 emojis share it) carries exactly one notify, `FortPlayEmojiItem`, an absolute link at
+        ///     LinkValue **0.65** into its 1.333-second segment, and it is marked
+        ///     `bTriggerOnDedicatedServer: true`. That flag is the whole answer to "who fires the cue and
+        ///     when": the authority plays the montage, the notify fires on it 0.65s in - as the hand
+        ///     releases - and the cue goes out from there.
+        ///
+        ///     This server cannot play a montage, so it waits the same 0.65s instead. Sending on the
+        ///     frame the emote starts is what made the first working build show the emoji EARLY, before
+        ///     the throw.
+        ///
+        ///     Scaled by nothing, because EmoteMontagePlayRate is set to 1. EMOJI_CUE_DELAY overrides it;
+        ///     0 restores the immediate send.
+        /// </summary>
+        public float EmojiCueDelay =>
+            float.TryParse(Options.Get("EMOJI_CUE_DELAY"), out var seconds)
+                ? seconds
+                : 0.65f;
+
+        public readonly List<FPendingEmojiCue> _pendingEmojiCues = new();
+
+        /// <summary>
+        ///     Real UE's FPredictionKey::GenerateNewPredictionKey - a process-wide counter starting at 1,
+        ///     stamped bIsServerInitiated for a key the SERVER created
+        ///     (FPredictionKey::CreateNewServerInitiatedKey, GameplayPrediction.cpp). The capture's very
+        ///     first emote carried Current=1, which is exactly this counter's first value.
+        /// </summary>
+        public short _nextServerPredictionKey = 1;
+    }
+
+    private static FEmoteState StateOf(UWorld world) => world.GetSubsystem<FEmoteState>();
 
     private readonly record struct FPendingEmojiCue(APawn Pawn, UObject EmoteAsset, float DueAt);
-
-    private static readonly List<FPendingEmojiCue> _pendingEmojiCues = new();
 
     /// <summary>
     ///     Sends the emoji cues whose moment in the throw animation has arrived - the stand-in for
@@ -102,13 +116,15 @@ public static class FortEmoteSystem {
     ///     and correctly cancels this one.
     /// </summary>
     public static void Tick(UWorld world, float timeSeconds) {
-        if (_pendingEmojiCues.Count == 0) return;
+        var state = StateOf(world);
 
-        for (var i = _pendingEmojiCues.Count - 1; i >= 0; i--) {
-            var pending = _pendingEmojiCues[i];
+        if (state._pendingEmojiCues.Count == 0) return;
+
+        for (var i = state._pendingEmojiCues.Count - 1; i >= 0; i--) {
+            var pending = state._pendingEmojiCues[i];
             if (timeSeconds < pending.DueAt) continue;
 
-            _pendingEmojiCues.RemoveAt(i);
+            state._pendingEmojiCues.RemoveAt(i);
 
             if (pending.Pawn.bIsDying ||
                 !ReferenceEquals(pending.Pawn.LastReplicatedEmoteExecuted, pending.EmoteAsset)) {
@@ -134,14 +150,6 @@ public static class FortEmoteSystem {
                               (sent == 0 ? " (nobody has the pawn's channel open - nothing will be seen)" : ""));
         }
     }
-
-    /// <summary>
-    ///     Real UE's FPredictionKey::GenerateNewPredictionKey - a process-wide counter starting at 1,
-    ///     stamped bIsServerInitiated for a key the SERVER created
-    ///     (FPredictionKey::CreateNewServerInitiatedKey, GameplayPrediction.cpp). The capture's very
-    ///     first emote carried Current=1, which is exactly this counter's first value.
-    /// </summary>
-    private static short _nextServerPredictionKey = 1;
 
     /// <summary>
     ///     Which ability plays this cosmetic, ASKED OF THE ASSET rather than guessed from its folder.
@@ -208,6 +216,9 @@ public static class FortEmoteSystem {
     ///     ERpcParamKind.AssetPath for why both cases exist and what breaks if only one is handled.
     /// </summary>
     public static void PlayEmoteItem(APlayerController controller, string emoteAssetPath) {
+        if (controller.GetWorld() is not { } world) return;
+        var state = StateOf(world);
+
         if (controller.Pawn is not { } pawn) {
             Console.WriteLine("FortEmoteSystem.PlayEmoteItem: no pawn to emote on, ignoring");
             return;
@@ -294,14 +305,15 @@ public static class FortEmoteSystem {
         if (FortEmoteAssets.For(emoteAssetPath[(emoteAssetPath.LastIndexOf('.') + 1)..])
                 is { Kind: FortEmoteAssets.EEmoteKind.Emoji }) {
             // QUEUED, NOT SENT - the throw has to leave the hand first. See EmojiCueDelay.
-            _pendingEmojiCues.Add(new FPendingEmojiCue(
-                pawn, emoteAsset, (controller.GetWorld()?.TimeSeconds ?? 0f) + EmojiCueDelay));
+            state._pendingEmojiCues.Add(new FPendingEmojiCue(
+                pawn, emoteAsset, (controller.GetWorld()?.TimeSeconds ?? 0f) + state.EmojiCueDelay));
         }
 
         // A SPRAY PAINTS FROM HERE, because nothing else can. GAB_Spray_Generic's whole body is
         // behind IsServer, so the client's copy of the ability plays the montage and stops; the
         // decal is a replicated actor the authority spawns. See FortSpraySystem.
-        if (abilityPath == SprayAbilityPath) FortSpraySystem.Paint(controller, emoteAsset);
+        if (abilityPath == SprayAbilityPath && controller.GetWorld() is { } sprayWorld)
+            FortSpraySystem.Of(sprayWorld).Paint(controller, emoteAsset);
 
         // AND THE MONTAGE, which is what everyone ELSE plays - see APawn.EmoteMontage and the
         // RepAnimMontageInfo block in NativeRepLayouts. ForcePlayBit TOGGLES rather than being set,
@@ -341,7 +353,7 @@ public static class FortEmoteSystem {
         var predictionKey = new FPredictionKey {
             bValidKeyForConnection = true,
             bIsServerInitiated = true,
-            Current = _nextServerPredictionKey++
+            Current = state._nextServerPredictionKey++
         };
 
         netDriver.SendClientActivateAbilitySucceed(playerState, abilitySystem, spec.Handle, predictionKey);

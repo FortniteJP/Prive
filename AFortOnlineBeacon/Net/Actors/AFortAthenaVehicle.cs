@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core.Objects;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core.Objects;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -40,11 +41,12 @@ public class AFortAthenaVehicle : AActor {
     ///     tens of them rather than thousands, so a generous radius costs almost nothing.
     ///     VEHICLE_CULL_DISTANCE overrides it in units; NET_CULL=0 disables culling entirely.
     /// </summary>
+    /// <summary>VEHICLE_CULL_DISTANCE, from this world's options - see AActor.NetCullDistanceKnob.</summary>
+    protected override string? NetCullDistanceKnob => "VEHICLE_CULL_DISTANCE";
+
     public AFortAthenaVehicle() {
-        NetCullDistanceSquared =
-            float.TryParse(Environment.GetEnvironmentVariable("VEHICLE_CULL_DISTANCE"), out var units) && units > 0
-                ? units * units
-                : 40000f * 40000f;
+        // VEHICLE_CULL_DISTANCE overrides this per world - see NetCullDistanceKnob.
+        NetCullDistanceSquared = 40000f * 40000f;
 
         // DORMANT AS SOON AS IT HAS BEEN SENT. A parked vehicle is the textbook case: up to 325 of
         // them map-wide, nothing about one ever changes after the spawn bunch, and none is ever

@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net;
@@ -70,14 +71,14 @@ public static class TerrainGroundTruth {
         get {
             if (_resolved) return _path;
             _resolved = true;
-            _path = Environment.GetEnvironmentVariable("TERRAIN_GROUNDTRUTH") is { Length: > 0 } p ? p : null;
+            _path = FBeaconProcess.Options.Get("TERRAIN_GROUNDTRUTH") is { Length: > 0 } p ? p : null;
             if (_path != null) LoadExisting(_path);
             return _path;
         }
     }
 
     private static float CellSize =>
-        float.TryParse(Environment.GetEnvironmentVariable("TERRAIN_GROUNDTRUTH_CELL"), out var s) && s > 0 ? s : 100f;
+        float.TryParse(FBeaconProcess.Options.Get("TERRAIN_GROUNDTRUTH_CELL"), out var s) && s > 0 ? s : 100f;
 
     /// <summary>
     ///     How far apart two samples in one cell must be to count as SEPARATE surfaces rather than
@@ -89,7 +90,7 @@ public static class TerrainGroundTruth {
     ///     hillside does not turn into a stack of levels.
     /// </summary>
     private static float LevelSeparation =>
-        float.TryParse(Environment.GetEnvironmentVariable("TERRAIN_GROUNDTRUTH_LEVEL"), out var s) && s > 0 ? s : 150f;
+        float.TryParse(FBeaconProcess.Options.Get("TERRAIN_GROUNDTRUTH_LEVEL"), out var s) && s > 0 ? s : 150f;
 
     /// <summary>
     ///     How far a pawn's replicated location sits above its feet - the same 96 the projectile
@@ -98,7 +99,7 @@ public static class TerrainGroundTruth {
     ///     paks.
     /// </summary>
     private static float CapsuleHalfHeight =>
-        float.TryParse(Environment.GetEnvironmentVariable("PAWN_CAPSULE_HALF_HEIGHT"), out var s) && s > 0 ? s : 96f;
+        float.TryParse(FBeaconProcess.Options.Get("PAWN_CAPSULE_HALF_HEIGHT"), out var s) && s > 0 ? s : 96f;
 
     /// <summary>At most this many distinct surfaces per cell; the lowest are kept.</summary>
     private const int MaxLevelsPerCell = 6;
@@ -118,7 +119,11 @@ public static class TerrainGroundTruth {
     ///     platform reports through ServerMove instead and never reaches this function. What arrives
     ///     here is a player standing on something that is not moving.
     /// </summary>
-    public static void Record(FVector location, byte packedMovementMode) {
+    /// <param name="world">
+    ///     The world the move came from - ground truth itself is MAP data and shared, but whether
+    ///     a player is standing on a build is a question about that world's builds.
+    /// </param>
+    public static void Record(UWorld world, FVector location, byte packedMovementMode) {
         if (Path == null) return;
 
         _movesSeen++;
@@ -132,7 +137,7 @@ public static class TerrainGroundTruth {
         // it. Nothing else here can tell a build's surface from a POI floor - but the server placed
         // every build itself, so it can simply ask. Tested just under the feet, which is where a
         // supporting piece's box is.
-        if (BuildingStructuralSupportSystem.IsSolid(
+        if (BuildingStructuralSupportSystem.Of(world).IsSolid(
                 new FVector { X = location.X, Y = location.Y, Z = groundZ - 8f })) {
             _onPlayerBuilds++;
             return;

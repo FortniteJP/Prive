@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net;
@@ -40,7 +41,7 @@ namespace AFortOnlineBeacon.Net;
 /// </summary>
 public static class TerrainWalls {
     private static readonly string[] CandidatePaths =
-        Environment.GetEnvironmentVariable("TERRAIN_HEIGHTMAP_WALLS") is { Length: > 0 } configured
+        FBeaconProcess.Options.Get("TERRAIN_HEIGHTMAP_WALLS") is { Length: > 0 } configured
             ? new[] { configured }
             : new[] {
                 Path.Combine(AppContext.BaseDirectory, "TerrainHeightMap.walls.bin"),
@@ -58,7 +59,7 @@ public static class TerrainWalls {
     private static bool _loadAttempted;
 
     /// <summary>Off with WORLD_WALL_COLLISION=0, or simply by having no baked file.</summary>
-    private static bool Enabled => Environment.GetEnvironmentVariable("WORLD_WALL_COLLISION") is not "0";
+    private static bool Enabled => FBeaconProcess.Options.Get("WORLD_WALL_COLLISION") is not "0";
 
     /// <summary>Whether a wall map is loaded at all - worth a startup line, since its absence is
     /// invisible otherwise and looks exactly like "the walls do not work".</summary>
@@ -155,7 +156,25 @@ public static class TerrainWalls {
         return null;
     }
 
+    /// <summary>
+    ///     Loads once, and makes every OTHER caller wait for that load to finish rather than read a
+    ///     half-built grid. The body used to set its "attempted" flag first and then load - fine with
+    ///     one world, a race with two: both worlds start together in the in-process host, and the
+    ///     second would see the flag, skip the load, and query empty data (a wall that briefly is not
+    ///     there). The flag here is only set once the load is over, success or failure.
+    /// </summary>
     private static void EnsureLoaded() {
+        if (_loadCompleted) return;
+        lock (LoadGate) {
+            if (_loadCompleted) return;
+            try { EnsureLoadedCore(); } finally { _loadCompleted = true; }
+        }
+    }
+
+    private static readonly object LoadGate = new();
+    private static volatile bool _loadCompleted;
+
+    private static void EnsureLoadedCore() {
         if (_loadAttempted) return;
         _loadAttempted = true;
 

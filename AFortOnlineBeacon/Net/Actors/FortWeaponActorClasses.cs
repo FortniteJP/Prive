@@ -55,13 +55,27 @@ internal static partial class FortWeaponActorClasses {
                // Consumables live under Athena/Items/Consumables, not Athena/Items/Weapons, so the
                // generated weapon table never saw them - see FortConsumables.Generated.cs. They are
                // FortWeaponRangedItemDefinitions like any rifle and go through exactly this path.
-               ?? FortConsumables.ActorClassFor(name);
+               ?? FortConsumables.ActorClassFor(name)
+               // Traps: the TOOL they are held with. See FortTraps.
+               ?? FortTraps.ToolClassFor(name);
     }
 
     /// <summary>
     ///     The UGameplayAbility class this weapon fires with, as a path-exported asset reference.
     ///     Null for an item with no fire ability (or one outside the generated table).
     /// </summary>
+    /// <summary>
+    ///     The item's SecondaryFireAbility CDO, or null - the same class-to-CDO rule as
+    ///     <see cref="FireAbilityFor" />.
+    /// </summary>
+    public static UObject? SecondaryAbilityFor(UObject? itemDefinition) {
+        if (itemDefinition == null) return null;
+        var classPath = FortConsumables.SecondaryAbilityFor(itemDefinition.GetFName().ToString());
+        if (classPath == null) return null;
+        var dot = classPath.LastIndexOf('.');
+        return dot < 0 ? null : UAssetRegistry.GetOrCreate($"{classPath[..dot]}.Default__{classPath[(dot + 1)..]}");
+    }
+
     public static UObject? FireAbilityFor(UObject? itemDefinition) {
         if (itemDefinition == null) return null;
 
@@ -139,7 +153,13 @@ internal static partial class FortWeaponActorClasses {
     /// </summary>
     public static UClass? ClassFor(UObject? itemDefinition) {
         var path = PathFor(itemDefinition);
-        return path == null ? null : GUClassArray.StaticClassForPath<AFortWeapon>(path);
+        if (path == null) return null;
+
+        // A trap tool is an AFortDecoTool, and the UClass's TYPE is what decides the instance type
+        // SpawnActor makes - see AFortDecoTool for the handles that type carries.
+        return FortTraps.For(itemDefinition)?.ToolClass == path
+            ? GUClassArray.StaticClassForPath<AFortDecoTool>(path)
+            : GUClassArray.StaticClassForPath<AFortWeapon>(path);
     }
 
     /// <summary>

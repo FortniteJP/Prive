@@ -6,6 +6,47 @@ public class DefaultEngine : CloudStorageFile {
     
     public const bool UseSSL = true;
 
+    /// <summary>
+    ///     The port the client is told to reach XMPP on. In Debug it connects straight to this
+    ///     process, which listens one above HTTP (<see cref="Global.XmppPort"/>); otherwise it goes
+    ///     through the reverse proxy on the standard port, and the proxy is what terminates TLS.
+    /// </summary>
+    public static int XmppServerPort =>
+#if DEBUG
+        Global.XmppPort;
+#else
+        UseSSL ? 443 : 80;
+#endif
+
+    /// <summary>
+    ///     The address the client is told to reach XMPP at, in Debug builds.
+    ///     <para>
+    ///         The default is the loopback, which is correct only while the client runs on this
+    ///         same machine - the client resolves this itself, so 127.0.0.1 sends a LAN client back
+    ///         to its own box. Set <c>XMPP_ADDR</c> to this machine's LAN address (for example
+    ///         <c>XMPP_ADDR=192.168.11.11</c>) to let other machines connect. It is not
+    ///         auto-detected on purpose: a box with a Hyper-V or WSL adapter has more than one
+    ///         address, and silently picking the wrong one looks exactly like the server being down.
+    ///     </para>
+    ///     <para>
+    ///         Note that <c>HOST</c> must stay unset (0.0.0.0) for this to be reachable - HOST
+    ///         narrows what Kestrel binds, it does not advertise anything.
+    ///     </para>
+    /// </summary>
+    public static string XmppServerAddr {
+        get {
+#if DEBUG
+            var addr = Environment.GetEnvironmentVariable("XMPP_ADDR");
+            addr = string.IsNullOrWhiteSpace(addr) ? "127.0.0.1" : addr.Trim();
+            // The scheme is what makes the client take the WebSocket transport at all, so it is
+            // added when missing rather than left to whoever set the variable.
+            return addr.StartsWith("ws://") || addr.StartsWith("wss://") ? addr : $"ws://{addr}";
+#else
+            return $"{(UseSSL ? "wss" : "ws")}://!api.fortnite.day";
+#endif
+        }
+    }
+
     public override List<IniElementSection> Elements => new() {
         new() {
             Section = "ConsoleVariables",
@@ -16,16 +57,36 @@ public class DefaultEngine : CloudStorageFile {
                 new IniElementKeyValue("Fort.ShutdownWhenContentBeaconFails", "0")
             }
         },
-        // BROKEN WHY
+        // The scheme on ServerAddr is what picks the transport, and it is the only thing that
+        // does. FXmppConnectionStrophe::Login (engine, XmppConnectionStrophe.cpp) reads it:
+        //
+        //     if (ServerAddr.StartsWith("wss://") || ServerAddr.StartsWith("ws://"))
+        //         WebsocketConnection = MakeUnique<FStropheWebsocketConnection>(...);
+        //     else
+        //         StartXmppThread(...);   // raw TCP libstrophe, RFC 6120 stream:stream framing
+        //
+        // Without the scheme the client opens a bare TCP XMPP stream, which this server does not
+        // speak: the log shows "Starting Strophe XMPP thread" then a silent 30 second timeout.
+        //
+        // The quotes are the other half, and they are not decoration - see IniElementKeyValue.
+        // Unquoted, UE's ini parser treats the // as a comment and the client ends up with
+        // ServerAddr="ws:", which is neither a scheme it recognises nor a host it can reach.
+        //
+        // Protocol and bUsePlainTextAuth are dead keys here. Disassembling the MCP config reader
+        // out of the client dump (0x14066DA60) shows it reads exactly seven keys from this section
+        // - bUseSSL, ServerAddr, ServerPort, Domain, PingInterval, PingTimeout,
+        // bPrivateChatFriendsOnly - and "bUsePlainTextAuth" does not even exist as a string in the
+        // binary. They are left in place only because they are harmless and match the reference
+        // configs people compare against.
         new() {
             Section = "OnlineSubsystemMcp.Xmpp",
             Elements = new() {
                 new IniElementKeyValue("bUsePlainTextAuth", "true"),
                 #if DEBUG
                 new IniElementKeyValue("Domain", "localhost"),
-                new IniElementKeyValue("ServerAddr", "127.0.0.1"),
-                new IniElementKeyValue("ServerPort", "8000"),
-                new IniElementKeyValue("Protocol", "http"),
+                new IniElementKeyValue("ServerAddr", XmppServerAddr),
+                new IniElementKeyValue("ServerPort", $"{XmppServerPort}"),
+                new IniElementKeyValue("Protocol", "ws"),
                 new IniElementKeyValue("bUseSSL", "false")
                 #else
                 new IniElementKeyValue("Domain", "!api.fortnite.day"),
@@ -38,13 +99,13 @@ public class DefaultEngine : CloudStorageFile {
             Elements = new() {
                 #if DEBUG
                 new IniElementKeyValue("Domain", "localhost"),
-                new IniElementKeyValue("ServerAddr", "127.0.0.1"),
-                new IniElementKeyValue("ServerPort", "8000"),
-                new IniElementKeyValue("Protocol", "http"),
+                new IniElementKeyValue("ServerAddr", XmppServerAddr),
+                new IniElementKeyValue("ServerPort", $"{XmppServerPort}"),
+                new IniElementKeyValue("Protocol", "ws"),
                 new IniElementKeyValue("bUseSSL", "false")
                 #else
                 new IniElementKeyValue("Domain", "!api.fortnite.day"),
-                new IniElementKeyValue("ServerAddr", $"{(UseSSL ? "wss" : "ws")}://!api.fortnite.day"),
+                new IniElementKeyValue("ServerAddr", XmppServerAddr),
                 new IniElementKeyValue("ServerPort", UseSSL ? "443" : "80"),
                 new IniElementKeyValue("Protocol", UseSSL ? "wss" : "ws"),
                 new IniElementKeyValue("bUseSSL", $"{UseSSL}")

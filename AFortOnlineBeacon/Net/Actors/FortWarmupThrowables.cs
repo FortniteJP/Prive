@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Core.Math;
 using AFortOnlineBeacon.Core.Objects;
 using AFortOnlineBeacon.Runtime;
 
@@ -26,26 +26,34 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     which mode is running so it cannot be left on unnoticed.
 /// </summary>
 internal static class FortWarmupThrowables {
-    private static bool Enabled => Environment.GetEnvironmentVariable("WARMUP_THROWABLES") is not "0";
 
-    /// <summary>How far out the ring of pickups sits. Far enough not to be inside the spawn crowd.</summary>
-    private static float Radius =>
-        float.TryParse(Environment.GetEnvironmentVariable("WARMUP_THROWABLE_RADIUS"), out var radius)
-            ? radius
-            : 700f;
+    /// <summary>This world's share of FortWarmupThrowables's state - see FWorldSubsystem.</summary>
+    private sealed class FWarmupThrowableState : FWorldSubsystem {
+        public bool Enabled => Options.Get("WARMUP_THROWABLES") is not "0";
 
-    /// <summary>
-    ///     Off the ground, for the same reason floor loot lifts its own: a pickup sunk into the floor
-    ///     is one the client's interaction trace cannot see.
-    /// </summary>
-    private static float ZOffset =>
-        float.TryParse(Environment.GetEnvironmentVariable("WARMUP_THROWABLE_Z"), out var z) ? z : 40f;
+        /// <summary>How far out the ring of pickups sits. Far enough not to be inside the spawn crowd.</summary>
+        public float Radius =>
+            float.TryParse(Options.Get("WARMUP_THROWABLE_RADIUS"), out var radius)
+                ? radius
+                : 700f;
 
-    private static bool _placed;
+        /// <summary>
+        ///     Off the ground, for the same reason floor loot lifts its own: a pickup sunk into the floor
+        ///     is one the client's interaction trace cannot see.
+        /// </summary>
+        public float ZOffset =>
+            float.TryParse(Options.Get("WARMUP_THROWABLE_Z"), out var z) ? z : 40f;
+
+        public bool _placed;
+    }
+
+    private static FWarmupThrowableState StateOf(UWorld world) => world.GetSubsystem<FWarmupThrowableState>();
 
     public static void Tick(UWorld world, float now) {
-        if (_placed || !Enabled) return;
-        _placed = true;
+        var state = StateOf(world);
+
+        if (state._placed || !state.Enabled) return;
+        state._placed = true;
 
         var throwables = FortConsumables.Names
             .Where(IsThrowable)
@@ -60,7 +68,7 @@ internal static class FortWarmupThrowables {
         var anchor = FortWarmupStarts.Anchor;
 
         Console.WriteLine($"FortWarmupThrowables: dropping one stack of each of the {throwables.Count} throwable(s) " +
-                          $"in a {Radius:F0}u ring around the warmup start " +
+                          $"in a {state.Radius:F0}u ring around the warmup start " +
                           $"({anchor.X:F0}, {anchor.Y:F0}, {anchor.Z:F0}). WARMUP_THROWABLES=0 turns this off.");
 
         var placed = 0;
@@ -68,9 +76,9 @@ internal static class FortWarmupThrowables {
             var angle = MathF.Tau * i / throwables.Count;
 
             if (Spawn(world, throwables[i],
-                      anchor.X + MathF.Cos(angle) * Radius,
-                      anchor.Y + MathF.Sin(angle) * Radius,
-                      anchor.Z + ZOffset)) {
+                      anchor.X + MathF.Cos(angle) * state.Radius,
+                      anchor.Y + MathF.Sin(angle) * state.Radius,
+                      anchor.Z + state.ZOffset)) {
                 placed++;
             }
         }

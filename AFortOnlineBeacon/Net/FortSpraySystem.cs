@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core.Objects;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core.Objects;
 using AFortOnlineBeacon.Net.Actors;
 
 namespace AFortOnlineBeacon.Net;
@@ -32,7 +33,10 @@ namespace AFortOnlineBeacon.Net;
 ///     AFortSprayDecalInstance), so it is the only one this server can hand over - the rest are
 ///     Blueprint variables the client fills from its own CDO.
 /// </summary>
-internal static class FortSpraySystem {
+internal sealed class FortSpraySystem : FWorldSubsystem {
+    /// <summary>This world's instance - see FWorldSubsystem.</summary>
+    public static FortSpraySystem Of(UWorld world) => world.GetSubsystem<FortSpraySystem>();
+
     /// <summary>GAB_Spray_Generic::DecalTraceDistance, off the ability's own CDO.</summary>
     private const float TraceDistance = 600f;
 
@@ -43,8 +47,8 @@ internal static class FortSpraySystem {
     ///     see FortProjectileSystem.CapsuleHalfHeight for why it is a convention and not read from
     ///     the asset.
     /// </summary>
-    private static float CapsuleHalfHeight =>
-        float.TryParse(Environment.GetEnvironmentVariable("PAWN_CAPSULE_HALF_HEIGHT"), out var s) && s > 0 ? s : 96f;
+    private float CapsuleHalfHeight =>
+        float.TryParse(Options.Get("PAWN_CAPSULE_HALF_HEIGHT"), out var s) && s > 0 ? s : 96f;
 
     /// <summary>
     ///     How far INTO a player-built surface to push the decal, along -normal.
@@ -65,11 +69,11 @@ internal static class FortSpraySystem {
     ///     floating just off a surface does. Hull hits are never adjusted: those ARE the game's own
     ///     shapes and have been pixel-perfect since the first live test.
     /// </summary>
-    private static float BuildInset =>
-        float.TryParse(Environment.GetEnvironmentVariable("SPRAY_BUILD_INSET"), out var inset) ? inset : 0f;
+    private float BuildInset =>
+        float.TryParse(Options.Get("SPRAY_BUILD_INSET"), out var inset) ? inset : 0f;
 
     /// <summary>SPRAY_DECALS=0 turns the decal off while leaving the emote itself working.</summary>
-    private static bool Enabled => Environment.GetEnvironmentVariable("SPRAY_DECALS") is not "0";
+    private bool Enabled => Options.Get("SPRAY_DECALS") is not "0";
 
     /// <summary>
     ///     How many decals one player may have standing. Real Fortnite fades the oldest out
@@ -77,17 +81,17 @@ internal static class FortSpraySystem {
     ///     ActiveSprayInstances array); this destroys it, which is the same thing without the fade.
     ///     Unbounded is not an option - a player can spray as fast as the emote ends.
     /// </summary>
-    private static int MaxPerPlayer =>
-        int.TryParse(Environment.GetEnvironmentVariable("SPRAY_DECAL_LIMIT"), out var n) && n > 0 ? n : 3;
+    private int MaxPerPlayer =>
+        int.TryParse(Options.Get("SPRAY_DECAL_LIMIT"), out var n) && n > 0 ? n : 3;
 
-    private static readonly Dictionary<APlayerController, List<AFortSprayDecalInstance>> Active = new();
+    private readonly Dictionary<APlayerController, List<AFortSprayDecalInstance>> Active = new();
 
     /// <summary>
     ///     Called from FortEmoteSystem the moment a spray ability is granted. Silently does nothing
     ///     when the trace finds no surface - which is correct, and is the Blueprint's own behaviour:
     ///     spraying at the sky paints nothing.
     /// </summary>
-    public static void Paint(APlayerController controller, UObject sprayAsset) {
+    public void Paint(APlayerController controller, UObject sprayAsset) {
         if (!Enabled) return;
         if (controller.Pawn is not { } pawn) return;
         if (pawn.GetWorld() is not { } world) return;
@@ -134,7 +138,7 @@ internal static class FortSpraySystem {
         // the real surface's - SnapToPiece exists for the older coarse-box answer, where the hit was
         // in mid-air in front of the wall, and applying it to an exact hit would push the decal off
         // the surface instead of onto it.
-        var built = BuildingStructuralSupportSystem.SweepToBuildSurface(start, end) is { } build
+        var built = BuildingStructuralSupportSystem.Of(World).SweepToBuildSurface(start, end) is { } build
             ? build.Exact
                 ? (build.Point, build.Normal)
                 : Inset(SnapToPiece(build.Point, AxisOf(build.Normal), build.Piece, forward), BuildInset)
@@ -173,7 +177,7 @@ internal static class FortSpraySystem {
                               $"landscapeExtent={Extent()}, " +
                               $"hullShapes={WorldCollision.ShapeCount}, hullInstances={WorldCollision.InstanceCount}, " +
                               $"solidJustBelowTheFeet={SolidBelow(origin)}, " +
-                              $"buildsNearby={BuildingStructuralSupportSystem.PiecesWithin(start, 1024f)}");
+                              $"buildsNearby={BuildingStructuralSupportSystem.Of(World).PiecesWithin(start, 1024f)}");
             return;
         }
 
@@ -211,7 +215,7 @@ internal static class FortSpraySystem {
     }
 
     /// <summary>The dominant axis of a normal (0 = X, 1 = Y, 2 = Z), for the coarse-box fallback.</summary>
-    private static int AxisOf(FVector normal) {
+    private int AxisOf(FVector normal) {
         float x = MathF.Abs(normal.X), y = MathF.Abs(normal.Y), z = MathF.Abs(normal.Z);
         return x >= y && x >= z ? 0 : y >= z ? 1 : 2;
     }
@@ -233,7 +237,7 @@ internal static class FortSpraySystem {
     ///     The other two axes keep the ray's own values, so WHERE on the wall the player aimed is
     ///     preserved exactly; only the depth is corrected.
     /// </summary>
-    private static (FVector Point, FVector Normal) SnapToPiece(
+    private (FVector Point, FVector Normal) SnapToPiece(
         FVector point, int axis, ABuildingActor piece, FVector direction) {
         var centroid = FBuildingSupportCellIndex.CentroidOf(piece.GetActorLocation(), piece.GetActorRotation().Yaw,
                                                  piece.BuildingType);
@@ -248,7 +252,7 @@ internal static class FortSpraySystem {
     }
 
     /// <summary>Moves a hit `by` units along -normal, i.e. into the surface. See BuildInset.</summary>
-    private static (FVector Point, FVector Normal) Inset((FVector Point, FVector Normal) hit, float by) =>
+    private (FVector Point, FVector Normal) Inset((FVector Point, FVector Normal) hit, float by) =>
         by == 0f
             ? hit
             : (new FVector {
@@ -264,12 +268,12 @@ internal static class FortSpraySystem {
     ///     no geometry for the surface they are visibly standing on - and no aim will ever make a
     ///     downward trace hit it.
     /// </summary>
-    private static string SolidBelow(FVector capsuleCentre) {
+    private string SolidBelow(FVector capsuleCentre) {
         var feetZ = capsuleCentre.Z - CapsuleHalfHeight;
         var probe = new FVector { X = capsuleCentre.X, Y = capsuleCentre.Y, Z = feetZ - 8f };
 
         var hull = WorldCollision.IsSolid(probe);
-        var build = BuildingStructuralSupportSystem.IsSolid(probe);
+        var build = BuildingStructuralSupportSystem.Of(World).IsSolid(probe);
         var landscape = TerrainHeightMap.GetGroundHeight(probe.X, probe.Y);
         var surface = SurfaceAt(probe.X, probe.Y, capsuleCentre.Z);
 
@@ -278,7 +282,7 @@ internal static class FortSpraySystem {
     }
 
     /// <summary>The landscape bake's own bounds, so "no height here" can be told from "outside the bake".</summary>
-    private static string Extent() =>
+    private string Extent() =>
         TerrainHeightMap.TryGetExtent(out var minX, out var minY, out var maxX, out var maxY)
             ? $"X {minX:F0}..{maxX:F0} Y {minY:F0}..{maxY:F0}"
             : "none";
@@ -291,14 +295,14 @@ internal static class FortSpraySystem {
     ///     Tolerance 0 rather than the default 128: a descending ray wants the surface it is about to
     ///     cross, and letting one that is already ABOVE the ray count would stop the march early.
     /// </summary>
-    private static float? SurfaceAt(float x, float y, float fromZ) =>
+    private float? SurfaceAt(float x, float y, float fromZ) =>
         TerrainHeightMap.GetSurfaceUnder(x, y, SurfaceSampleRadius, fromZ, tolerance: 0f);
 
     /// <summary>One grid cell's worth, so a sample between cells still finds the surface it sits on.</summary>
     private const float SurfaceSampleRadius = 100f;
 
     /// <summary>Whichever of two candidate hits is closer to the trace's start; either may be null.</summary>
-    private static (FVector Point, FVector Normal)? Nearest(
+    private (FVector Point, FVector Normal)? Nearest(
         FVector from, (FVector Point, FVector Normal)? a, (FVector Point, FVector Normal)? b) {
         if (a is not { } first) return b;
         if (b is not { } second) return a;
@@ -306,7 +310,7 @@ internal static class FortSpraySystem {
         return DistanceSquared(from, first.Point) <= DistanceSquared(from, second.Point) ? a : b;
     }
 
-    private static float DistanceSquared(FVector a, FVector b) {
+    private float DistanceSquared(FVector a, FVector b) {
         var dx = a.X - b.X;
         var dy = a.Y - b.Y;
         var dz = a.Z - b.Z;
@@ -319,7 +323,7 @@ internal static class FortSpraySystem {
     ///     information an axis-aligned box hit carries, and it is exactly enough: a player-built wall
     ///     really is axis-aligned to its own placement grid.
     /// </summary>
-    private static FVector AxisNormal(int axis, FVector direction) {
+    private FVector AxisNormal(int axis, FVector direction) {
         var component = axis switch { 0 => direction.X, 1 => direction.Y, _ => direction.Z };
         var sign = component > 0f ? -1f : 1f;
 
@@ -349,7 +353,7 @@ internal static class FortSpraySystem {
     ///     it STARTS below it - the last of which means the shot began inside geometry, and a surface
     ///     behind the player is not what was aimed at.
     /// </summary>
-    private static (FVector Point, FVector Normal)? SweepTerrain(FVector from, FVector to) {
+    private (FVector Point, FVector Normal)? SweepTerrain(FVector from, FVector to) {
         const float step = 25f;
 
         var dx = to.X - from.X;
@@ -399,7 +403,7 @@ internal static class FortSpraySystem {
     ///     gradient of a height field IS its normal, as (-dz/dx, -dz/dy, 1) normalised. Falls back to
     ///     straight up wherever a neighbour is outside the bake.
     /// </summary>
-    private static FVector TerrainNormal(FVector at) {
+    private FVector TerrainNormal(FVector at) {
         const float span = 50f;
 
         var xPlus = SurfaceAt(at.X + span, at.Y, at.Z + span);
@@ -417,7 +421,7 @@ internal static class FortSpraySystem {
     }
 
     /// <summary>Drops this player's oldest decals once they are over the limit.</summary>
-    private static void Remember(APlayerController controller, AFortSprayDecalInstance decal) {
+    private void Remember(APlayerController controller, AFortSprayDecalInstance decal) {
         if (!Active.TryGetValue(controller, out var list)) Active[controller] = list = new List<AFortSprayDecalInstance>();
 
         list.Add(decal);
@@ -444,7 +448,7 @@ internal static class FortSpraySystem {
     ///     round-trip written out rather than rebuilt - the Z axis it also consults is the cross
     ///     product of the other two, so it carries no information the first two do not.
     /// </summary>
-    private static FRotator MakeRotationFromAxes(FVector x, FVector y) {
+    private FRotator MakeRotationFromAxes(FVector x, FVector y) {
         var xAxis = Normalize(x);
         var yAxis = Normalize(y);
         var zAxis = Cross(xAxis, yAxis);
@@ -459,16 +463,16 @@ internal static class FortSpraySystem {
         return new FRotator { Pitch = pitch * toDegrees, Yaw = yaw * toDegrees, Roll = roll * toDegrees };
     }
 
-    private static FVector Normalize(FVector v) {
+    private FVector Normalize(FVector v) {
         var length = MathF.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
         return length <= 1e-6f ? new FVector { X = 1f } : new FVector { X = v.X / length, Y = v.Y / length, Z = v.Z / length };
     }
 
-    private static FVector Cross(FVector a, FVector b) => new() {
+    private FVector Cross(FVector a, FVector b) => new() {
         X = a.Y * b.Z - a.Z * b.Y,
         Y = a.Z * b.X - a.X * b.Z,
         Z = a.X * b.Y - a.Y * b.X
     };
 
-    private static float Dot(FVector a, FVector b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+    private float Dot(FVector a, FVector b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
 }

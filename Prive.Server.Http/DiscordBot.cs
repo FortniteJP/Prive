@@ -57,7 +57,7 @@ public class MyDiscordRestClient {
                         },
                         new() {
                             Name = "待機人数",
-                            Value = manager.Clients.Count.ToString(),
+                            Value = manager.QueuedCount.ToString(),
                             IsInline = true
                         },
                     }

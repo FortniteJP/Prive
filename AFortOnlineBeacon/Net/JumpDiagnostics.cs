@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Net.Actors;
 using AFortOnlineBeacon.Runtime;
 
 namespace AFortOnlineBeacon.Net;
@@ -34,17 +34,26 @@ namespace AFortOnlineBeacon.Net;
 ///     a handful of times. JUMP_DIAGNOSTICS=0 turns it off.
 /// </summary>
 public static class JumpDiagnostics {
-    private static bool Enabled => Environment.GetEnvironmentVariable("JUMP_DIAGNOSTICS") is not "0";
 
-    private static float IntervalSeconds =>
-        float.TryParse(Environment.GetEnvironmentVariable("JUMP_DIAGNOSTICS_INTERVAL"), out var value) ? value : 10f;
+    /// <summary>This world's share of JumpDiagnostics's state - see FWorldSubsystem.</summary>
+    private sealed class FJumpDiagnosticsState : FWorldSubsystem {
+        public bool Enabled => Options.Get("JUMP_DIAGNOSTICS") is not "0";
 
-    private static float _nextReport;
-    private static bool _everJumped;
+        public float IntervalSeconds =>
+            float.TryParse(Options.Get("JUMP_DIAGNOSTICS_INTERVAL"), out var value) ? value : 10f;
+
+        public float _nextReport;
+
+        public bool _everJumped;
+    }
+
+    private static FJumpDiagnosticsState StateOf(UWorld world) => world.GetSubsystem<FJumpDiagnosticsState>();
 
     public static void Tick(UWorld world, float now) {
-        if (!Enabled || _everJumped || now < _nextReport) return;
-        _nextReport = now + IntervalSeconds;
+        var worldState = StateOf(world);
+
+        if (!worldState.Enabled || worldState._everJumped || now < worldState._nextReport) return;
+        worldState._nextReport = now + worldState.IntervalSeconds;
 
         if (world.NetDriver is not { } netDriver) return;
 
@@ -55,7 +64,7 @@ public static class JumpDiagnostics {
             // Bit 0 of FSavedMove_Character's compressed flags. Seeing it once ends this for good:
             // it means ACharacter::Jump() ran, so whatever is wrong after that is on this side.
             if ((pawn.SeenMoveFlags & 0x01) != 0) {
-                _everJumped = true;
+                worldState._everJumped = true;
                 return;
             }
 

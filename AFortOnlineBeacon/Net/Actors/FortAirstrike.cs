@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     The AIR STRIKE's bombardment - `Athena_AppleSauce`, whose name gives nothing away.
@@ -123,7 +124,7 @@ internal static class FortAirstrike {
     private const float ZoneRadius = 900f;
 
     /// <summary>Rolled here rather than seeded per strike: the scatter is cosmetic, not a fixture.</summary>
-    private static readonly Random Rng = new();
+    private static Random Rng => Random.Shared;
 
     /// <summary>
     ///     The two cues that ARE the air strike on screen - the marker on the ground and the rockets
@@ -149,7 +150,33 @@ internal static class FortAirstrike {
     private sealed record FCueHolder(UFortAbilitySystemComponent AbilitySystem, APlayerState Owner,
                                      APawn Pawn, float EndsAt);
 
-    private static readonly List<FCueHolder> Holders = new();
+    /// <summary>This world's share of FortAirstrike's state - see FWorldSubsystem.</summary>
+    private sealed class FAirstrikeState : FWorldSubsystem {
+        public readonly List<FCueHolder> Holders = new();
+
+        public readonly List<FPendingRocket> Pending = new();
+
+        public readonly List<FPendingLaunch> Launches = new();
+
+        /// <summary>Rockets in the air: where each is headed, and when it gets there.</summary>
+        public readonly List<(AFortProjectileBase Rocket, FVector Target, float ArrivesAt)> InAir = new();
+
+        /// <summary>Rockets that have gone off, waiting only to be taken off the wire.</summary>
+        public readonly List<(AFortProjectileBase Rocket, float RemoveAt)> Spent = new();
+
+        /// <summary>
+        ///     Whether this strike has already reported its first arrival - see the line it prints, which
+        ///     is there to make "the rockets are not visible" answerable in ONE round instead of by
+        ///     hypothesis. It says how many clients actually held a channel for the rocket at the moment
+        ///     it landed: zero means the client never had it and the problem is relevancy or the channel
+        ///     budget; non-zero means it did, and the problem is on the far side of the wire.
+        ///
+        ///     Once per strike rather than once per rocket, because there are sixty of them.
+        /// </summary>
+        public bool _reportedArrival;
+    }
+
+    private static FAirstrikeState StateOf(UWorld world) => world.GetSubsystem<FAirstrikeState>();
 
     /// <summary>
     ///     `B_Prj_AppleSauce_Rocket_Athena_C`, which the spawner fires. A **FortProjectileBase**
@@ -162,15 +189,8 @@ internal static class FortAirstrike {
     /// <summary>One rocket still to land: where, when, and who is answerable for it.</summary>
     private sealed record FPendingRocket(FVector Where, float At, APawn? Instigator);
 
-    private static readonly List<FPendingRocket> Pending = new();
-
     /// <summary>One rocket still to be FIRED - see LaunchRocket for why the two phases are separate.</summary>
     private sealed record FPendingLaunch(FVector Target, float At, APawn? Instigator);
-
-    private static readonly List<FPendingLaunch> Launches = new();
-
-    /// <summary>Rockets in the air: where each is headed, and when it gets there.</summary>
-    private static readonly List<(AFortProjectileBase Rocket, FVector Target, float ArrivesAt)> InAir = new();
 
     /// <summary>
     ///     How long an arrived rocket is left on the wire after it goes off, so bHasExploded and
@@ -182,27 +202,15 @@ internal static class FortAirstrike {
     /// </summary>
     private const float ExplodeToRemoveDelay = 1f;
 
-    /// <summary>Rockets that have gone off, waiting only to be taken off the wire.</summary>
-    private static readonly List<(AFortProjectileBase Rocket, float RemoveAt)> Spent = new();
-
-    /// <summary>
-    ///     Whether this strike has already reported its first arrival - see the line it prints, which
-    ///     is there to make "the rockets are not visible" answerable in ONE round instead of by
-    ///     hypothesis. It says how many clients actually held a channel for the rocket at the moment
-    ///     it landed: zero means the client never had it and the problem is relevancy or the channel
-    ///     budget; non-zero means it did, and the problem is on the far side of the wire.
-    ///
-    ///     Once per strike rather than once per rocket, because there are sixty of them.
-    /// </summary>
-    private static bool _reportedArrival;
-
     /// <summary>
     ///     Schedules the whole bombardment at the moment the projectile lands. Every rocket's landing
     ///     point and time is decided here rather than as they go, so the strike is fixed once thrown -
     ///     the same as the real one, where the spawner is handed its grid up front.
     /// </summary>
     public static void Begin(UWorld world, FVector centre, APawn? instigator) {
-        if (Environment.GetEnvironmentVariable("AIRSTRIKE") is "0") return;
+        var state = StateOf(world);
+
+        if (world.Options.Get("AIRSTRIKE") is "0") return;
 
         // The first IMPACT, not the first firing - see RocketFlightTime.
         var at = world.TimeSeconds + InitialDelay + RocketFlightTime;
@@ -232,13 +240,13 @@ internal static class FortAirstrike {
 
                 var target = new FVector { X = x, Y = y, Z = centre.Z };
 
-                Pending.Add(new FPendingRocket(target, at, instigator));
+                state.Pending.Add(new FPendingRocket(target, at, instigator));
 
                 // FIRED a flight-time earlier, so it ARRIVES when the damage does. The two are
                 // scheduled separately rather than the impact being derived from the spawn, because
                 // the client flies the rocket on its own clock and this server does not: what has to
                 // agree is the moment it lands, and that is the one both are pinned to.
-                Launches.Add(new FPendingLaunch(target, at - RocketFlightTime, instigator));
+                state.Launches.Add(new FPendingLaunch(target, at - RocketFlightTime, instigator));
 
                 at += TimeBetweenRockets;
                 scheduled++;
@@ -247,7 +255,7 @@ internal static class FortAirstrike {
             at += TimeBetweenGroups;
         }
 
-        _reportedArrival = false;
+        state._reportedArrival = false;
 
         ShowCues(world, centre, instigator, at);
 
@@ -260,11 +268,13 @@ internal static class FortAirstrike {
 
     /// <summary>Lands whatever is due. Driven from the projectile tick, which already runs every frame.</summary>
     public static void Tick(UWorld world, float timeSeconds) {
-        for (var i = Launches.Count - 1; i >= 0; i--) {
-            if (timeSeconds < Launches[i].At) continue;
+        var state = StateOf(world);
 
-            var launch = Launches[i];
-            Launches.RemoveAt(i);
+        for (var i = state.Launches.Count - 1; i >= 0; i--) {
+            if (timeSeconds < state.Launches[i].At) continue;
+
+            var launch = state.Launches[i];
+            state.Launches.RemoveAt(i);
 
             LaunchRocket(world, launch.Target, launch.Instigator, timeSeconds);
         }
@@ -276,7 +286,7 @@ internal static class FortAirstrike {
         // bUseExplicitVelocity keeps GatherCurrentMovement from deriving a velocity from successive
         // positions. It would get the right answer here, but the derived one lags a tick and the
         // client integrates it forward between updates.
-        foreach (var (rocket, target, arrivesAt) in InAir) {
+        foreach (var (rocket, target, arrivesAt) in state.InAir) {
             var falling = MathF.Max(0f, arrivesAt - timeSeconds) * RocketSpeed;
 
             rocket.SetActorLocation(new FVector { X = target.X, Y = target.Y, Z = target.Z + falling });
@@ -287,19 +297,19 @@ internal static class FortAirstrike {
         // in that Blueprint event and in nothing else - so a rocket that is merely destroyed on
         // touchdown lands in silence. Same explode -> kill -> remove sequence a grenade uses, and
         // for the same reason: both flags have to reach the client before the channel closes.
-        for (var i = InAir.Count - 1; i >= 0; i--) {
-            if (timeSeconds < InAir[i].ArrivesAt) continue;
+        for (var i = state.InAir.Count - 1; i >= 0; i--) {
+            if (timeSeconds < state.InAir[i].ArrivesAt) continue;
 
-            var arrived = InAir[i].Rocket;
-            InAir.RemoveAt(i);
+            var arrived = state.InAir[i].Rocket;
+            state.InAir.RemoveAt(i);
 
             arrived.bHasExploded = true;
             arrived.bIsBeingKilled = true;
 
-            Spent.Add((arrived, timeSeconds + ExplodeToRemoveDelay));
+            state.Spent.Add((arrived, timeSeconds + ExplodeToRemoveDelay));
 
-            if (!_reportedArrival) {
-                _reportedArrival = true;
+            if (!state._reportedArrival) {
+                state._reportedArrival = true;
 
                 var watching = world.NetDriver?.ClientConnections
                                     .Count(c => c.FindActorChannel(arrived) != null) ?? 0;
@@ -311,28 +321,28 @@ internal static class FortAirstrike {
             }
         }
 
-        for (var i = Spent.Count - 1; i >= 0; i--) {
-            if (timeSeconds < Spent[i].RemoveAt) continue;
+        for (var i = state.Spent.Count - 1; i >= 0; i--) {
+            if (timeSeconds < state.Spent[i].RemoveAt) continue;
 
-            Spent[i].Rocket.Destroy();
-            Spent.RemoveAt(i);
+            state.Spent[i].Rocket.Destroy();
+            state.Spent.RemoveAt(i);
         }
 
-        for (var i = Pending.Count - 1; i >= 0; i--) {
-            if (timeSeconds < Pending[i].At) continue;
+        for (var i = state.Pending.Count - 1; i >= 0; i--) {
+            if (timeSeconds < state.Pending[i].At) continue;
 
-            var rocket = Pending[i];
-            Pending.RemoveAt(i);
+            var rocket = state.Pending[i];
+            state.Pending.RemoveAt(i);
 
             FortProjectileSystem.Blast(world, rocket.Where, RocketRadius,
                                        RocketDamage, RocketEnvironmentDamage, rocket.Instigator);
         }
 
-        for (var i = Holders.Count - 1; i >= 0; i--) {
-            if (timeSeconds < Holders[i].EndsAt) continue;
+        for (var i = state.Holders.Count - 1; i >= 0; i--) {
+            if (timeSeconds < state.Holders[i].EndsAt) continue;
 
-            var holder = Holders[i];
-            Holders.RemoveAt(i);
+            var holder = state.Holders[i];
+            state.Holders.RemoveAt(i);
 
             var removed = holder.AbilitySystem.RemoveGameplayCue(StrikeCue)
                         | holder.AbilitySystem.RemoveGameplayCue(WarningCue);
@@ -370,6 +380,8 @@ internal static class FortAirstrike {
     ///     RocketSpeed - no arc to model and nothing to keep in step.
     /// </summary>
     private static void LaunchRocket(UWorld world, FVector target, APawn? instigator, float timeSeconds) {
+        var state = StateOf(world);
+
         var from = new FVector { X = target.X, Y = target.Y, Z = target.Z + RocketHeight };
 
         // Straight down. Pitch -90 is nose-down, and the rocket's own bRotationFollowsVelocity keeps
@@ -431,7 +443,7 @@ internal static class FortAirstrike {
         rocket.SetRole(ENetRole.ROLE_Authority);
         rocket.SetReplicates(true);
 
-        InAir.Add((rocket, target, timeSeconds + RocketFlightTime));
+        state.InAir.Add((rocket, target, timeSeconds + RocketFlightTime));
     }
 
     /// <summary>
@@ -444,6 +456,8 @@ internal static class FortAirstrike {
     ///     away, because there is no RPC that can say it.
     /// </summary>
     private static void ShowCues(UWorld world, FVector centre, APawn? instigator, float endsAt) {
+        var state = StateOf(world);
+
         if (instigator?.PlayerState is not { } owner) return;
         if (owner.AbilitySystemComponent is not { } abilitySystem) return;
 
@@ -461,6 +475,6 @@ internal static class FortAirstrike {
 
         world.NetDriver?.FlushAbilitySystemComponent(owner);
 
-        Holders.Add(new FCueHolder(abilitySystem, owner, instigator, endsAt));
+        state.Holders.Add(new FCueHolder(abilitySystem, owner, instigator, endsAt));
     }
 }

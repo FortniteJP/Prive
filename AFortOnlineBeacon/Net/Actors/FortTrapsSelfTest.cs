@@ -1,0 +1,144 @@
+using AFortOnlineBeacon.Core.Math;
+using AFortOnlineBeacon.Core.Objects;
+using AFortOnlineBeacon.Net.Rpc;
+using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Serialization;
+
+namespace AFortOnlineBeacon.Net.Actors;
+
+/// <summary>
+///     `--traps-selftest`: the parts of trap placement that can be wrong without anything saying so.
+///
+///     * the generated table: every context item resolves to a real per-surface item with an actor
+///       to spawn, and every tool is one whose ClassNetCache chain is known (an unknown one decodes
+///       the placement RPC with the wrong field width, silently);
+///     * the tool's C# TYPE: SpawnActor makes whatever the UClass says, so a trap tool resolved
+///       as a plain AFortWeapon would replicate the weapon layout and never send ItemDefinition;
+///     * the placement RPC's decode, including the 4-bit enum at the end, from a bunch written the
+///       way the client writes it.
+/// </summary>
+public static class FortTrapsSelfTest {
+    private sealed class TestWorld : UWorld { }
+
+    private static int _failures;
+
+    private static void Check(bool ok, string what) {
+        Console.WriteLine($"  [{(ok ? "PASS" : "FAIL")}] {what}");
+        if (!ok) _failures++;
+    }
+
+    public static bool RunSelfTest() {
+        _failures = 0;
+        Console.WriteLine("FortTrapsSelfTest:");
+
+        // ---------------------------------------------------------------- the table
+        string[] brItems = {
+            "TID_Floor_Player_Launch_Pad_Athena", "TID_Context_BouncePad_Athena", "TID_Floor_Player_Campfire_Athena",
+            "TID_ContextTrap_Athena", "TID_PoisonDartTrap_Context", "TID_Context_Freeze_Athena",
+            "TID_Floor_MountedTurret_Athena", "TID_ZippyTroutTrap_Context"
+        };
+
+        foreach (var name in brItems) {
+            var def = FortTraps.ForPath("/x." + name);
+            Check(def is { ToolClass: not null, ActorClass: not null }, $"{name} has a tool and an actor");
+            if (def is not { IsContext: true }) continue;
+
+            foreach (var surface in new[] { EBuildingAttachmentType.ATTACH_Floor, EBuildingAttachmentType.ATTACH_Wall, EBuildingAttachmentType.ATTACH_Ceiling }) {
+                // A surface the item names nothing for is legitimate - the bouncer has no ceiling
+                // variant in Battle Royale - and must come back null, not the context item.
+                var listed = surface switch {
+                    EBuildingAttachmentType.ATTACH_Wall => def.WallTrap,
+                    EBuildingAttachmentType.ATTACH_Ceiling => def.CeilingTrap,
+                    _ => def.FloorTrap
+                };
+                var placed = FortTraps.PlacedFor(def, surface);
+                if (listed == null) {
+                    Check(placed == null, $"{name} on {surface} places nothing (none listed)");
+                    continue;
+                }
+
+                Check(placed is { ActorClass: not null, IsContext: false },
+                      $"{name} on {surface} places {placed?.ActorClass?[(placed.ActorClass.LastIndexOf('.') + 1)..] ?? "NOTHING"}");
+            }
+        }
+
+        var knownTools = new[] { "TrapTool_C", "TrapTool_ContextTrap_Athena_C" };
+        foreach (var name in brItems) {
+            var tool = FortTraps.ForPath("/x." + name)?.ToolClass;
+            var toolName = tool?[(tool.LastIndexOf('.') + 1)..];
+            Check(toolName != null && knownTools.Contains(toolName), $"{name}'s tool {toolName} has a known net-field chain");
+        }
+
+        // ---------------------------------------------------------------- the tool's type
+        var world = new TestWorld();
+        var launchPad = UAssetRegistry.GetOrCreate(
+            "/Game/Athena/Items/Traps/TID_Floor_Player_Launch_Pad_Athena.TID_Floor_Player_Launch_Pad_Athena");
+        var toolClass = FortWeaponActorClasses.ClassFor(launchPad);
+        Check(toolClass != null, "a launch pad resolves to a tool class");
+        if (toolClass != null) {
+            var tool = world.SpawnActor<AFortWeapon>(toolClass, new FActorSpawnParameters());
+            Check(tool is AFortDecoTool, $"...and spawns as AFortDecoTool (got {tool?.GetType().Name})");
+            Check(tool != null && ReferenceEquals(NativeRepLayouts.Get(tool), NativeRepLayouts.DecoTool),
+                  "...which replicates with the deco-tool layout");
+            Check(tool != null && NativeRpcHandlers.Get(tool)?.ContainsKey("ServerSpawnDeco") == true,
+                  "...and has the placement RPCs");
+        }
+
+        var rifle = UAssetRegistry.GetOrCreate(
+            "/Game/Athena/Items/Weapons/WID_Assault_Auto_Athena_R_Ore_T03.WID_Assault_Auto_Athena_R_Ore_T03");
+        var rifleClass = FortWeaponActorClasses.ClassFor(rifle);
+        Check(rifleClass != null && world.SpawnActor<AFortWeapon>(rifleClass, new FActorSpawnParameters()) is not AFortDecoTool,
+              "a rifle is still a plain AFortWeapon");
+
+        // ---------------------------------------------------------------- the RPC decode
+        var rpcs = NativeRpcHandlers.Get(new AFortDecoTool())!;
+
+        // ServerSpawnDeco(Location, Rotation, AttachedActor = null, ATTACH_Wall): one presence bit per
+        // non-bool parameter, set only when the value is not its default.
+        var writer = new FBitWriter(1024, true);
+        writer.WriteBit(true);
+        new FVector { X = 100f, Y = -200f, Z = 300.5f }.NetSerializeWrite(writer);
+        writer.WriteBit(true);
+        new FRotator { Yaw = 90f }.NetSerializeWrite(writer);
+        writer.WriteBit(false);                                      // AttachedActor: null
+        writer.WriteBit(true);
+        var wall = new byte[] { (byte) EBuildingAttachmentType.ATTACH_Wall };
+        writer.SerializeBits(wall, 4);
+        writer.WriteBit(true);                                       // a trailing marker: nothing over-read
+
+        var reader = new FBitReader(writer.GetData(), (int) writer.GetNumBits());
+        var values = FRpcReader.ReadParams(reader, rpcs["ServerSpawnDeco"].Params);
+        var location = values[0] as FVector;
+        Check(location is { X: 100f, Y: -200f, Z: 300.5f }, $"ServerSpawnDeco Location ({location?.X}, {location?.Y}, {location?.Z})");
+        Check(values[1] is FRotator { Yaw: 90f }, "ServerSpawnDeco Rotation yaw 90");
+        Check(values[2] == null, "ServerSpawnDeco AttachedActor absent");
+        Check(values[3] is byte b && b == (byte) EBuildingAttachmentType.ATTACH_Wall, $"ServerSpawnDeco surface = ATTACH_Wall (got {values[3]})");
+        var afterEnum = reader.GetPosBits();
+        var marker = reader.ReadBit();
+        Check(marker && reader.GetPosBits() == writer.GetNumBits(),
+              $"the enum is exactly 4 bits (read to {afterEnum} of {writer.GetNumBits()}, marker {marker})");
+
+        // THE READER'S LAST BITS, for every length within a byte. FBitReader(byte[], num) masks the
+        // bits past num; it once masked the last VALID bits too (see FBitReader.ApplyMask).
+        var tailOk = true;
+        for (var bits = 1; bits <= 16; bits++) {
+            var all = new byte[] { 0xFF, 0xFF };
+            var tail = new FBitReader(all, bits);
+            for (var i = 0; i < bits; i++) tailOk &= tail.ReadBit();
+        }
+        Check(tailOk, "a reader of any length reads its own last bits as sent");
+
+        // An absent surface is ATTACH_Floor - the zero value.
+        writer = new FBitWriter(1024, true);
+        writer.WriteBit(false);
+        writer.WriteBit(false);
+        writer.WriteBit(false);
+        writer.WriteBit(false);
+        reader = new FBitReader(writer.GetData(), (int) writer.GetNumBits());
+        values = FRpcReader.ReadParams(reader, rpcs["ServerSpawnDeco"].Params);
+        Check(values.All(v => v == null), "four clear presence bits read as four defaults");
+
+        Console.WriteLine(_failures == 0 ? "FortTrapsSelfTest: all passed" : $"FortTrapsSelfTest: {_failures} FAILED");
+        return _failures == 0;
+    }
+}

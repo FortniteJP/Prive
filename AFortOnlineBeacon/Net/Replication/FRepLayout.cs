@@ -44,7 +44,7 @@ public sealed class FRepLayout {
     public IEnumerable<string> PropertyNames => _cmds.Select(cmd => cmd.Def.Name);
 
     /// <summary>String properties whose starting bit offset has already been reported - once each.</summary>
-    private static readonly HashSet<string> LoggedStringOffsets = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedStringOffsets = new();
 
     public FRepLayout(IEnumerable<FRepPropertyDef> topLevelProps) {
         uint handle = 0;
@@ -492,7 +492,7 @@ public sealed class FRepLayout {
             // whole line of thinking is dead and the search moves into the client.
             var stringStartBit = payload.GetNumBits() + 32;   // +32: the FString length prefix
 
-            if (LoggedStringOffsets.Add(def.Name)) {
+            if (LoggedStringOffsets.TryAdd(def.Name, 0)) {
                 // The VALUE is logged too, and that is the point of the second sample. HeroId is
                 // a 32-character uppercase GUID sitting in the same bunch as PlayerNamePrivate
                 // at a different offset, so comparing what the client ends up holding for BOTH

@@ -206,7 +206,9 @@ public class UFortAbilitySystemComponent : UObject {
     public FGameplayAbilitySpec GrantAbility(UObject abilityClass, UObject? sourceObject = null, int inputId = -1,
                                              bool replicateInstance = false) {
         var spec = new FGameplayAbilitySpec {
-            Handle = _nextHandle++,
+            // Interlocked: the counter is shared by every world, and `++` from two threads can hand
+            // out the same handle twice - which the client would treat as one ability.
+            Handle = Interlocked.Increment(ref _nextHandle) - 1,
             Ability = abilityClass,
             InputID = inputId,
             SourceObject = sourceObject

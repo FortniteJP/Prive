@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -237,12 +238,44 @@ public class AActor : UObject {
         if (bOnlyRelevantToOwner) return false;
         if (srcLocation == null || !bHasKnownLocation || !bUseDistanceBasedRelevancy) return true;
 
-        return FVector.DistSquared(srcLocation, GetActorLocation()) < NetCullDistanceSquared;
+        return FVector.DistSquared(srcLocation, GetActorLocation()) < EffectiveNetCullDistanceSquared;
     }
 
-    /// <summary>AGameNetworkManager::bUseDistanceBasedRelevancy (GameNetworkManager.cpp:51) - true in real UE.</summary>
-    private static readonly bool bUseDistanceBasedRelevancy =
-        Environment.GetEnvironmentVariable("NET_CULL") is not "0";
+    /// <summary>
+    ///     AGameNetworkManager::bUseDistanceBasedRelevancy (GameNetworkManager.cpp:51) - true in real UE,
+    ///     NET_CULL=0 in this world's options turns it off.
+    ///
+    ///     Resolved on first use and kept: relevancy is asked for every actor against every connection
+    ///     every replication pass, and an actor never changes worlds. By the first ask the actor is in
+    ///     the world's network list, so its world - not the process default - is what answers.
+    /// </summary>
+    private bool bUseDistanceBasedRelevancy => _useDistanceBasedRelevancy ??= WorldOptions.Get("NET_CULL") is not "0";
+
+    private bool? _useDistanceBasedRelevancy;
+
+    /// <summary>
+    ///     The name of the knob that overrides <see cref="NetCullDistanceSquared" /> for this class
+    ///     (e.g. BUILDING_CULL_DISTANCE), in world units rather than squared. Null when the class has
+    ///     none.
+    ///
+    ///     A knob NAME rather than a value because the value lives in the world's options and the
+    ///     constructor runs before the actor has a world - the three classes that used to read their
+    ///     cull distance in the constructor were reading the process environment for exactly that
+    ///     reason, and could never have honoured a per-playlist setting.
+    /// </summary>
+    protected virtual string? NetCullDistanceKnob => null;
+
+    private float? _effectiveNetCullDistanceSquared;
+
+    /// <summary>
+    ///     NetCullDistanceSquared with this world's override applied - see
+    ///     <see cref="NetCullDistanceKnob" />. Resolved on first use for the same reason as
+    ///     bUseDistanceBasedRelevancy.
+    /// </summary>
+    public float EffectiveNetCullDistanceSquared => _effectiveNetCullDistanceSquared ??=
+        NetCullDistanceKnob is { } knob && float.TryParse(WorldOptions.Get(knob), out var units) && units > 0
+            ? units * units
+            : NetCullDistanceSquared;
 
     /// <summary>
     ///     AActor::NetUpdateFrequency (Actor.cpp:106) - how many times a second this actor is
@@ -273,6 +306,21 @@ public class AActor : UObject {
 
         RemoteRole = bInAutonomousProxy ? ENetRole.ROLE_AutonomousProxy : ENetRole.ROLE_SimulatedProxy;
     }
+
+    /// <summary>
+    ///     The options of the world this actor lives in - see FBeaconOptions. An actor that is not in
+    ///     a world yet (a constructor, a CDO) reads the PROCESS defaults instead of failing: a knob
+    ///     read that early is a bug to fix, but not one worth taking a match down over.
+    /// </summary>
+    public FBeaconOptions WorldOptions => GetWorld()?.Options ?? FBeaconProcess.Options;
+
+    /// <summary>
+    ///     AActor::bHidden - the first actor handle. Only ever SENT for an actor that asks for it
+    ///     (see AFortDeployedActor.bReplicateVisibility): its value matters exactly when a class's
+    ///     CDO disagrees with it, and the worn snowman is the case - its CDO is `bHidden = True`,
+    ///     so a client told nothing draws nothing.
+    /// </summary>
+    public bool bHidden { get; set; }
 
     public UWorld? GetWorld() {
         if (!HasAnyFlags(EObjectFlags.RF_ClassDefaultObject)) {

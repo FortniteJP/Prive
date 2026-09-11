@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Where every destructible MAP actor is, and what the client calls it.
@@ -33,7 +34,7 @@
 /// </summary>
 public static class FortMapProps {
     private static readonly string[] CandidatePaths =
-        Environment.GetEnvironmentVariable("TERRAIN_HEIGHTMAP_PROPS") is { Length: > 0 } configured
+        FBeaconProcess.Options.Get("TERRAIN_HEIGHTMAP_PROPS") is { Length: > 0 } configured
             ? new[] { configured }
             : new[] {
                 Path.Combine(AppContext.BaseDirectory, "TerrainHeightMap.props.bin"),
@@ -105,7 +106,7 @@ public static class FortMapProps {
     ///     whose meaning changed is worse than a knob that was renamed.
     /// </summary>
     public static float PropMargin =>
-        float.TryParse(Environment.GetEnvironmentVariable("SHOCKWAVE_PROP_MARGIN"), out var margin)
+        float.TryParse(FBeaconProcess.Options.Get("SHOCKWAVE_PROP_MARGIN"), out var margin)
             ? margin
             : 80f;
 
@@ -224,7 +225,25 @@ public static class FortMapProps {
         return MathF.Sqrt(FVector.DistSquared(point, closest));
     }
 
+    /// <summary>
+    ///     Loads once, and makes every OTHER caller wait for that load to finish rather than read a
+    ///     half-built grid. The body used to set its "attempted" flag first and then load - fine with
+    ///     one world, a race with two: both worlds start together in the in-process host, and the
+    ///     second would see the flag, skip the load, and query empty data (a wall that briefly is not
+    ///     there). The flag here is only set once the load is over, success or failure.
+    /// </summary>
     private static void Load() {
+        if (_loadCompleted) return;
+        lock (LoadGate) {
+            if (_loadCompleted) return;
+            try { LoadCore(); } finally { _loadCompleted = true; }
+        }
+    }
+
+    private static readonly object LoadGate = new();
+    private static volatile bool _loadCompleted;
+
+    private static void LoadCore() {
         if (_loadAttempted) return;
         _loadAttempted = true;
 

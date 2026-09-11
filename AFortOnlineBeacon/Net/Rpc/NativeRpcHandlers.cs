@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Rpc;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Rpc;
 
 /// <summary>
 ///     Handlers for server-direction RPCs a real client sends us, keyed by name (matching
@@ -49,33 +50,47 @@ internal static class NativeRpcHandlers {
         _ => null
     };
 
-    /// <summary>
-    ///     Seeded so a session's loot is reproducible - the same reason FortSafeZoneSystem seeds its
-    ///     own: a bug that only shows up with one particular drop is unchaseable if the drop changes
-    ///     every run. LOOT_SEED overrides it.
-    /// </summary>
-    private static readonly Random LootRng = new(
-        int.TryParse(Environment.GetEnvironmentVariable("LOOT_SEED"), out var lootSeed) ? lootSeed : 20191001);
+    /// <summary>This world's share of NativeRpcHandlers's state - see FWorldSubsystem.</summary>
+    private sealed class FRpcHandlerState : FWorldSubsystem {
+        /// <summary>
+        ///     Seeded so a session's loot is reproducible - the same reason FortSafeZoneSystem seeds its
+        ///     own: a bug that only shows up with one particular drop is unchaseable if the drop changes
+        ///     every run. LOOT_SEED overrides it.
+        /// </summary>
+        public Random LootRng = default!;
 
-    /// <summary>
-    ///     One-shot guard for ServerUpdateCamera's decode sanity check - see that handler. Once, not
-    ///     every frame: the RPC arrives thousands of times a session and the answer cannot change.
-    /// </summary>
-    private static bool _reportedCameraSanity;
+        /// <summary>
+        ///     One-shot guard for ServerUpdateCamera's decode sanity check - see that handler. Once, not
+        ///     every frame: the RPC arrives thousands of times a session and the answer cannot change.
+        /// </summary>
+        public bool _reportedCameraSanity;
 
-    /// <summary>
-    ///     Same, for the camera's ROTATION - reported separately because the first sample is always
-    ///     zero (a freshly spawned player looks down +X) and zero proves nothing about the unpack.
-    /// </summary>
-    private static bool _reportedCameraRotation;
+        /// <summary>
+        ///     Same, for the camera's ROTATION - reported separately because the first sample is always
+        ///     zero (a freshly spawned player looks down +X) and zero proves nothing about the unpack.
+        /// </summary>
+        public bool _reportedCameraRotation;
 
-    /// <summary>ServerUpdateCamera arrival statistics - see the handler for why they are measured.</summary>
-    private static int _cameraSampleCount;
-    private static float _cameraFirstSampleTime;
-    private static float _cameraLongestGap;
+        /// <summary>ServerUpdateCamera arrival statistics - see the handler for why they are measured.</summary>
+        public int _cameraSampleCount;
 
-    /// <summary>Same idea for the level-visibility decode - report the first one and then stay quiet.</summary>
-    private static bool _reportedLevelVisibilitySanity;
+        public float _cameraFirstSampleTime;
+
+        public float _cameraLongestGap;
+
+        /// <summary>Same idea for the level-visibility decode - report the first one and then stay quiet.</summary>
+        public bool _reportedLevelVisibilitySanity;
+
+        protected internal override void Initialize() {
+            { LootRng = new(
+                int.TryParse(Options.Get("LOOT_SEED"), out var lootSeed) ? lootSeed : 20191001); }
+        }
+    }
+
+    private static FRpcHandlerState StateOf(UWorld world) => world.GetSubsystem<FRpcHandlerState>();
+
+    /// <summary>The handler state of the world <paramref name="actor" /> belongs to.</summary>
+    private static FRpcHandlerState StateOf(AActor actor) => StateOf(actor.GetWorld()!);
 
     /// <summary>
     ///     Records one level-visibility report on the connection, and CHECKS ITS OWN DECODE the first
@@ -96,8 +111,8 @@ internal static class NativeRpcHandlers {
 
         if (connection == null) return;
 
-        if (!_reportedLevelVisibilitySanity) {
-            _reportedLevelVisibilitySanity = true;
+        if (!StateOf(pc)._reportedLevelVisibilitySanity) {
+            StateOf(pc)._reportedLevelVisibilitySanity = true;
 
             Console.WriteLine($"NativeRpcHandlers: {source} first decode - PackageName='{info.PackageName}' " +
                               $"Filename='{info.Filename}' bIsVisible={info.bIsVisible}: " +
@@ -184,6 +199,27 @@ internal static class NativeRpcHandlers {
         world.SpawnActor<ABuildingActor>(buildingClass, new FActorSpawnParameters {
             ObjectFlags = EObjectFlags.RF_Transient
         });
+
+    /// <summary>
+    ///     A player piece placed by something OTHER than the build RPC - the floor a trap builds under
+    ///     itself (FortTrapSystem). The same sequence ServerCreateBuildingActor runs, in the same
+    ///     order and for the reasons documented there: transform, class-derived state, anchor, the
+    ///     support grid, and only then replication. No resource cost - see the caller.
+    /// </summary>
+    internal static ABuildingActor? PlacePlayerBuilding(UWorld world, UClass buildingClass, FVector placeAt, float yaw) {
+        var type = ABuildingActor.BuildingTypeFromClassPath(buildingClass.NativePackagePath);
+        var building = SpawnBuildingPiece(world, buildingClass, type);
+        if (building == null) return null;
+
+        building.SetRole(ENetRole.ROLE_Authority);
+        building.SetActorLocation(placeAt);
+        building.SetActorRotation(new FRotator { Yaw = yaw });
+        building.InitializeFromClass(buildingClass);
+        building.SetAnchor(placeAt, yaw);
+        BuildingStructuralSupportSystem.Of(world).Register(building);
+        building.SetReplicates(true);
+        return building;
+    }
 
     /// <summary>What an interact reference actually resolved to, for the log line that says it did not work.</summary>
     private static string DescribeInteractTarget(object? target) => target switch {
@@ -536,7 +572,7 @@ internal static class NativeRpcHandlers {
                 // BuildingStructuralSupportSystem.IsOccupied for the whole failure.
                 var placeKey = $"{placeAt},{buildYaw}";
                 var placeType = ABuildingActor.BuildingTypeFromClassPath(buildingClass.NativePackagePath);
-                if (BuildingStructuralSupportSystem.IsOccupied(placeAt, buildYaw, placeType)) {
+                if (BuildingStructuralSupportSystem.Of(world).IsOccupied(placeAt, buildYaw, placeType)) {
                     Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - a {placeType} is already " +
                                       $"standing at {placeKey}, ignoring (duplicate send)");
                     return;
@@ -547,7 +583,7 @@ internal static class NativeRpcHandlers {
                 // Originally the only way to see where the client really wanted the piece, back when
                 // the RPC's parameters could not be decoded; now just a way to watch placements go
                 // by without building up world state.
-                if (Environment.GetEnvironmentVariable("SKIP_BUILDING_SPAWN") == "1") {
+                if (actor.WorldOptions.Get("SKIP_BUILDING_SPAWN") == "1") {
                     Console.WriteLine($"NativeRpcHandlers: ServerCreateBuildingActor - SKIP_BUILDING_SPAWN=1, " +
                                       $"not spawning (class would have been {buildingClass.NativePackagePath}, " +
                                       $"{buildData})");
@@ -578,7 +614,7 @@ internal static class NativeRpcHandlers {
                 // is genuinely chosen, and carried forward unchanged by ServerEditBuildingActor.
                 building.SetAnchor(placeAt, buildYaw);
 
-                BuildingStructuralSupportSystem.Register(building);
+                BuildingStructuralSupportSystem.Of(world).Register(building);
 
                 // REPLICATES ONLY NOW, once the piece is fully in its as-placed state. This used to
                 // be set before InitializeFromClass, which meant the actor became replicable while
@@ -841,7 +877,7 @@ internal static class NativeRpcHandlers {
                 building.InitializeFromClass(newClass);
                 building.OverrideBuildingType(editedType);
                 building.SetAnchor(oldBuilding.AnchorLocation, oldBuilding.AnchorYaw);
-                BuildingStructuralSupportSystem.Register(building);
+                BuildingStructuralSupportSystem.Of(world).Register(building);
 
                 if (pawn.CurrentWeapon is { } editTool) editTool.EditActor = null;
 
@@ -919,7 +955,8 @@ internal static class NativeRpcHandlers {
                 // animation the whole way. That is what a repair looks like in the real game;
                 // awarding the health outright is what made it read as instant.
                 var target = building.CurrentHitPoints + buying;
-                if (!BuildingStructuralSupportSystem.BeginRepair(building, target)) return;
+                if (building.GetWorld() is not { } repairWorld
+                    || !BuildingStructuralSupportSystem.Of(repairWorld).BeginRepair(building, target)) return;
 
                 // Bill only once the ramp is actually running, and only for what it will deliver -
                 // BeginRepair clamps the target to MaxHitPoints, so a player who asked for more than
@@ -1047,8 +1084,8 @@ internal static class NativeRpcHandlers {
                 if (actor is not APlayerController pc) return;
 
                 if (values[0] is not FUpdateLevelVisibilityLevelInfo info) {
-                    if (_reportedLevelVisibilitySanity) return;
-                    _reportedLevelVisibilitySanity = true;
+                    if (StateOf(actor)._reportedLevelVisibilitySanity) return;
+                    StateOf(actor)._reportedLevelVisibilitySanity = true;
 
                     Console.WriteLine("NativeRpcHandlers: ServerUpdateLevelVisibility - the declared parameter " +
                                       "layout (two FNames and a bit) does not fit the wire; the decode ran out of " +
@@ -1077,8 +1114,8 @@ internal static class NativeRpcHandlers {
                 if (actor is not APlayerController pc) return;
 
                 if (values[0] is not List<FUpdateLevelVisibilityLevelInfo> levels) {
-                    if (_reportedLevelVisibilitySanity) return;
-                    _reportedLevelVisibilitySanity = true;
+                    if (StateOf(actor)._reportedLevelVisibilitySanity) return;
+                    StateOf(actor)._reportedLevelVisibilitySanity = true;
 
                     Console.WriteLine("NativeRpcHandlers: ServerUpdateMultipleLevelsVisibility - the declared " +
                                       "layout (uint16 count, then that many elements) does not fit the wire.");
@@ -1152,14 +1189,14 @@ internal static class NativeRpcHandlers {
                     // The gap is only meaningful from the SECOND sample on - LastClientCameraTime
                     // starts at negative infinity, so measuring against it on the first would record
                     // an infinite gap and poison the maximum for the rest of the session.
-                    if (_cameraSampleCount++ == 0) _cameraFirstSampleTime = cameraNow;
-                    else _cameraLongestGap = MathF.Max(_cameraLongestGap, cameraNow - pc.LastClientCameraTime);
+                    if (StateOf(actor)._cameraSampleCount++ == 0) StateOf(actor)._cameraFirstSampleTime = cameraNow;
+                    else StateOf(actor)._cameraLongestGap = MathF.Max(StateOf(actor)._cameraLongestGap, cameraNow - pc.LastClientCameraTime);
 
-                    if (_cameraSampleCount % 500 == 0) {
-                        var elapsed = cameraNow - _cameraFirstSampleTime;
-                        Console.WriteLine($"NativeRpcHandlers: ServerUpdateCamera rate - {_cameraSampleCount} samples " +
-                                          $"in {elapsed:F1}s ({_cameraSampleCount / MathF.Max(elapsed, 0.001f):F1}/s), " +
-                                          $"longest gap {_cameraLongestGap:F2}s. Any server-side staleness bound has " +
+                    if (StateOf(actor)._cameraSampleCount % 500 == 0) {
+                        var elapsed = cameraNow - StateOf(actor)._cameraFirstSampleTime;
+                        Console.WriteLine($"NativeRpcHandlers: ServerUpdateCamera rate - {StateOf(actor)._cameraSampleCount} samples " +
+                                          $"in {elapsed:F1}s ({StateOf(actor)._cameraSampleCount / MathF.Max(elapsed, 0.001f):F1}/s), " +
+                                          $"longest gap {StateOf(actor)._cameraLongestGap:F2}s. Any server-side staleness bound has " +
                                           "to be well above that longest gap - see UNetDriver.CameraViewpointTimeout.");
                     }
 
@@ -1196,10 +1233,10 @@ internal static class NativeRpcHandlers {
                     // the first live capture showed, and zero is exactly what a BROKEN unpack would
                     // also produce. So report the first NON-zero one as well: a yaw that tracks
                     // where the player actually turned is the check, and it costs one bool.
-                    if (!_reportedCameraRotation
+                    if (!StateOf(actor)._reportedCameraRotation
                         && (MathF.Abs(pc.LastClientCameraRotation.Yaw) > 1f
                             || MathF.Abs(pc.LastClientCameraRotation.Pitch) > 1f)) {
-                        _reportedCameraRotation = true;
+                        StateOf(actor)._reportedCameraRotation = true;
                         Console.WriteLine("NativeRpcHandlers: ServerUpdateCamera first NON-ZERO rotation - " +
                                           $"{pc.LastClientCameraRotation} (packed 0x{packed:X8}). Yaw is the HIGH " +
                                           "half; if this does not match where the player was looking, that is the " +
@@ -1207,8 +1244,8 @@ internal static class NativeRpcHandlers {
                     }
                 }
 
-                if (_reportedCameraSanity) return;
-                _reportedCameraSanity = true;
+                if (StateOf(actor)._reportedCameraSanity) return;
+                StateOf(actor)._reportedCameraSanity = true;
 
                 // THE DECODE IS RIGHT, AND AN EARLIER NOTE HERE SAID IT COULD NOT BE. That note
                 // argued from a payload size of "exactly 83 bits on all 3908 calls", which no
@@ -1245,7 +1282,7 @@ internal static class NativeRpcHandlers {
                 // there needs to be a way to fire one on demand - and this is the first moment the
                 // player can actually read anything. Unset by default: an unprompted message in
                 // every session would be noise, and this exists to answer one question.
-                if (Environment.GetEnvironmentVariable("WELCOME_MESSAGE") is { Length: > 0 } message
+                if (actor.WorldOptions.Get("WELCOME_MESSAGE") is { Length: > 0 } message
                     && pc.GetWorld()?.NetDriver?.ClientConnections
                         .FirstOrDefault(c => c.PlayerController == pc)?.FindActorChannel(pc) is { } channel) {
                     // BOTH CHANNELS, because one of them showing and the other not is the answer.
@@ -1599,8 +1636,8 @@ internal static class NativeRpcHandlers {
                 Z = TossUpSpeed
             });
 
-        var streamed = FortPickupToss.BeginStreamed(pickup, launch, tossVelocity, floorZ);
-        var restLocation = streamed ? launch : FortPickupToss.SettleActorLocation(launch, tossVelocity, floorZ);
+        var streamed = FortPickupToss.Of(world).BeginStreamed(pickup, launch, tossVelocity, floorZ);
+        var restLocation = streamed ? launch : FortPickupToss.Of(world).SettleActorLocation(launch, tossVelocity, floorZ);
 
         if (!streamed) {
             pickup.SetActorLocation(restLocation);
@@ -1689,14 +1726,14 @@ internal static class NativeRpcHandlers {
             var t = count == 1 ? 0.5f : i / (float) (count - 1);
             var yaw = baseYaw
                     + (t * 2.0f - 1.0f) * LootFanHalfAngleDegrees
-                    + ((float) LootRng.NextDouble() - 0.5f) * 12.0f;
+                    + ((float) StateOf(pawn).LootRng.NextDouble() - 0.5f) * 12.0f;
             var distance = LootFanMinDistance
-                         + (float) LootRng.NextDouble() * (LootFanMaxDistance - LootFanMinDistance);
+                         + (float) StateOf(pawn).LootRng.NextDouble() * (LootFanMaxDistance - LootFanMinDistance);
             var radians = yaw * MathF.PI / 180.0f;
 
             // The item is already ContainerLaunchDistance out when it is thrown, so only the REST of
             // the fan distance has to be covered in the air.
-            var speed = FortPickupToss.SpeedForDistance(
+            var speed = FortPickupToss.Of(pawn.GetWorld()!).SpeedForDistance(
                 launchZ, floorZ, ContainerTossUpSpeed, MathF.Max(distance - ContainerLaunchDistance, 0f));
 
             tosses[i] = (
@@ -1727,7 +1764,7 @@ internal static class NativeRpcHandlers {
     private static void DropContainerLoot(APlayerController pc, string tierGroup, string label) {
         if (pc.Pawn is not { } pawn) return;
 
-        var drops = FortLootTables.Roll(tierGroup, LootRng);
+        var drops = FortLootTables.Roll(tierGroup, StateOf(pc).LootRng);
         var tosses = ContainerLootTosses(pawn, drops.Count);
 
         for (var i = 0; i < drops.Count; i++) {
@@ -1965,7 +2002,7 @@ internal static class NativeRpcHandlers {
                     // abilities (GA_AthenaEnterVehicle_C applying GE_AthenaInVehicle_C, then
                     // GA_AthenaInVehicle_C) and the ServerUpdateVehicleInputStateUnreliable /
                     // ClientAcknowledgeVehicleInputState pair that carries the driving itself.
-                    case AFortAthenaVehicle vehicle when Environment.GetEnvironmentVariable("VEHICLE_RIDE") is "1":
+                    case AFortAthenaVehicle vehicle when actor.WorldOptions.Get("VEHICLE_RIDE") is "1":
                         if (pc.Pawn is not { } rider) return;
 
                         if (rider.MovementBase != null) {
@@ -2037,7 +2074,7 @@ internal static class NativeRpcHandlers {
                     case AFortAthenaVehicle offVehicle:
                         Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract named vehicle " +
                                           $"{offVehicle.GetFName()} ({offVehicle.VehicleClassPath}) but VEHICLE_RIDE is " +
-                                          $"'{Environment.GetEnvironmentVariable("VEHICLE_RIDE") ?? "unset"}' - " +
+                                          $"'{actor.WorldOptions.Get("VEHICLE_RIDE") ?? "unset"}' - " +
                                           "set VEHICLE_RIDE=1 to board it.");
                         return;
 
@@ -2089,7 +2126,7 @@ internal static class NativeRpcHandlers {
                 if (LooksLikeDoor(path)) {
                     ABuildingWall door;
                     try {
-                        door = UAssetRegistry.GetOrCreateSubObject<ABuildingWall>(path);
+                        door = netDriver.World!.MapActors.GetOrCreate<ABuildingWall>(path);
                     } catch (Exception ex) {
                         Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract could not turn door '{path}' into a level actor - {ex.Message}");
                         return;
@@ -2129,7 +2166,7 @@ internal static class NativeRpcHandlers {
 
                 ABuildingContainer container;
                 try {
-                    container = UAssetRegistry.GetOrCreateSubObject<ABuildingContainer>(path);
+                    container = netDriver.World!.MapActors.GetOrCreate<ABuildingContainer>(path);
                 } catch (Exception ex) {
                     Console.WriteLine($"NativeRpcHandlers: ServerAttemptInteract could not turn '{path}' into a level actor - {ex.Message}");
                     return;
@@ -2340,6 +2377,48 @@ internal static class NativeRpcHandlers {
     ///     the pawn or the controller, so a handler registered anywhere else is simply never reached.
     /// </summary>
     private static readonly Dictionary<string, FRpcDef> WeaponRpcs = new() {
+        // AFortDecoTool::ServerSpawnDeco(FVector Location, FRotator Rotation, ABuildingSMActor*
+        // AttachedActor, EBuildingAttachmentType) - placing a trap on a piece that already stands.
+        // Types from the Dumper-7 parameter struct; the enum is a TEnumAsByte, so 4 bits
+        // (CeilLogTwo(ATTACH_MAX = 9)), and like every non-bool parameter each is behind a presence
+        // bit - an absent one is its zero value, which for the surface is ATTACH_Floor.
+        ["ServerSpawnDeco"] = new FRpcDef(
+            "ServerSpawnDeco",
+            new[] {
+                new FRpcParamDef("Location", ERpcParamKind.Vector),
+                new FRpcParamDef("Rotation", ERpcParamKind.Rotator),
+                new FRpcParamDef("AttachedActor", ERpcParamKind.Object),
+                new FRpcParamDef("InBuildingAttachmentType", ERpcParamKind.Enum, 4)
+            },
+            (actor, values) => {
+                if (actor is not AFortDecoTool tool) return;
+                FortTrapSystem.SpawnDeco(tool,
+                    values[0] as FVector ?? new FVector(), values[1] as FRotator ?? new FRotator(), values[2] as UObject,
+                    (EBuildingAttachmentType) (values[3] as byte? ?? 0));
+            }
+        ),
+
+        // AFortDecoTool::ServerCreateBuildingAndSpawnDeco(FVector_NetQuantize10 BuildingLocation,
+        // FRotator BuildingRotation, FVector_NetQuantize10 Location, FRotator Rotation,
+        // EBuildingAttachmentType) - placing a trap on bare ground, which builds the piece first.
+        ["ServerCreateBuildingAndSpawnDeco"] = new FRpcDef(
+            "ServerCreateBuildingAndSpawnDeco",
+            new[] {
+                new FRpcParamDef("BuildingLocation", ERpcParamKind.VectorQuantize10),
+                new FRpcParamDef("BuildingRotation", ERpcParamKind.Rotator),
+                new FRpcParamDef("Location", ERpcParamKind.VectorQuantize10),
+                new FRpcParamDef("Rotation", ERpcParamKind.Rotator),
+                new FRpcParamDef("InBuildingAttachmentType", ERpcParamKind.Enum, 4)
+            },
+            (actor, values) => {
+                if (actor is not AFortDecoTool tool) return;
+                FortTrapSystem.CreateBuildingAndSpawnDeco(tool,
+                    values[0] as FVector ?? new FVector(), values[1] as FRotator ?? new FRotator(),
+                    values[2] as FVector ?? new FVector(), values[3] as FRotator ?? new FRotator(),
+                    (EBuildingAttachmentType) (values[4] as byte? ?? 0));
+            }
+        ),
+
         // AFortWeapon::ServerReleaseWeaponAbility(FGameplayAbilitySpecHandle SpecHandle) - the trigger
         // coming back UP, and by a wide margin the most frequent thing the client sends that this
         // server used to skip entirely (2753 times across the capture logs, pickaxe and rifle alike).
@@ -2523,7 +2602,7 @@ internal static class NativeRpcHandlers {
             // correctness point rather than an optimisation - a player standing on a vehicle is
             // standing on a vehicle, and recording its deck as terrain would poison the bake this
             // data exists to check.
-            TerrainGroundTruth.Record(clientLoc, movementMode ?? 0);
+            if (actor.GetWorld() is { } moveWorld) TerrainGroundTruth.Record(moveWorld, clientLoc, movementMode ?? 0);
 
             if (actor.GetWorld()?.NetDriver is { } driver) pawn.TrackMovementSpeed(clientLoc, driver.GetElapsedTime());
 
@@ -2616,7 +2695,11 @@ internal static class NativeRpcHandlers {
                 // A HEALING CONSUMABLE IS JUST A WEAPON WHOSE FIRE ABILITY HEALS YOU, so it arrives
                 // here like any other shot - same grant at equip, same spec handle, same RPC. This
                 // is the one place that has to know the difference. See FortConsumableSystem.
-                FortConsumableSystem.TryUse(playerState, spec);
+                //
+                // The Sneaky Snowman's SECOND button is not a heal - it is a disguise the server has
+                // to put on the player itself. See FortSnowmanDisguise.
+                if (!FortSnowmanDisguise.TryBegin(playerState, spec))
+                    FortConsumableSystem.TryUse(playerState, spec);
 
                 // A SHOT SPENDS A ROUND. Firing never did on this server - reloading worked, the
                 // magazine simply never went down - so a player could empty a 30-round clip
@@ -2758,6 +2841,10 @@ internal static class NativeRpcHandlers {
         }
 
         FortEmoteSystem.OnAbilityEnded(pc, handle, $"the client sent {source}");
+
+        // A CANCEL - a weapon swap mid-animation - means the disguise was never put on. An END is
+        // the ability finishing normally, which the disguise's own timer already covers.
+        if (source == "ServerCancelAbility") FortSnowmanDisguise.Cancel(playerState, handle);
     }
 
     private static void OnShotReported(AActor actor, object? handleValue,
@@ -2925,7 +3012,8 @@ internal static class NativeRpcHandlers {
 
                 var damage = DamageFor(hit, actor as APlayerState);
                 var wasKilled = building.CurrentHitPoints <= damage;
-                BuildingStructuralSupportSystem.ApplyDamage(building, damage);
+                if (building.GetWorld() is { } buildingWorld)
+                    BuildingStructuralSupportSystem.Of(buildingWorld).ApplyDamage(building, damage);
                 ReportDamagedBuilding(actor, building, wasKilled, IsWeakspotHit(hit));
                 continue;
             }
@@ -2944,7 +3032,7 @@ internal static class NativeRpcHandlers {
             }
 
             var damagedLevelActor = (ABuildingActor?) null;
-            var bFelledThisHit = DestructibleSceneryEnabled && DamageLevelActor(actor, hit, out damagedLevelActor);
+            var bFelledThisHit = DestructibleSceneryEnabled(actor) && DamageLevelActor(actor, hit, out damagedLevelActor);
 
             Harvest(actor, hit, bFelledThisHit, damagedLevelActor);
         }
@@ -2962,7 +3050,7 @@ internal static class NativeRpcHandlers {
         var weapon = instigator?.GetOwningPawn()?.CurrentWeapon?.WeaponData?.GetFName().ToString();
 
         if (FortWeaponStats.For(weapon) is not { } stats) {
-            if (weapon != null && _warnedUnknownWeapons.Add(weapon)) {
+            if (weapon != null && _warnedUnknownWeapons.TryAdd(weapon, 0)) {
                 Console.WriteLine($"NativeRpcHandlers: no baked stats for '{weapon}' - structure damage falls " +
                                   $"back to the flat {BuildingDamagePerHit}. Re-run " +
                                   "Tools/WeaponStats/gen_weapon_stats.py if this weapon should be in the table.");
@@ -3006,7 +3094,8 @@ internal static class NativeRpcHandlers {
         return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    private static readonly HashSet<string> _warnedUnknownWeapons = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _warnedUnknownWeapons =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     ///     The fallback weak-spot multiplier, used only for a weapon the bake does not know. Still a
@@ -3022,8 +3111,8 @@ internal static class NativeRpcHandlers {
     private const float WeakspotEnvironmentMultiplier = 2f;
 
     /// <summary>DESTRUCTIBLE_SCENERY=1 gates <see cref="DamageLevelActor"/> - see there for what it does and why it defaults off.</summary>
-    private static bool DestructibleSceneryEnabled =>
-        Environment.GetEnvironmentVariable("DESTRUCTIBLE_SCENERY") == "1";
+    private static bool DestructibleSceneryEnabled(AActor actor) =>
+        actor.WorldOptions.Get("DESTRUCTIBLE_SCENERY") == "1";
 
     /// <summary>
     ///     Round 29's live experiment (see [[afortonlinebeacon-status]]): does a real client accept a
@@ -3134,7 +3223,7 @@ internal static class NativeRpcHandlers {
             }
 
             try {
-                levelActor = UAssetRegistry.GetOrCreateSubObject<ABuildingActor>(hit.ActorPath);
+                levelActor = netDriver.World!.MapActors.GetOrCreate<ABuildingActor>(hit.ActorPath);
             } catch (Exception ex) {
                 Console.WriteLine($"NativeRpcHandlers: DESTRUCTIBLE_SCENERY could not turn '{hit.ActorPath}' " +
                                   $"into a level-actor path - {ex.Message}");
@@ -3217,7 +3306,7 @@ internal static class NativeRpcHandlers {
     private static void RegisterContainerFromHit(UNetDriver netDriver, string actorPath) {
         ABuildingContainer container;
         try {
-            container = UAssetRegistry.GetOrCreateSubObject<ABuildingContainer>(actorPath);
+            container = netDriver.World!.MapActors.GetOrCreate<ABuildingContainer>(actorPath);
         } catch (Exception ex) {
             Console.WriteLine($"NativeRpcHandlers: could not turn container '{actorPath}' into a level actor - {ex.Message}");
             return;
@@ -3363,13 +3452,13 @@ internal static class NativeRpcHandlers {
         var critical = IsCriticalHit(hit);
 
         if (stats == null) {
-            if (weaponName != null && _warnedUnknownWeapons.Add(weaponName)) {
+            if (weaponName != null && _warnedUnknownWeapons.TryAdd(weaponName, 0)) {
                 Console.WriteLine($"NativeRpcHandlers: no baked stats for '{weaponName}' - player damage falls " +
-                                  $"back to the flat {FortDamageSystem.WeaponDamage}. Re-run " +
+                                  $"back to the flat {FortDamageSystem.FallbackWeaponDamage(victimPawn.GetWorld()!)}. Re-run " +
                                   "Tools/WeaponStats/gen_weapon_stats.py if this weapon should be in the table.");
             }
 
-            FortDamageSystem.ApplyDamage(victim, FortDamageSystem.WeaponDamage,
+            FortDamageSystem.ApplyDamage(victim, FortDamageSystem.FallbackWeaponDamage(victimPawn.GetWorld()!),
                                          DeathCauseFor(weapon), instigator);
             return;
         }

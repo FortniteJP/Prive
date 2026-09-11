@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Ground height at an arbitrary (X, Y), read from baked grid files - the "real ground heights"
@@ -77,7 +78,7 @@ public static class TerrainHeightMap {
         private long _lastCheckedMs = long.MinValue;
 
         private static readonly long ReloadCheckMs =
-            long.TryParse(Environment.GetEnvironmentVariable("TERRAIN_RELOAD_CHECK_MS"), out var ms) && ms >= 0
+            long.TryParse(FBeaconProcess.Options.Get("TERRAIN_RELOAD_CHECK_MS"), out var ms) && ms >= 0
                 ? ms
                 : 2000;
 
@@ -92,7 +93,7 @@ public static class TerrainHeightMap {
         public Grid(string environmentVariable, string defaultFileName, string what, bool announceMissing) {
             _what = what;
             AnnounceMissing = announceMissing;
-            _candidates = Environment.GetEnvironmentVariable(environmentVariable) is { Length: > 0 } configured
+            _candidates = FBeaconProcess.Options.Get(environmentVariable) is { Length: > 0 } configured
                 ? new[] { configured }
                 : new[] { Path.Combine(AppContext.BaseDirectory, defaultFileName), defaultFileName };
         }
@@ -140,7 +141,18 @@ public static class TerrainHeightMap {
             return true;
         }
 
+        private readonly object _reloadGate = new();
+
+        /// <summary>
+        ///     Locked, WITH the throttle check inside the lock. The throttle stamp is written before the
+        ///     file is read, so a second world arriving mid-load used to see a fresh stamp, return at
+        ///     once, and sample a grid that was not there yet. Inside the lock it waits for the load.
+        /// </summary>
         private void ReloadIfChanged() {
+            lock (_reloadGate) ReloadIfChangedLocked();
+        }
+
+        private void ReloadIfChangedLocked() {
             // Throttled, and the throttle is load-bearing rather than tidiness - see _lastCheckedMs.
             var now = Environment.TickCount64;
             if (now - _lastCheckedMs < ReloadCheckMs) return;

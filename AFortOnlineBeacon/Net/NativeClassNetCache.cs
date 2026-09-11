@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Net.Actors;
 
 namespace AFortOnlineBeacon.Net;
 
@@ -661,7 +662,7 @@ internal static class NativeClassNetCache {
     };
 
     static NativeClassNetCache() {
-        if (Environment.GetEnvironmentVariable("VERIFY_NET_FIELDS") is "0") return;
+        if (FBeaconProcess.Options.Get("VERIFY_NET_FIELDS") is "0") return;
 
         var mismatches = new List<string>();
         var unknown = new List<string>();

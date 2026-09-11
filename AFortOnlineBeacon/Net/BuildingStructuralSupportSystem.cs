@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     External stand-in for the server half of real Fortnite's UBuildingStructuralSupportSystem (a
@@ -29,15 +30,18 @@
 ///     FortHarvestResources, both of which assume one match's worth of state per process. Reset()
 ///     exists for the case where that stops being true.
 /// </summary>
-public static class BuildingStructuralSupportSystem {
+public sealed class BuildingStructuralSupportSystem : FWorldSubsystem {
+    /// <summary>This world's instance - see FWorldSubsystem.</summary>
+    public static BuildingStructuralSupportSystem Of(UWorld world) => world.GetSubsystem<BuildingStructuralSupportSystem>();
+
     /// <summary>
     ///     Every live piece, bucketed by cell so a neighbour query reads 27 buckets instead of the
     ///     whole match. Pieces are looked up by identity often enough (Unregister, and the flood's
     ///     "have I seen this" test) that the flat list is kept alongside as a set rather than
     ///     rebuilt from the buckets.
     /// </summary>
-    private static readonly Dictionary<FBuildingSupportCellIndex, List<ABuildingActor>> Cells = new();
-    private static readonly HashSet<ABuildingActor> Buildings = new();
+    private readonly Dictionary<FBuildingSupportCellIndex, List<ABuildingActor>> Cells = new();
+    private readonly HashSet<ABuildingActor> Buildings = new();
 
     /// <summary>
     ///     The lowest Z ever placed in each XY column, and the no-terrain fallback's whole notion of
@@ -48,7 +52,7 @@ public static class BuildingStructuralSupportSystem {
     ///     world-supported and the tower would stand there in mid-air - exactly the case this system
     ///     exists to handle.
     /// </summary>
-    private static readonly Dictionary<(int X, int Y), float> ColumnGround = new();
+    private readonly Dictionary<(int X, int Y), float> ColumnGround = new();
 
     /// <summary>
     ///     Set when something has changed that could have left pieces unsupported; cleared by the
@@ -59,8 +63,8 @@ public static class BuildingStructuralSupportSystem {
     ///     point: a burst of destructions in one tick collapses into a single flood, and the flood
     ///     never runs re-entrantly from inside a Destroy() it caused.
     /// </summary>
-    private static bool _recheckPending;
-    private static float _recheckAt;
+    private bool _recheckPending;
+    private float _recheckAt;
 
     private const float RecheckDelaySeconds = 0.25f;
 
@@ -71,7 +75,7 @@ public static class BuildingStructuralSupportSystem {
     ///     in the same breath as being flagged would never get the flag to the client. One
     ///     replication tick of daylight is enough for the ordinary property push to take it.
     /// </summary>
-    private static readonly List<(ABuildingActor Building, float DestroyAt)> PendingDestroy = new();
+    private readonly List<(ABuildingActor Building, float DestroyAt)> PendingDestroy = new();
 
     private const float DestroyDelaySeconds = 0.35f;
 
@@ -87,7 +91,7 @@ public static class BuildingStructuralSupportSystem {
     private const float VerticalReach = FBuildingSupportCellIndex.StoreyHeight
                                       + FBuildingSupportCellIndex.PivotStoreyOffset;
 
-    public static void Register(ABuildingActor building) {
+    public void Register(ABuildingActor building) {
         if (!Buildings.Add(building)) return;
 
         var loc = building.GetActorLocation();
@@ -112,7 +116,7 @@ public static class BuildingStructuralSupportSystem {
     ///
     ///     Idempotent on the list, so holding the repair input does not queue a piece twice.
     /// </summary>
-    public static bool BeginRepair(ABuildingActor building, int targetHitPoints) {
+    public bool BeginRepair(ABuildingActor building, int targetHitPoints) {
         if (!building.BeginRepair(_lastTickTime, targetHitPoints)) return false;
 
         if (!Constructing.Contains(building)) Constructing.Add(building);
@@ -120,17 +124,17 @@ public static class BuildingStructuralSupportSystem {
     }
 
     /// <summary>Pieces still building in - see ABuildingActor.TickConstruction.</summary>
-    private static readonly List<ABuildingActor> Constructing = new();
+    private readonly List<ABuildingActor> Constructing = new();
 
     /// <summary>Pieces mid damage-pulse - see ABuildingActor.OnDamaged.</summary>
-    private static readonly List<ABuildingActor> Damaged = new();
+    private readonly List<ABuildingActor> Damaged = new();
 
     /// <summary>
     ///     Drops a piece out of the grid. Called from ABuildingActor.Destroyed rather than from each
     ///     destruction site, so it holds however the piece died; safe to call for something never
     ///     registered.
     /// </summary>
-    public static void Unregister(ABuildingActor building) {
+    public void Unregister(ABuildingActor building) {
         if (!Buildings.Remove(building)) return;
 
         if (Cells.TryGetValue(building.CellIndex, out var cell) && cell.Remove(building) && cell.Count == 0)
@@ -159,7 +163,10 @@ public static class BuildingStructuralSupportSystem {
     ///     modelled here), and a duplicate is by definition the same kind of piece - so narrowing it
     ///     costs nothing it was actually catching.
     /// </summary>
-    public static bool IsOccupied(FVector location, float yaw, EFortBuildingType type) {
+    public bool IsOccupied(FVector location, float yaw, EFortBuildingType type) => FindAt(location, yaw, type) != null;
+
+    /// <summary>The live piece <see cref="IsOccupied" /> would have found, or null.</summary>
+    public ABuildingActor? FindAt(FVector location, float yaw, EFortBuildingType type) {
         var cell = FBuildingSupportCellIndex.FromLocation(location);
 
         foreach (var cellIndex in cell.WithNeighbors()) {
@@ -175,11 +182,11 @@ public static class BuildingStructuralSupportSystem {
                 if (MathF.Abs(otherLoc.Z - location.Z) > 1f) continue;
                 if (YawDelta(other.GetActorRotation().Yaw, yaw) > 1f) continue;
 
-                return true;
+                return other;
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -187,13 +194,13 @@ public static class BuildingStructuralSupportSystem {
     ///     359.5 and a placement at 0.5 are half a degree apart, not 359, and a plain subtraction
     ///     would let a genuine duplicate through.
     /// </summary>
-    private static float YawDelta(float a, float b) {
+    private float YawDelta(float a, float b) {
         var delta = MathF.Abs(a - b) % 360f;
         return delta > 180f ? 360f - delta : delta;
     }
 
     /// <summary>Forgets every registered piece - for a process that outlives one match, which nothing here does yet.</summary>
-    public static void Reset() {
+    public void Reset() {
         Buildings.Clear();
         Cells.Clear();
         ColumnGround.Clear();
@@ -211,7 +218,13 @@ public static class BuildingStructuralSupportSystem {
     ///     here - Destroy() marks the grid dirty and <see cref="Tick"/> picks it up, which is what
     ///     keeps a burst of hits from flooding once per hit.
     /// </summary>
-    public static void ApplyDamage(ABuildingActor building, int amount) {
+    public void ApplyDamage(ABuildingActor building, int amount) {
+        // Here rather than in each caller: grenades, the air strike's Blast, the pickaxe and every
+        // weapon all arrive through this method, so one guard covers them. And BEFORE ApplyDamage
+        // rather than inside it, because a "survived" result would still play OnDamaged's hit
+        // reaction on an actor that took nothing. See AFortDeployedActor.Indestructible.
+        if (building is AFortDeployedActor { Indestructible: true }) return;
+
         if (!building.ApplyDamage(amount)) {
             // Survived the hit - tell the client something just happened to it. See
             // ABuildingActor.OnDamaged for why a health value alone is not enough.
@@ -232,7 +245,7 @@ public static class BuildingStructuralSupportSystem {
     ///     actual teardown for <see cref="DestroyDelaySeconds"/> later. Unregistering here is also
     ///     what arms the cascade, so the flood runs against what will still be standing.
     /// </summary>
-    private static void BeginDestroy(ABuildingActor building) {
+    private void BeginDestroy(ABuildingActor building) {
         if (!building.MarkDestroyed()) return;
 
         Constructing.Remove(building);
@@ -241,13 +254,13 @@ public static class BuildingStructuralSupportSystem {
         PendingDestroy.Add((building, _lastTickTime + DestroyDelaySeconds));
     }
 
-    private static float _lastTickTime;
+    private float _lastTickTime;
 
     /// <summary>
     ///     Driven from UWorld.Tick. Runs the deferred support recheck once the delay since the last
     ///     grid change has elapsed - see <see cref="_recheckPending"/>.
     /// </summary>
-    public static void Tick(float timeSeconds) {
+    public void Tick(float timeSeconds) {
         // WHERE THE 92 SECONDS WENT. FTickWatchdog named this method and stopped there, which is one
         // level too coarse to act on: four independent things happen below and only one of them is a
         // graph algorithm. Times each, with the sizes they ran over, and prints only when the whole
@@ -309,7 +322,7 @@ public static class BuildingStructuralSupportSystem {
     ///     step" but "over how many" - a registry or a cell bucket that has grown far past what the
     ///     player actually built would explain it, and nothing else in this file would.
     /// </summary>
-    private static void ReportIfSlow(System.Diagnostics.Stopwatch timer,
+    private void ReportIfSlow(System.Diagnostics.Stopwatch timer,
                                      int constructing, double constructionMs,
                                      int damaged, double damageMs,
                                      int destroyed, double destroyMs,
@@ -335,14 +348,14 @@ public static class BuildingStructuralSupportSystem {
                           $"{_lastFloodNeighbourTests} neighbour test(s).");
     }
 
-    private static float SlowTickMs =>
-        float.TryParse(Environment.GetEnvironmentVariable("STRUCTURAL_SLOW_MS"), out var ms) && ms > 0f
+    private float SlowTickMs =>
+        float.TryParse(Options.Get("STRUCTURAL_SLOW_MS"), out var ms) && ms > 0f
             ? ms
             : 250f;
 
-    private static int _lastFloodSeeds;
-    private static int _lastFloodVisited;
-    private static long _lastFloodNeighbourTests;
+    private int _lastFloodSeeds;
+    private int _lastFloodVisited;
+    private long _lastFloodNeighbourTests;
 
     /// <summary>
     ///     Full connectivity flood from every ground-touching piece; anything the flood never reaches
@@ -353,7 +366,7 @@ public static class BuildingStructuralSupportSystem {
     ///     standing. Each destruction here re-arms the pending flag through Unregister, so a chunk
     ///     that only comes apart once its first layer is gone still resolves - on the next pass.
     /// </summary>
-    private static void RecheckSupport() {
+    private void RecheckSupport() {
         _lastFloodSeeds = 0;
         _lastFloodVisited = 0;
         _lastFloodNeighbourTests = 0;
@@ -581,7 +594,7 @@ public static class BuildingStructuralSupportSystem {
     }
 
     /// <summary>Every piece whose box could matter near a point - the broad phase.</summary>
-    private static IEnumerable<ABuildingActor> Nearby(FVector point, ABuildingActor? ignore) {
+    private IEnumerable<ABuildingActor> Nearby(FVector point, ABuildingActor? ignore) {
         foreach (var neighbour in FBuildingSupportCellIndex.FromLocation(point).WithNeighbors()) {
             if (!Cells.TryGetValue(neighbour, out var pieces)) continue;
 
@@ -591,7 +604,7 @@ public static class BuildingStructuralSupportSystem {
     }
 
     /// <summary>Whether a placed building piece occupies this world point.</summary>
-    public static bool IsSolid(FVector point, ABuildingActor? ignore = null) {
+    public bool IsSolid(FVector point, ABuildingActor? ignore = null) {
         foreach (var piece in Nearby(point, ignore)) {
             var (min, max) = BoxOf(piece);
 
@@ -630,7 +643,7 @@ public static class BuildingStructuralSupportSystem {
     ///     than the structural grid does: map scenery reaches this server as a stand-in built from a
     ///     client-supplied path and is never registered here (see NativeRpcHandlers.DamageLevelActor).
     /// </summary>
-    public static bool SweptCapsuleTouches(ABuildingActor piece, FVector from, FVector to,
+    public bool SweptCapsuleTouches(ABuildingActor piece, FVector from, FVector to,
                                            float radiusXY, float halfHeightZ) {
         var (min, max) = BoxOf(piece);
 
@@ -667,7 +680,7 @@ public static class BuildingStructuralSupportSystem {
     }
 
     /// <summary>How many pieces are registered within a radius - a diagnostic, so "nothing was hit" can be told from "nothing was there".</summary>
-    public static int PiecesWithin(FVector point, float radius) {
+    public int PiecesWithin(FVector point, float radius) {
         var radiusSquared = radius * radius;
         var count = 0;
 
@@ -688,7 +701,7 @@ public static class BuildingStructuralSupportSystem {
     ///     straight over it. A slab test cannot miss a box however thin it is or however fast the
     ///     projectile is moving.
     /// </summary>
-    private static (FVector Point, int Axis, FVector Normal, ABuildingActor Piece, bool Exact)? FirstHit(
+    private (FVector Point, int Axis, FVector Normal, ABuildingActor Piece, bool Exact)? FirstHit(
         FVector from, FVector to, ABuildingActor? ignore) {
         var d = new[] { to.X - from.X, to.Y - from.Y, to.Z - from.Z };
         var o = new[] { from.X, from.Y, from.Z };
@@ -771,7 +784,7 @@ public static class BuildingStructuralSupportSystem {
     }
 
     /// <summary>The first point along a step that is inside a player build, and the axis it entered on.</summary>
-    public static (FVector Point, int Axis)? SweepToBuild(FVector from, FVector to) =>
+    public (FVector Point, int Axis)? SweepToBuild(FVector from, FVector to) =>
         FirstHit(from, to, null) is { } hit ? (hit.Point, hit.Axis) : null;
 
     /// <summary>
@@ -781,7 +794,7 @@ public static class BuildingStructuralSupportSystem {
     ///     A caller that has this does not need to guess where the surface was: an exact hit is
     ///     already ON the mesh, so nothing needs snapping to a plane afterwards.
     /// </summary>
-    public static (FVector Point, FVector Normal, ABuildingActor Piece, bool Exact)? SweepToBuildSurface(
+    public (FVector Point, FVector Normal, ABuildingActor Piece, bool Exact)? SweepToBuildSurface(
         FVector from, FVector to) =>
         FirstHit(from, to, null) is { } hit ? (hit.Point, hit.Normal, hit.Piece, hit.Exact) : null;
 
@@ -794,7 +807,7 @@ public static class BuildingStructuralSupportSystem {
     ///     piece's own centroid gives the plane the mesh is actually on. See
     ///     FortSpraySystem.SnapToPiece.
     /// </summary>
-    public static (FVector Point, int Axis, ABuildingActor Piece)? SweepToBuildPiece(FVector from, FVector to) =>
+    public (FVector Point, int Axis, ABuildingActor Piece)? SweepToBuildPiece(FVector from, FVector to) =>
         FirstHit(from, to, null) is { } hit ? (hit.Point, hit.Axis, hit.Piece) : null;
 
     /// <summary>
@@ -803,7 +816,7 @@ public static class BuildingStructuralSupportSystem {
     ///     not be told from that log was WHICH SURFACE it had chosen, and a coarse box (a stair is a
     ///     whole cell here) makes the server bounce off geometry the client does not have.
     /// </summary>
-    public static string DescribeHit(FVector from, FVector to) {
+    public string DescribeHit(FVector from, FVector to) {
         foreach (var piece in Nearby(from, null)) {
             var (min, max) = BoxOf(piece);
             var single = FirstHit(from, to, null);
@@ -828,11 +841,11 @@ public static class BuildingStructuralSupportSystem {
     ///     <paramref name="ignore"/> is for tracing TO a piece: a building is solid, so a blast right
     ///     against a wall would otherwise be judged as blocked from damaging that very wall.
     /// </summary>
-    public static bool IsLineBlocked(FVector from, FVector to, ABuildingActor? ignore = null) =>
+    public bool IsLineBlocked(FVector from, FVector to, ABuildingActor? ignore = null) =>
         FirstHit(from, to, ignore) != null;
 
     /// <summary>Which side of its own cell the model believes this piece sits on - see FortBuildingConnectivity.Occupancy.</summary>
-    private static string OccupancyOf(ABuildingActor b) =>
+    private string OccupancyOf(ABuildingActor b) =>
         b.ClassName.Length == 0
             ? "?"
             : FortBuildingConnectivity.VoxelsFor(b.ClassName, b.GetActorRotation().Yaw + PatternYawOffsetFor(b),
@@ -841,7 +854,7 @@ public static class BuildingStructuralSupportSystem {
                 : "?";
 
     /// <summary>How many voxels the two pieces actually share - the number behind every link, so a false one can be named.</summary>
-    private static string SharedWith(ABuildingActor a, ABuildingActor b) {
+    private string SharedWith(ABuildingActor a, ABuildingActor b) {
         if (a.ClassName.Length == 0 || b.ClassName.Length == 0) return "dist";
 
         var va = FortBuildingConnectivity.VoxelsFor(a.ClassName, a.GetActorRotation().Yaw + PatternYawOffsetFor(a), a.bMirrored != MirrorFlip);
@@ -853,7 +866,7 @@ public static class BuildingStructuralSupportSystem {
         return FortBuildingConnectivity.SharedVoxels(va.Value, vb.Value, bx - ax, by - ay, bz - az).ToString();
     }
 
-    private static bool DebugEnabled => Environment.GetEnvironmentVariable("STRUCTURAL_DEBUG") is "1";
+    private bool DebugEnabled => Options.Get("STRUCTURAL_DEBUG") is "1";
 
     /// <summary>
     ///     STRUCTURAL_DEBUG=1. Why did each piece survive the flood?
@@ -864,7 +877,7 @@ public static class BuildingStructuralSupportSystem {
     ///     something that is. The two need completely different fixes, so this prints both, and prints
     ///     the actual neighbours so a link that should not exist can be named.
     /// </summary>
-    private static void DumpSupport(HashSet<ABuildingActor> supported, HashSet<ABuildingActor> groundSeeded) {
+    private void DumpSupport(HashSet<ABuildingActor> supported, HashSet<ABuildingActor> groundSeeded) {
         Console.WriteLine($"BuildingStructuralSupportSystem: flood over {Buildings.Count} piece(s) using " +
                           $"{(ConnectivityEnabled ? "REAL CONNECTIVITY" : "the distance test")} - " +
                           $"{groundSeeded.Count} ground-seeded, {supported.Count} supported");
@@ -895,7 +908,7 @@ public static class BuildingStructuralSupportSystem {
     ///     cells around the piece's own - see FBuildingSupportCellIndex.WithNeighbors for why the
     ///     neighbours have to be included and not just the piece's own cell.
     /// </summary>
-    private static IEnumerable<ABuildingActor> NeighborsOf(ABuildingActor building) {
+    private IEnumerable<ABuildingActor> NeighborsOf(ABuildingActor building) {
         var loc = building.GetActorLocation();
 
         foreach (var cellIndex in building.CellIndex.WithNeighbors()) {
@@ -934,14 +947,14 @@ public static class BuildingStructuralSupportSystem {
     ///     tester's builds rather than merely look wrong. The old rule half-works; that is a better
     ///     default than a new rule that might be inverted.
     /// </summary>
-    private static bool AreTouching(ABuildingActor a, ABuildingActor b) {
+    private bool AreTouching(ABuildingActor a, ABuildingActor b) {
         if (ConnectivityEnabled && ConnectivitySays(a, b) is { } connected) return connected;
 
         return IsWithinReach(a.GetActorLocation(), b.GetActorLocation());
     }
 
-    private static bool ConnectivityEnabled =>
-        Environment.GetEnvironmentVariable("STRUCTURAL_CONNECTIVITY") is "1";
+    private bool ConnectivityEnabled =>
+        Options.Get("STRUCTURAL_CONNECTIVITY") is "1";
 
     /// <summary>
     ///     Fortnite's own connectivity answer, or null when it has none.
@@ -968,7 +981,7 @@ public static class BuildingStructuralSupportSystem {
     ///     Reasoning from the pivot offsets had given -90, which the sweep shows is 180 degrees out.
     ///     PriveDev/dumpwork/ConnCheck replays this; re-run it before trusting any change here.
     /// </summary>
-    private static bool? ConnectivitySays(ABuildingActor a, ABuildingActor b) {
+    private bool? ConnectivitySays(ABuildingActor a, ABuildingActor b) {
         if (a.ClassName.Length == 0 || b.ClassName.Length == 0) return null;
 
         var (ax, ay, az) = StructuralCellOf(a);
@@ -999,14 +1012,14 @@ public static class BuildingStructuralSupportSystem {
     ///
     ///     CONNECTIVITY_YAW_OFFSET / CONNECTIVITY_STAIR_YAW_OFFSET override the two.
     /// </summary>
-    private static float PatternYawOffsetFor(ABuildingActor building) => building.BuildingType switch {
+    private float PatternYawOffsetFor(ABuildingActor building) => building.BuildingType switch {
         EFortBuildingType.Stairs => StairYawOffset,
         EFortBuildingType.Floor or EFortBuildingType.Roof => FloorYawOffset,
         _ => BaseYawOffset
     };
 
-    private static float BaseYawOffset =>
-        float.TryParse(Environment.GetEnvironmentVariable("CONNECTIVITY_YAW_OFFSET"), out var v) ? v : 0f;
+    private float BaseYawOffset =>
+        float.TryParse(Options.Get("CONNECTIVITY_YAW_OFFSET"), out var v) ? v : 0f;
 
     /// <summary>
     ///     Floors (and roofs) need 90 where walls need 0 - confirmed live, and then re-derived: a
@@ -1018,11 +1031,11 @@ public static class BuildingStructuralSupportSystem {
     ///     Roof rides the floor value. It is NOT pinned by the data - both 0 and 90 satisfy every
     ///     constraint - so a roof-only failure is the next thing to suspect, not a settled fact.
     /// </summary>
-    private static float FloorYawOffset =>
-        float.TryParse(Environment.GetEnvironmentVariable("CONNECTIVITY_FLOOR_YAW_OFFSET"), out var v) ? v : 90f;
+    private float FloorYawOffset =>
+        float.TryParse(Options.Get("CONNECTIVITY_FLOOR_YAW_OFFSET"), out var v) ? v : 90f;
 
-    private static float StairYawOffset =>
-        float.TryParse(Environment.GetEnvironmentVariable("CONNECTIVITY_STAIR_YAW_OFFSET"), out var v) ? v : 90f;
+    private float StairYawOffset =>
+        float.TryParse(Options.Get("CONNECTIVITY_STAIR_YAW_OFFSET"), out var v) ? v : 90f;
 
     /// <summary>
     ///     THE SHIPPED PATTERNS ARE THE OPPOSITE HANDEDNESS TO THIS SERVER, so the reflection is applied
@@ -1036,10 +1049,10 @@ public static class BuildingStructuralSupportSystem {
     ///     after the yaw offsets were right, and which flipping this fixes without moving any of the
     ///     half-floor results by a single voxel.
     /// </summary>
-    private static bool MirrorFlip => Environment.GetEnvironmentVariable("CONNECTIVITY_MIRROR_FLIP") is not "0";
+    private bool MirrorFlip => Options.Get("CONNECTIVITY_MIRROR_FLIP") is not "0";
 
     /// <summary>The piece's cell for the connectivity model - see ConnectivitySays for why this is BaseLocation and not the pivot.</summary>
-    private static (int X, int Y, int Z) StructuralCellOf(ABuildingActor building) {
+    private (int X, int Y, int Z) StructuralCellOf(ABuildingActor building) {
         var b = FBuildingSupportCellIndex.BaseLocationOf(building.GetActorLocation(), building.GetActorRotation().Yaw);
 
         return ((int) MathF.Round(b.X / FBuildingSupportCellIndex.TileSize),
@@ -1047,7 +1060,7 @@ public static class BuildingStructuralSupportSystem {
                 (int) MathF.Round(b.Z / FBuildingSupportCellIndex.StoreyHeight));
     }
 
-    private static bool IsWithinReach(FVector a, FVector b) =>
+    private bool IsWithinReach(FVector a, FVector b) =>
         MathF.Abs(a.X - b.X) <= HorizontalReach
      && MathF.Abs(a.Y - b.Y) <= HorizontalReach
      && MathF.Abs(a.Z - b.Z) <= VerticalReach;
@@ -1062,7 +1075,7 @@ public static class BuildingStructuralSupportSystem {
     ///     all (a bridge off a cliff reads as self-supporting), which real ground heights fix. No
     ///     code path here changes once a baked heightmap exists; only the file has to.
     /// </summary>
-    private static bool IsSupportedByWorld(ABuildingActor building) {
+    private bool IsSupportedByWorld(ABuildingActor building) {
         var loc = building.GetActorLocation();
 
         // A SURFACE SOMEONE HAS WALKED ON COUNTS AS WORLD, and it is asked first. This closes a

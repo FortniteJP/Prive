@@ -1,99 +1,92 @@
-using WebSocketSharp.Server;
-using System.Diagnostics;
+using Prive.Server.Http.Routes;
+using Prive.Server.Http.Xmpp;
 
 namespace Prive.Server.Http;
 
 public class Program {
-    public static WebSocketServer? XMPPServer { get; } = new WebSocketServer(System.Net.IPAddress.Loopback, 8001);
     public static ServerInstance? Instance { get; set; }
-    public static ServerInstanceCommunicator CClient { get; } = new("127.0.0.1", 12345);
-    
+
     public static void Main(string[] args) {
-        var builder = WebApplication.CreateBuilder(args);
+        var (host, port, urls) = Listen();
+        // Before anything is mapped or any ini generated - DefaultEngine.ini reads XmppPort off it.
+        if (port > 0) HttpPort = port;
 
-        // Add services to the container.
+        // CreateSlimBuilder instead of CreateBuilder: no IIS integration, no static web assets, no
+        // HTTPS (TLS is terminated by the reverse proxy) - just Kestrel, config and routing. Nothing
+        // here needs dependency injection, so there is no service registration at all.
+        var builder = WebApplication.CreateSlimBuilder(args);
 
-        builder.Services.AddControllers();
-        // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-        builder.Services.AddEndpointsApiExplorer();
-        builder.Services.AddSwaggerGen();
+        // The one service registration there is, and it earns its place: the client cannot parse a
+        // timestamp with more than three fractional digits, which is what the default writes.
+        builder.Services.ConfigureHttpJsonOptions(options =>
+            options.SerializerOptions.Converters.Add(new EpicDateTimeConverter()));
+
+        // Two ports on the one Kestrel: HTTP, and XMPP one above it.
+        if (urls is null) builder.WebHost.UseUrls($"http://{host}:{port}", $"http://{host}:{XmppPort}");
+        else if (port > 0) builder.WebHost.UseUrls(urls.Append($"http://{host}:{XmppPort}").ToArray());
+        // else: ASPNETCORE_URLS named something unreadable, so it goes to Kestrel as-is and there
+        // is no XMPP port to add.
 
         var app = builder.Build();
-
-        // Configure the HTTP request pipeline.
-        if (app.Environment.IsDevelopment()) {
-            app.UseSwagger();
-            app.UseSwaggerUI();
-        }
-
-        app.UseHttpsRedirection();
-
-        app.UseAuthorization();
 
         app.UseWebSockets(new() {
             KeepAliveInterval = TimeSpan.FromMinutes(1)
         });
+        app.UseXmpp();
+        app.UseEpicAuth();
 
-        app.MapControllers();
+        AccountRoutes.Map(app);
+        CloudStorageRoutes.Map(app);
+        FortniteRoutes.Map(app);
+        FriendsRoutes.Map(app);
+        MatchMakingRoutes.Map(app);
+        McpRoutes.Map(app);
+        MiscRoutes.Map(app);
+        PartyRoutes.Map(app);
+        ServerApiRoutes.Map(app);
 
-        app.Use(async (context, next) => {
-            if (context.GetEndpoint()?.Metadata is var metadata && metadata is null) await next.Invoke();
-            if (metadata?.Count <= 3) {
-                await next.Invoke(); // Not Found
-                Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
-                return;
-            }
-            var requiresAuth = metadata?.GetMetadata<NoAuthAttribute>() is null;
-            if (requiresAuth) {
-                if (context.Request.Headers.TryGetValue("Authorization", out var value)) {
-                    var token = value.ToString().Split(" ")[1];
-                    var authToken = AuthTokens.FirstOrDefault(x => x.TokenString == token);
-                    var clientToken = ClientTokens.FirstOrDefault(x => x.TokenString == token);
-                    if (authToken is not null || clientToken is not null) {
-                        context.Items.Add("AuthToken", authToken);
-                        context.Items.Add("ClientToken", clientToken);
-                        await next.Invoke();
-                        Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
-                        return;
-                    }
-                }
-                context.Response.StatusCode = 401;
-                await context.Response.WriteAsJsonAsync(EpicError.Create(
-                    "errors.com.epicgames.common.authentication_failed", 1032,
-                    $"Authentication failed for {context.Request.Path.Value}",
-                    "com.epicgames.fortnite", "prod", new[] { context.Request.Path.Value ?? "" }
-                ));
-            } else await next.Invoke();
-            Console.WriteLine($"{context.Response.StatusCode} {context.Request.Method} {context.Request.Path.Value}");
-        });
-
-        app.MapFallback(async context => {
-            context.Response.StatusCode = 404;
-            await context.Response.WriteAsJsonAsync(EpicError.Create(
-                "errors.com.epicgames.common.not_found", 1004,
-                "Sorry the resource you were trying to find could not be found",
-                "com.epicgames.account.public"
-            ));
-        });
-
-        // XMPPServer!.Log.Level = WebSocketSharp.LogLevel.Trace;
-        // XMPPServer.AddWebSocketService<XMPPClient>("/");
-        // XMPPServer.Start();
-        // XMPPClient.PresenceLoop = new(async () => {
-        //     while (true) {
-        //         XMPPClient.SendPresence();
-        //         await Task.Delay(10000);
-        //     }
-        // });
-        // XMPPClient.PresenceLoop.Start();
+        app.MapFallback(NotFound).NoAuth();
 
         // new Thread(RunTcpListener).Start();
 
         Task.Run(async () => await DiscordRest.StartAsync());
 
         app.Run();
+    }
 
-        // XMPPServer.Stop();
+    /// <summary>
+    ///     Where to listen: <c>HOST</c> (default <c>0.0.0.0</c>, so the box is reachable from the
+    ///     LAN without a launch profile) and <c>PORT</c> (default 8000), with XMPP one above.
+    ///     <para>
+    ///         A plain <c>ASPNETCORE_URLS</c> still wins, and comes back in <c>Urls</c> so every
+    ///         entry it names is kept. Its first entry is also read apart so XMPP can still sit one
+    ///         port above; <c>Port</c> comes back 0 when that entry names nothing this can read,
+    ///         which only switches XMPP off - Kestrel is unaffected either way.
+    ///     </para>
+    /// </summary>
+    static (string Host, int Port, string[]? Urls) Listen() {
+        if (Environment.GetEnvironmentVariable("ASPNETCORE_URLS") is string raw && raw.Length > 0) {
+            var urls = raw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var first = urls.FirstOrDefault() ?? "";
+            var authority = (first.Contains("://") ? first[(first.IndexOf("://") + 3)..] : first).Split('/')[0];
+            var colon = authority.LastIndexOf(':');
+            if (colon > 0 && int.TryParse(authority[(colon + 1)..], out var urlPort)) return (authority[..colon], urlPort, urls);
+
+            Console.WriteLine($"XMPP disabled: no host and port to read out of ASPNETCORE_URLS ({raw})");
+            return ("", 0, urls);
+        }
+
+        var host = Environment.GetEnvironmentVariable("HOST") is string h && h.Length > 0 ? h : "0.0.0.0";
+        return (host, int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var p) ? p : 8000, null);
+    }
+
+    static async Task NotFound(HttpContext ctx) {
+        ctx.Response.StatusCode = 404;
+        await ctx.Response.WriteAsJsonAsync(EpicError.Create(
+            "errors.com.epicgames.common.not_found", 1004,
+            "Sorry the resource you were trying to find could not be found",
+            "com.epicgames.account.public"
+        ));
     }
 
     public async static void RunTcpListener() {

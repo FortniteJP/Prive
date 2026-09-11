@@ -127,5 +127,13 @@ public enum ERpcParamKind {
     ///     hand-written body that matches neither declaration nor memory order. See
     ///     <see cref="FCreateBuildingActorData"/> for the layout and how it was derived.
     /// </summary>
-    CreateBuildingActorData
+    CreateBuildingActorData,
+
+    /// <summary>
+    ///     A TEnumAsByte / enum-class parameter: CeilLogTwo(GetMaxEnumValue()) bits, not a byte -
+    ///     UByteProperty::NetSerializeItem / UEnumProperty::NetSerializeItem. The width is per enum,
+    ///     so it rides on the param def (<see cref="FRpcParamDef.Bits" />); EBuildingAttachmentType,
+    ///     whose max is ATTACH_MAX = 9, is 4.
+    /// </summary>
+    Enum
 }

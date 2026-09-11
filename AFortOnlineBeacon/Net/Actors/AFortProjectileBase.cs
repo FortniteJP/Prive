@@ -151,6 +151,13 @@ public class AFortProjectileBase : AActor {
     public bool bLandedAndDeploying { get; set; }
 
     /// <summary>
+    ///     The yaw of the last horizontal velocity it had, in degrees - the actor rotation a
+    ///     bRotationFollowsVelocity projectile would have at impact, kept because the velocity itself
+    ///     is zeroed the moment it lands. See FortDeployables.FDeployRule.FlightYawOffset.
+    /// </summary>
+    public float LastFlightYaw { get; set; }
+
+    /// <summary>
     ///     A floor for the server's simulation: the Z the thrower was standing at.
     ///
     ///     TerrainHeightMap only bakes the LANDSCAPE, so anything a player can stand on that is not

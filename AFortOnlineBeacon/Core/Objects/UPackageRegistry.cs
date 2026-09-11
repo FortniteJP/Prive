@@ -7,14 +7,17 @@ namespace AFortOnlineBeacon.Core.Objects;
 /// </summary>
 internal static class UPackageRegistry {
     private static readonly Dictionary<string, UPackage> Packages = new();
+    private static readonly object Gate = new();
 
     public static UPackage GetOrCreate(string path) {
-        if (Packages.TryGetValue(path, out var existing)) return existing;
+        lock (Gate) {
+            if (Packages.TryGetValue(path, out var existing)) return existing;
 
-        var package = new UPackage();
-        package.InitializeObjectProperties(null, new FName(path));
+            var package = new UPackage();
+            package.InitializeObjectProperties(null, new FName(path));
 
-        Packages[path] = package;
-        return package;
+            Packages[path] = package;
+            return package;
+        }
     }
 }

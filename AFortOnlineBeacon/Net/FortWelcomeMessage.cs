@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Runtime;
+﻿using AFortOnlineBeacon.Runtime;
 
 namespace AFortOnlineBeacon.Net;
 
@@ -21,42 +21,54 @@ namespace AFortOnlineBeacon.Net;
 ///     writing correctly for months, so which of them appears is itself the measurement.
 /// </summary>
 public static class FortWelcomeMessage {
-    private static readonly List<(APlayerController Controller, float DueAt, int Remaining)> Pending = new();
 
-    /// <summary>Seconds between resends.</summary>
-    private static readonly float Interval =
-        float.TryParse(Environment.GetEnvironmentVariable("WELCOME_MESSAGE_INTERVAL"), out var v) && v > 0 ? v : 6f;
+    /// <summary>This world's share of FortWelcomeMessage's state - see FWorldSubsystem.</summary>
+    private sealed class FWelcomeState : FWorldSubsystem {
+        public readonly List<(APlayerController Controller, float DueAt, int Remaining)> Pending = new();
 
-    /// <summary>
-    ///     How many times to repeat AFTER the immediate one. Three more over eighteen seconds is
-    ///     enough to cover a HUD that builds late without becoming noise in the log.
-    /// </summary>
-    private static readonly int Repeats =
-        int.TryParse(Environment.GetEnvironmentVariable("WELCOME_MESSAGE_REPEATS"), out var v) && v >= 0 ? v : 3;
+        public string? Text => Options.Get("WELCOME_MESSAGE") is { Length: > 0 } text
+            ? text
+            : null;
+        /// <summary>Seconds between resends.</summary>
+        public float Interval = default!;
 
-    public static string? Text => Environment.GetEnvironmentVariable("WELCOME_MESSAGE") is { Length: > 0 } text
-        ? text
-        : null;
+        /// <summary>
+        ///     How many times to repeat AFTER the immediate one. Three more over eighteen seconds is
+        ///     enough to cover a HUD that builds late without becoming noise in the log.
+        /// </summary>
+        public int Repeats = default!;
+        protected internal override void Initialize() {
+            { Interval = float.TryParse(Options.Get("WELCOME_MESSAGE_INTERVAL"), out var v) && v > 0 ? v : 6f; }
+            { Repeats = int.TryParse(Options.Get("WELCOME_MESSAGE_REPEATS"), out var v) && v >= 0 ? v : 3; }
+        }
+    }
+
+    private static FWelcomeState StateOf(UWorld world) => world.GetSubsystem<FWelcomeState>();
 
     /// <summary>Queues the resends. The caller has already sent the first pair.</summary>
     public static void Schedule(APlayerController controller, float now) {
-        if (Text == null || Repeats <= 0) return;
+        if (controller.GetWorld() is not { } world) return;
+        var state = StateOf(world);
 
-        Pending.Add((controller, now + Interval, Repeats));
+        if (state.Text == null || state.Repeats <= 0) return;
+
+        state.Pending.Add((controller, now + state.Interval, state.Repeats));
     }
 
     public static void Tick(UWorld world, float now) {
-        if (Pending.Count == 0 || Text is not { } text) return;
+        var state = StateOf(world);
 
-        for (var i = Pending.Count - 1; i >= 0; i--) {
-            var (controller, dueAt, remaining) = Pending[i];
+        if (state.Pending.Count == 0 || state.Text is not { } text) return;
+
+        for (var i = state.Pending.Count - 1; i >= 0; i--) {
+            var (controller, dueAt, remaining) = state.Pending[i];
             if (now < dueAt) continue;
 
             var channel = world.NetDriver?.ClientConnections
                 .FirstOrDefault(c => c.PlayerController == controller)?.FindActorChannel(controller);
 
             if (channel == null) {
-                Pending.RemoveAt(i);   // gone from the game
+                state.Pending.RemoveAt(i);   // gone from the game
                 continue;
             }
 
@@ -70,8 +82,8 @@ public static class FortWelcomeMessage {
                               $"({remaining - 1} resend(s) left). If a LATER one shows and the first did not, " +
                               "the HUD was simply not up yet.");
 
-            if (remaining <= 1) Pending.RemoveAt(i);
-            else Pending[i] = (controller, now + Interval, remaining - 1);
+            if (remaining <= 1) state.Pending.RemoveAt(i);
+            else state.Pending[i] = (controller, now + state.Interval, remaining - 1);
         }
     }
 }

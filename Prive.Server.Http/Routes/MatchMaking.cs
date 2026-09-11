@@ -1,14 +1,10 @@
-using Microsoft.AspNetCore.Mvc;
-using MongoDB.Driver;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-namespace Prive.Server.Http.Controllers;
+namespace Prive.Server.Http.Routes;
 
-[ApiController]
-[Route("")]
-public class MatchMakingController : ControllerBase {
+public static class MatchMakingRoutes {
     #if DEBUG
     public static MatchMakingManager MatchMakingManagerSolo { get; } = new("Playlist_DefaultSolo", TimeSpan.FromMinutes(1));
     public static MatchMakingManager MatchMakingManagerLateGameSolo { get; } = new("Playlist_Auto_Solo", TimeSpan.FromMinutes(1));
@@ -18,32 +14,32 @@ public class MatchMakingController : ControllerBase {
     #endif
     public static Dictionary<string, string> SessionIds { get; } = new();
 
-    [Route("matchmaking")] [NoAuth]
-    public async Task<object?> MatchMaking() {
-        if (!HttpContext.WebSockets.IsWebSocketRequest) {
-            Response.StatusCode = 400;
-            return null;
-        }
-        Response.StatusCode = 503; // just for now
-        return null;
+    public static void Map(IEndpointRouteBuilder app) {
+        // Any method - the client upgrades this one to a WebSocket.
+        app.Map("/matchmaking", (Delegate)MatchMaking).NoAuth();
 
-        // Console.WriteLine(Request.Headers.Authorization.ToString());
-        // Console.WriteLine(Request.Headers.Authorization.ToString().Split(" ")[2]);
-        // Console.WriteLine(Encoding.UTF8.GetString(Convert.FromBase64String(Request.Headers.Authorization.ToString().Split(" ")[2])));
+        app.MapGet("/fortnite/api/matchmaking/session/{sessionId}", MatchMakingSession);
+        app.MapGet("/fortnite/api/game/v2/matchmaking/account/{accountId}/session/{sessionId}", MatchMakingAccountSession);
+        app.MapPost("/fortnite/api/matchmaking/session/{sessionId}/join", () => Results.NoContent());
+        app.MapGet("/fortnite/api/matchmaking/session/findPlayer/{accountId}", MatchMakingSessionFindPlayer);
+    }
 
-        var obj = JsonSerializer.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(Convert.FromBase64String(Request.Headers.Authorization.ToString().Split(" ")[2]))) ?? throw new Exception("Invalid payload");
+    static async Task<object?> MatchMaking(HttpContext ctx) {
+        if (!ctx.WebSockets.IsWebSocketRequest) return Results.StatusCode(400);
+
+        var obj = JsonSerializer.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(Convert.FromBase64String(ctx.Request.Headers.Authorization.ToString().Split(" ")[2]))) ?? throw new Exception("Invalid payload");
         var bucketId = obj["bucketId"].ToString()!;
         var playlistId = bucketId.Split(":")[5];
         Console.WriteLine($"MatchMaking: {playlistId} ({bucketId})");
 
-        using var client = await HttpContext.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext() { KeepAliveInterval = TimeSpan.FromSeconds(5), KeepAliveTimeout = TimeSpan.FromHours(1) });
+        using var client = await ctx.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext() { KeepAliveInterval = TimeSpan.FromSeconds(5), KeepAliveTimeout = TimeSpan.FromHours(1) });
 
+        // HandleClient owns the close now. It has an outstanding receive on this socket, so a
+        // CloseAsync here would be a second concurrent receive and throw.
         if (playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase)) {
             await MatchMakingManagerSolo.HandleClient(client);
-            await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "Finished", CancellationToken.None);
         } else if (playlistId.Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase)) {
             await MatchMakingManagerLateGameSolo.HandleClient(client);
-            await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "Finished", CancellationToken.None);
         } else {
             await client.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "Invalid playlist!", CancellationToken.None);
             return null;
@@ -51,11 +47,9 @@ public class MatchMakingController : ControllerBase {
         return null;
     }
 
-    [HttpGet("fortnite/api/matchmaking/session/{sessionId}")]
-    public object MatchMakingSession() {
-        var sessionId = Request.RouteValues["sessionId"]?.ToString() ?? "TEST_SESSION_ID";
+    static object MatchMakingSession(HttpContext ctx, string sessionId) {
         var playlistId = SessionIds.ContainsKey(sessionId) ? SessionIds[sessionId] : "Playlist_DefaultSolo";
-        var buildUniqueId = Request.Cookies["NetCL"];
+        var buildUniqueId = ctx.Request.Cookies["NetCL"];
         SessionIds.Remove(sessionId);
 
         var r = new {
@@ -67,7 +61,7 @@ public class MatchMakingController : ControllerBase {
             serverAddress = "192.168.11.10",
             serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #else
-            serverAddress = Controllers.ServerApiController.IP,
+            serverAddress = ServerApiRoutes.IP,
             serverPort = playlistId.Equals("Playlist_DefaultSolo", StringComparison.InvariantCultureIgnoreCase) ? 20000 : 20001,
             #endif
             totalPlayers = 45,
@@ -108,28 +102,19 @@ public class MatchMakingController : ControllerBase {
         return r;
     }
 
-    [HttpGet("fortnite/api/game/v2/matchmaking/account/{accountId}/session/{sessionId}")]
-    public object MatchMakingAccountSession() {
-        var accountId = Request.RouteValues["accountId"]?.ToString() ?? "";
-        var sessionId = Request.RouteValues["sessionId"]?.ToString() ?? "";
-        return new {
-            accountId = accountId,
-            sessionId = sessionId,
-            key = "none"
-        };
-    }
+    static object MatchMakingAccountSession(string accountId, string sessionId) => new {
+        accountId = accountId,
+        sessionId = sessionId,
+        key = "none"
+    };
 
-    [HttpPost("fortnite/api/matchmaking/session/{sessionId}/join")]
-    public IActionResult MatchMakingSessionJoin() => NoContent();
-
-    [HttpGet("fortnite/api/matchmaking/session/findPlayer/{accountId}")]
-    public IActionResult MatchMakingSessionFindPlayer() {
+    static IResult MatchMakingSessionFindPlayer() {
         Console.WriteLine("MatchMakingSessionFindPlayer");
-        return NoContent();
+        return Results.NoContent();
     }
 
     // this doesnt work well, im looking for the correct way
-    public static async Task<bool> Disconnected(System.Net.WebSockets.WebSocket client) {
+    public static async Task<bool> Disconnected(WebSocket client) {
         using var timeoutCTS = new CancellationTokenSource();
         var result = client.ReceiveAsync(new byte[0], timeoutCTS.Token);
         var timeout = Task.Delay(5000, timeoutCTS.Token);
@@ -137,6 +122,6 @@ public class MatchMakingController : ControllerBase {
         if (completed == timeout) {
             // timeoutCTS.Cancel(); // throws System.Net.WebSockets.WebSocketException `The WebSocket is in an invalid state ('Aborted') for this operation. Valid states are: 'Open, CloseReceived'`
             return false;
-        } else return client.State != System.Net.WebSockets.WebSocketState.Open;
+        } else return client.State != WebSocketState.Open;
     }
 }

@@ -14,12 +14,20 @@ public class MatchMakingManager {
     public int PlayersLeft { get; internal set; } = 0;
     public int TickInterval { get; init; }
 
+    /// <summary>
+    ///     Queued clients: the task that releases the request holding each socket open, and when
+    ///     they joined. Entries are added from the request's own thread and removed from the tick
+    ///     timer, so every access goes through <see cref="ClientsGate"/>.
+    /// </summary>
     public Dictionary<WebSocket, (TaskCompletionSource<object?>, DateTime)> Clients { get; } = new();
+    readonly object ClientsGate = new();
+
+    public int QueuedCount { get { lock (ClientsGate) return Clients.Count; } }
+
     public Timer TickTimer { get; init; }
     public Timer WatchTimer { get; init; }
     public ServerInstance Instance { get; internal set; }
     public ServerInstanceCommunicator Communicator { get; internal set; }
-    // public Timer CheckConnectionTimer { get; init; }
 
     public MatchMakingManager(string playlistId, TimeSpan? matchMakingTimeout = null, int tickInterval = 5000) {
         PlaylistId = playlistId;
@@ -27,19 +35,93 @@ public class MatchMakingManager {
         TickInterval = tickInterval;
         TickTimer = new(new(Tick), null, 0, tickInterval);
         WatchTimer = new(new(Watch), null, Timeout.Infinite, Timeout.Infinite);
-        // CheckConnectionTimer = new(new(CheckConnection), null, 0, 1000);
-        Instance = new(Controllers.ServerApiController.ShippingLocation);
+        Instance = new(Routes.ServerApiRoutes.ShippingLocation);
         Communicator = new("[::1]", 12345 + (playlistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? 1 : 0));
         Task.Run(async () => { await Task.Delay(5000); await DiscordRest.UpdateEmbedAsync(this); });
     }
 
     public async Task HandleClient(WebSocket client) {
         await SendInitialThings(client);
-        var tcs = new TaskCompletionSource<object?>();
-        Clients.Add(client, (tcs, DateTime.Now));
+        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (ClientsGate) Clients[client] = (tcs, DateTime.Now);
         await DiscordRest.UpdateEmbedAsync(this);
-        await tcs.Task;
-        Clients.Remove(client);
+
+        // Whichever comes first: the match starts and Finish releases the task, or the player gives
+        // up and closes the socket. Only the read loop can notice the second one.
+        var reading = ReceiveUntilClosed(client);
+        await Task.WhenAny(tcs.Task, reading);
+        Drop(client);
+
+        if (!reading.IsCompleted) {
+            // The player is being sent into a match rather than walking away, so ask for the
+            // close from this side. It has to be CloseOutputAsync and the read loop has to be the
+            // one that waits: CloseAsync waits for the close reply itself, which means a second
+            // receive on a socket that already has one outstanding - measured, that does not throw,
+            // it simply never returns. A client that never answers is abandoned after the grace
+            // period rather than holding this request open for good.
+            try {
+                if (client.State == WebSocketState.Open)
+                    await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Finished", CancellationToken.None);
+            } catch (Exception) { }
+            await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(3)));
+        }
+    }
+
+    /// <summary>
+    ///     Reads until the socket closes, and that is the entire point of it.
+    ///     <para>
+    ///         A WebSocket only finds out the peer went away while a receive is pending, and nothing
+    ///         here was ever receiving - HandleClient just awaited a task. That is why
+    ///         <c>client.State</c> stayed Open for players who had long since cancelled ("Not
+    ///         working as expected"), why they stayed in the queue, and why a match could be started
+    ///         for nobody.
+    ///     </para>
+    ///     <para>
+    ///         The old CheckConnection tried to poll this from a timer with
+    ///         <c>ReceiveAsync(ArraySegment&lt;byte&gt;.Empty)</c>. Measured, that call blocks until
+    ///         a frame arrives rather than reporting anything - so on a live client the very first
+    ///         poll never returns, and a second concurrent receive does not throw either, it just
+    ///         blocks too. Polling cannot work at all here; one continuous loop is the only shape
+    ///         that does.
+    ///     </para>
+    ///     <para>
+    ///         The matchmaker protocol is server-to-client only, so whatever the client sends is
+    ///         read and discarded - and for the same reason a message split across frames needs no
+    ///         reassembly.
+    ///     </para>
+    /// </summary>
+    static async Task ReceiveUntilClosed(WebSocket client) {
+        var buffer = new byte[512];
+        try {
+            while (client.State == WebSocketState.Open) {
+                var result = await client.ReceiveAsync(buffer, CancellationToken.None);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+            }
+        } catch (Exception) {
+            // Reset, aborted, disposed: every one of them means the same thing here.
+        }
+    }
+
+    /// <summary>
+    ///     Takes a client out of the queue and releases the request holding its socket. Safe to
+    ///     call twice, and from any thread - the tick timer, Finish and HandleClient all race to it.
+    /// </summary>
+    void Drop(WebSocket client) {
+        TaskCompletionSource<object?> tcs;
+        lock (ClientsGate) {
+            if (!Clients.TryGetValue(client, out var entry)) return;
+            Clients.Remove(client);
+            tcs = entry.Item1;
+        }
+        tcs.TrySetResult(null);
+    }
+
+    /// <summary>
+    ///     A copy to iterate. The live dictionary cannot be walked by index while the tick timer
+    ///     and incoming requests are both changing it.
+    /// </summary>
+    KeyValuePair<WebSocket, (TaskCompletionSource<object?>, DateTime)>[] Snapshot() {
+        lock (ClientsGate) return Clients.ToArray();
     }
 
     public async Task SendInitialThings(WebSocket client) {
@@ -63,7 +145,7 @@ public class MatchMakingManager {
             payload = new {
                 state = "Queued",
                 ticketId = "TEST_TICKET_ID",
-                queuedPlayers = UseEstimatedWaitTime ? 0 : Clients.Count,
+                queuedPlayers = UseEstimatedWaitTime ? 0 : QueuedCount,
                 estimatedWaitSec = 0,
                 status = new {}
             },
@@ -74,25 +156,22 @@ public class MatchMakingManager {
 
     public async void Tick(object? state) {
         Console.WriteLine($"MatchMakingManager[{PlaylistId}].Tick: {Clients.Count}");
-        if (Clients.Count < 2 || IsListening) MatchMakingStartedAt = DateTime.Now;
+        if (QueuedCount < 2 || IsListening) MatchMakingStartedAt = DateTime.Now;
         if (DateTime.Now - MatchMakingStartedAt > MatchMakingTimeout) {
             TickTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            if (Clients.Count > 0) await Finish();
+            if (QueuedCount > 0) await Finish();
             Console.WriteLine($"MatchMakingManager[{PlaylistId}].Tick: Finished");
             TickTimer.Change(1000, TickInterval);
             return;
         }
-        for (int i = 0; i < Clients.Count; i++) {
-            var client = Clients.Keys.ElementAt(i);
-            var tcs = Clients.Values.ElementAt(i).Item1;
-            // Not working as expected
+        foreach (var (client, entry) in Snapshot()) {
+            // Now meaningful: the read loop in HandleClient is what moves a dropped socket out of
+            // Open, so this catches one that has gone since the last tick.
             if (client.State != WebSocketState.Open) {
-                tcs.SetResult(null);
-                Clients.Remove(client);
-                i--;
+                Drop(client);
                 continue;
             }
-            var startTime = Clients.Values.ElementAt(i).Item2;
+            var startTime = entry.Item2;
             var estimatedWaitSec = IsListening ? 0 : (int)(MatchMakingTimeout + TimeSpan.FromMinutes(1) - (startTime - MatchMakingStartedAt)).TotalSeconds;
             if (estimatedWaitSec % 60 == 0) estimatedWaitSec += 1; // because if moduled by 60 is 0, it will shown as Message.ETANotAvailable (N/A)
 
@@ -101,7 +180,7 @@ public class MatchMakingManager {
                     payload = new {
                         state = "Queued",
                         ticketId = "TEST_TICKET_ID",
-                        queuedPlayers = UseEstimatedWaitTime ? 0 : Clients.Count, // set it 0 will make it use Message.FindingMatch (Finding match...\nElapsed: {0}, ETA: {1}) otherwise it will use Message.PlayersInQueue (Queued players: {0}\nElapsed: {1})
+                        queuedPlayers = UseEstimatedWaitTime ? 0 : QueuedCount, // set it 0 will make it use Message.FindingMatch (Finding match...\nElapsed: {0}, ETA: {1}) otherwise it will use Message.PlayersInQueue (Queued players: {0}\nElapsed: {1})
                         estimatedWaitSec = UseEstimatedWaitTime ? estimatedWaitSec : 0,
                         status = new {}
                     },
@@ -109,9 +188,7 @@ public class MatchMakingManager {
                 }));
             } catch (Exception e) {
                 Console.WriteLine($"MatchMakingManager[{PlaylistId}].Tick: {e}");
-                tcs.SetResult(null);
-                Clients.Remove(client);
-                i--;
+                Drop(client);
             }
         }
     }
@@ -136,11 +213,9 @@ public class MatchMakingManager {
         }
         await Communicator.InfiniteAmmo(true);
         await Communicator.InfiniteMaterials(true);
-        for (int i = 0; i < Clients.Count; i++) {
-            var client = Clients.Keys.ElementAt(i);
-            var tcs = Clients.Values.ElementAt(i).Item1;
+        foreach (var (client, _) in Snapshot()) {
             var sessionId = Guid.NewGuid().ToString().Replace("-", "");
-            Controllers.MatchMakingController.SessionIds.Add(sessionId, PlaylistId);
+            Routes.MatchMakingRoutes.SessionIds[sessionId] = PlaylistId;
             try {
                 await client.SendAsync(JsonSerializer.Serialize(new {
                 payload = new {
@@ -159,11 +234,11 @@ public class MatchMakingManager {
                     name = "Play"
                 }));
             } catch (Exception e) {
-                Console.WriteLine($"MatchMakingManager[{PlaylistId}].Tick: {e}");
+                Console.WriteLine($"MatchMakingManager[{PlaylistId}].Finish: {e}");
             } finally {
-                tcs.SetResult(null);
-                Clients.Remove(client);
-                i--;
+                // Released even if the Play message failed: the player is out of the queue either
+                // way, and leaving the task pending would hold the request open for good.
+                Drop(client);
             }
         }
         await DiscordRest.UpdateEmbedAsync(this);
@@ -179,15 +254,15 @@ public class MatchMakingManager {
         Console.WriteLine($"MatchMakingManager[{PlaylistId}].LaunchGameServer");
         if (!Instance.ShippingProcess?.HasExited ?? false) Instance.Kill();
         Instance.Launch();
-        if (!Instance.InjectDll(Controllers.ServerApiController.ClientNativeDllLocation)) {
+        if (!Instance.InjectDll(Routes.ServerApiRoutes.ClientNativeDllLocation)) {
             Console.WriteLine("Failed to inject dll!");
             Instance.Launch();
-            if (!Instance.InjectDll(Controllers.ServerApiController.ClientNativeDllLocation)) {
+            if (!Instance.InjectDll(Routes.ServerApiRoutes.ClientNativeDllLocation)) {
                 Console.WriteLine("Failed to inject dll TWICE!");
                 return;
             }
         }
-        await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), PlaylistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? Controllers.ServerApiController.ServerNativeDllLocation.Replace(".dll", ".lg.dll") : Controllers.ServerApiController.ServerNativeDllLocation);
+        await Instance.WaitForLogAndInjectDll(line => line.Contains("LogHotfixManager: Display: Update State CheckingForPatch -> CheckingForHotfix"), PlaylistId.ToLower().Equals("Playlist_Auto_Solo", StringComparison.InvariantCultureIgnoreCase) ? Routes.ServerApiRoutes.ServerNativeDllLocation.Replace(".dll", ".lg.dll") : Routes.ServerApiRoutes.ServerNativeDllLocation);
         await Task.Delay(1000 * 30);
         while (true) {
             try {
@@ -234,22 +309,6 @@ public class MatchMakingManager {
             }
         } catch (Exception e) {
             Console.WriteLine($"MatchMakingManager[{PlaylistId}].Watch: {e}");
-        }
-    }
-
-    public async void CheckConnection(object? state) {
-        for (int i = 0; i < Clients.Count; i++) {
-            var client = Clients.Keys.ElementAt(i);
-            var tcs = Clients.Values.ElementAt(i).Item1;
-            try {
-                // what is the correct implementation?
-                await client.ReceiveAsync(ArraySegment<byte>.Empty, CancellationToken.None);
-            } catch (Exception e) {
-                Console.WriteLine($"MatchMakingManager[{PlaylistId}].CheckConnection: {e}");
-                tcs.SetResult(null);
-                Clients.Remove(client);
-                i--;
-            }
         }
     }
 }

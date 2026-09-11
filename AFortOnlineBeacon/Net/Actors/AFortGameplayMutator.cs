@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     AFortGameplayMutator : AInfo - one actor per gameplay modifier the playlist turns on.
@@ -75,8 +76,8 @@ public class AFortGameplayMutator : AInfo {
     ///     PLAYLIST_MUTATORS overrides with a comma-separated list; an empty string spawns none,
     ///     which is what makes this switchable off without a rebuild if it ever misbehaves.
     /// </summary>
-    public static IReadOnlyList<string> ForPlaylist(string playlistAssetPath) {
-        if (Environment.GetEnvironmentVariable("PLAYLIST_MUTATORS") is { } raw)
+    public static IReadOnlyList<string> ForPlaylist(FBeaconOptions options, string playlistAssetPath) {
+        if (options.Get("PLAYLIST_MUTATORS") is { } raw)
             return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         // "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo" -> "Playlist_DefaultSolo"

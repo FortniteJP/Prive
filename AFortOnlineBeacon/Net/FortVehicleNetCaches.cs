@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 using AFortOnlineBeacon.Net.Actors;
 
 namespace AFortOnlineBeacon.Net;
@@ -15,7 +16,7 @@ namespace AFortOnlineBeacon.Net;
 /// </summary>
 internal static partial class FortVehicleNetCaches {
     private static readonly Dictionary<string, FClassNetCache> Built = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> Warned = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> Warned = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     ///     The cache for this vehicle, built once per Blueprint class on top of the native
@@ -39,16 +40,22 @@ internal static partial class FortVehicleNetCaches {
     ///     for weapons), the honest behaviour is to leave those blocks alone.
     ///     VEHICLE_RPC_DECODE=1 turns the attempt back on.
     /// </summary>
-    public static bool DecodeEnabled => Environment.GetEnvironmentVariable("VEHICLE_RPC_DECODE") is "1";
+    public static bool DecodeEnabled => FBeaconProcess.Options.Get("VEHICLE_RPC_DECODE") is "1";
 
     public static FClassNetCache For(AFortAthenaVehicle vehicle, FClassNetCache nativeChain) {
+        // Shared by every world, so get-or-build is locked: a Dictionary written from two threads
+        // at once is corrupted, not merely raced.
+        lock (Built) return ForLocked(vehicle, nativeChain);
+    }
+
+    private static FClassNetCache ForLocked(AFortAthenaVehicle vehicle, FClassNetCache nativeChain) {
         var className = vehicle.GetClass()?.GetFName().ToString();
         if (className == null) return nativeChain;
 
         if (Built.TryGetValue(className, out var cached)) return cached;
 
         if (!OwnFields.TryGetValue(className, out var fields)) {
-            if (Warned.Add(className))
+            if (Warned.TryAdd(className, 0))
                 Console.WriteLine($"FortVehicleNetCaches: '{className}' is not in the generated table - using the " +
                                   "native AFortAthenaVehicle chain. If this Blueprint adds replicated fields, every " +
                                   "RPC it sends will decode at the wrong field width. Re-run " +

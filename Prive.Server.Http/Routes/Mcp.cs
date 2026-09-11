@@ -1,12 +1,32 @@
-using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using System.Text.Json;
 
-namespace Prive.Server.Http.Controllers;
+namespace Prive.Server.Http.Routes;
 
-[ApiController]
-[Route("fortnite")]
-public class MCPController : ControllerBase {
+/// <summary>The MCP (profile) commands the client fires at login and from the locker.</summary>
+public static class McpRoutes {
+    /// <summary>The cosmetic slots the client is allowed to name in a locker command.</summary>
+    static readonly string[] ValidSlots = new string[] {
+        "Backpack",
+        "VictoryPose",
+        "LoadingScreen",
+        "Character",
+        "Glider",
+        "Dance",
+        "CallingCard",
+        "ConsumableEmote",
+        "MapMarker",
+        "Charm",
+        "SkyDiveContrail",
+        "Hat",
+        "PetSkin",
+        "ItemWrap",
+        "MusicPack",
+        "BattleBus",
+        "Pickaxe",
+        "VehicleDecoration",
+    };
+
     public static object CreateResponse(object changes, string profileId, int rvn = 0) => new {
         profileRevision = rvn,
         profileId = profileId,
@@ -17,12 +37,20 @@ public class MCPController : ControllerBase {
         responseVersion = 1
     };
 
-    [HttpPost("api/game/v2/profile/{accountId}/client/QueryProfile")]
-    public async Task<object> QueryProfile() {
-        var accountId = (string)Request.RouteValues["accountId"]!;
-        var profileId = Request.Query["profileId"].First()!;
-        var rvn = int.Parse(Request.Query["rvn"].First() ?? "0") + 1;
-        if (HttpContext.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
+    public static void Map(IEndpointRouteBuilder app) {
+        var client = app.MapGroup("/fortnite/api/game/v2/profile/{accountId}/client");
+
+        client.MapPost("/QueryProfile", QueryProfile);
+        client.MapPost("/ClientQuestLogin", QueryProfile);
+        client.MapPost("/SetMtxPlatform", SetMtxPlatform);
+        client.MapPost("/SetCosmeticLockerSlot", SetCosmeticLockerSlot);
+        client.MapPost("/EquipBattleRoyaleCustomization", EquipBattleRoyaleCustomization);
+    }
+
+    static async Task<object> QueryProfile(HttpContext ctx, string accountId) {
+        var profileId = ctx.Request.Query["profileId"].First()!;
+        var rvn = int.Parse(ctx.Request.Query["rvn"].First() ?? "0") + 1;
+        if (ctx.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
             return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
         }
 
@@ -62,7 +90,7 @@ public class MCPController : ControllerBase {
             case "outpost0":
                 return CreateResponse(new object[0], profileId, rvn);
             default:
-                Response.StatusCode = 400;
+                ctx.Response.StatusCode = 400;
                 return EpicError.Create(
                     "errors.com.epicgames.modules.profiles.operation_forbidden", 12813,
                     $"Unable to find template configuration for profile {profileId}",
@@ -71,37 +99,30 @@ public class MCPController : ControllerBase {
         }
     }
 
-    [HttpPost("api/game/v2/profile/{accountId}/client/ClientQuestLogin")]
-    public Task<object> ClientQuestLogin() => QueryProfile();
-
-    [HttpPost("api/game/v2/profile/{accountId}/client/SetMtxPlatform")]
-    public async Task<object> SetMtxPlatform() {
-        var accountId = (string)Request.RouteValues["accountId"]!;
-        if (HttpContext.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
+    static async Task<object> SetMtxPlatform(HttpContext ctx, string accountId) {
+        if (ctx.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
             return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
         }
-        using var bodyReader = new StreamReader(Request.Body);
+        using var bodyReader = new StreamReader(ctx.Request.Body);
         var platformValue = JsonSerializer.Deserialize<Dictionary<string, string>>(await bodyReader.ReadToEndAsync())?.GetValueOrDefault("platform");
 
         return CreateResponse(new object[] { new {
             changeType =  "statModified",
             name = "current_mtx_platform",
             value = platformValue ?? "EpicPC"
-        }}, "common_core", int.Parse(Request.Query["rvn"].First() ?? "0"));
+        }}, "common_core", int.Parse(ctx.Request.Query["rvn"].First() ?? "0"));
     }
 
-    [HttpPost("api/game/v2/profile/{accountId}/client/SetCosmeticLockerSlot")]
-    public async Task<object> SetCosmeticLockerSlot() {
-        var accountId = (string)Request.RouteValues["accountId"]!;
-        if (HttpContext.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
+    static async Task<object> SetCosmeticLockerSlot(HttpContext ctx, string accountId) {
+        if (ctx.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
             return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
         }
 
-        using var bodyReader = new StreamReader(Request.Body);
+        using var bodyReader = new StreamReader(ctx.Request.Body);
         var setCosmeticLockerSlotRequest = JsonSerializer.Deserialize<SetCosmeticLockerSlotRequest>(await bodyReader.ReadToEndAsync())!;
 
         if (setCosmeticLockerSlotRequest.Category is null || setCosmeticLockerSlotRequest.ItemToSlot is null || setCosmeticLockerSlotRequest.LockerItem is null) {
-            Response.StatusCode = 400;
+            ctx.Response.StatusCode = 400;
             return EpicError.Create(
                 "errors.com.epicgames.validation.validation_failed", 1040,
                 "Validation Failed.", // Invalid fields were []
@@ -109,32 +130,11 @@ public class MCPController : ControllerBase {
             );
         }
 
-        var validFields = new string[] {
-            "Backpack",
-            "VictoryPose",
-            "LoadingScreen",
-            "Character",
-            "Glider",
-            "Dance",
-            "CallingCard",
-            "ConsumableEmote",
-            "MapMarker",
-            "Charm",
-            "SkyDiveContrail",
-            "Hat",
-            "PetSkin",
-            "ItemWrap",
-            "MusicPack",
-            "BattleBus",
-            "Pickaxe",
-            "VehicleDecoration",
-        };
-
-        if (!validFields.Contains(setCosmeticLockerSlotRequest.Category)) {
-            Response.StatusCode = 400;
+        if (!ValidSlots.Contains(setCosmeticLockerSlotRequest.Category)) {
+            ctx.Response.StatusCode = 400;
             return EpicError.Create(
                 "errors.com.epicgames.modules.profiles.invalid_payload", 12806,
-                "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.SetCosmeticLockerSlot. Value not one of declared Enum instance names", // [{string.join(", ", validFields)}]
+                "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.SetCosmeticLockerSlot. Value not one of declared Enum instance names", // [{string.join(", ", ValidSlots)}]
                 "fortnite", "prod-live", new string[] { "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.SetCosmeticLockerSlot. Value not one of declared Enum instance names" }
             );
         }
@@ -201,21 +201,19 @@ public class MCPController : ControllerBase {
                     },
                 }
             }
-        } }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0"));
+        } }, "athena", int.Parse(ctx.Request.Query["rvn"].FirstOrDefault() ?? "0"));
     }
 
-    [HttpPost("api/game/v2/profile/{accountId}/client/EquipBattleRoyaleCustomization")]
-    public async Task<object> EquipBattleRoyaleCustomization() {
-        var accountId = (string)Request.RouteValues["accountId"]!;
-        if (HttpContext.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
+    static async Task<object> EquipBattleRoyaleCustomization(HttpContext ctx, string accountId) {
+        if (ctx.Items["AuthToken"] is AuthToken authToken && authToken.AccountId != accountId) {
             return EpicError.Permission($"fortnite:profile:{accountId}:commands", "ALL", "fortnite");
         }
 
-        using var bodyReader = new StreamReader(Request.Body);
+        using var bodyReader = new StreamReader(ctx.Request.Body);
         var equipBattleRoyaleCustomizationRequest = JsonSerializer.Deserialize<EquipBattleRoyaleCustomizationRequest>(await bodyReader.ReadToEndAsync())!;
 
         if (equipBattleRoyaleCustomizationRequest.SlotName is null || equipBattleRoyaleCustomizationRequest.ItemToSlot is null) {
-            Response.StatusCode = 400;
+            ctx.Response.StatusCode = 400;
             return EpicError.Create(
                 "errors.com.epicgames.validation.validation_failed", 1040,
                 "Validation Failed.",
@@ -223,31 +221,11 @@ public class MCPController : ControllerBase {
             );
         }
 
-        var validFields = new string[] {
-            "Backpack",
-            "VictoryPose",
-            "LoadingScreen",
-            "Character",
-            "Glider",
-            "Dance",
-            "CallingCard",
-            "ConsumableEmote",
-            "MapMarker",
-            "Charm",
-            "SkyDiveContrail",
-            "Hat",
-            "PetSkin",
-            "ItemWrap",
-            "MusicPack",
-            "BattleBus",
-            "Pickaxe",
-            "VehicleDecoration",
-        };
-        if (!validFields.Contains(equipBattleRoyaleCustomizationRequest.SlotName)) {
-            Response.StatusCode = 400;
+        if (!ValidSlots.Contains(equipBattleRoyaleCustomizationRequest.SlotName)) {
+            ctx.Response.StatusCode = 400;
             return EpicError.Create(
                 "errors.com.epicgames.modules.profiles.invalid_payload", 12806,
-                "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.EquipBattleRoyaleCustomization. Value not one of declared Enum instance names", // [{string.join(", ", validFields)}]
+                "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.EquipBattleRoyaleCustomization. Value not one of declared Enum instance names", // [{string.join(", ", ValidSlots)}]
                 "fortnite", "prod-live", new string[] { "Unable to parse command com.epicgames.fortnite.core.game.commands.cosmetics.EquipBattleRoyaleCustomization. Value not one of declared Enum instance names" }
             );
         }
@@ -277,7 +255,7 @@ public class MCPController : ControllerBase {
                     name = $"favorite_{equipBattleRoyaleCustomizationRequest.SlotName}",
                     value = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}s")!.GetValue(profile)
                 }
-            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0") + 1);
+            }, "athena", int.Parse(ctx.Request.Query["rvn"].FirstOrDefault() ?? "0") + 1);
         } else {
             return CreateResponse(new object[] {
                 new {
@@ -292,40 +270,7 @@ public class MCPController : ControllerBase {
                 //     attributeName = "variants",
                 //     attributeValue = profile.GetType().GetProperty($"{equipBattleRoyaleCustomizationRequest.SlotName}Variants")!.GetValue(profile)
                 // }
-            }, "athena", int.Parse(Request.Query["rvn"].FirstOrDefault() ?? "0") + 1);
+            }, "athena", int.Parse(ctx.Request.Query["rvn"].FirstOrDefault() ?? "0") + 1);
         }
     }
-}
-
-public class SetCosmeticLockerSlotRequest {
-    [K("category")] public string? Category { get; set; }
-    [K("itemToSlot")] public string? ItemToSlot { get; set; }
-    [K("lockerItem")] public string? LockerItem { get; set; }
-    [K("slotIndex")] public int SlotIndex { get; set; }
-    [K("variantUpdates")] public List<VariantUpdate> VariantUpdates { get; set; } = new();
-    [K("optLockerUseCountOverride")] public int? LockerUseCountOverride { get; set; } // ? 
-}
-
-public class VariantUpdate {
-    [K("active")] public required string Active { get; set; }
-    [K("channel")] public required string Channel { get; set; }
-    [K("owned")] public string[] Owned { get; set; } = Array.Empty<string>();
-
-    public Variant ToVariant() => new() {
-        Active = Active,
-        Channel = Channel,
-        Owned = Owned
-    };
-
-    public static VariantUpdate FromVariant(Variant variant) => new() {
-        Active = variant.Active,
-        Channel = variant.Channel,
-        Owned = variant.Owned
-    };
-}
-
-public class EquipBattleRoyaleCustomizationRequest {
-    [K("slotName")] public string? SlotName { get; set; }
-    [K("itemToSlot")] public string? ItemToSlot { get; set; }
-    [K("indexWithinSlot")] public int IndexWithinSlot { get; set; }
 }

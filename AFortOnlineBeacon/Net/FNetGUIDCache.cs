@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Server-side bookkeeping for a single tracked object: the info the client needs in order to
@@ -40,7 +41,7 @@ public class FNetGUIDCache {
     ///     a line that only exists inside a ShouldAsyncLoad() branch - so announcing these GUIDs
     ///     actually buys us the client-side bunch queueing. NET_ASYNC_LOAD=0 turns it back off.
     /// </summary>
-    public bool ShouldAsyncLoad() => Environment.GetEnvironmentVariable("NET_ASYNC_LOAD") != "0";
+    public bool ShouldAsyncLoad() => FBeaconProcess.Options.Get("NET_ASYNC_LOAD") != "0";
 
     /// <summary>
     ///     FNetGUIDCache::CanClientLoadObject (PackageMapClient.cpp:610-639). Answers "could the

@@ -1,4 +1,4 @@
-using AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Net.Actors;
 using AFortOnlineBeacon.Runtime;
 
 namespace AFortOnlineBeacon.Net;
@@ -31,26 +31,33 @@ namespace AFortOnlineBeacon.Net;
 ///     owns WHEN, and NativeRpcHandlers still owns WHAT.
 /// </summary>
 public static class FortPickupFlightSystem {
-    private static readonly List<(AFortPickup Pickup, APawn Target, float LandsAt, Action OnComplete)> InFlight = new();
 
-    /// <summary>
-    ///     How long a pickup flies, in seconds.
-    ///
-    ///     NOT THE CLIENT'S NUMBER, which is what this used to echo. The client sends InFlyTime and
-    ///     the value it asks for animates at Save The World's pace - reported as "same speed as STW,
-    ///     slow". The real answer is 0.40s, and it is not a guess: PR3.0 discards the client's
-    ///     InFlyTime in both of its pickup hooks and writes 0.40f (FortPlayerPawn.cpp:352 and 128),
-    ///     and calls ServerHandlePickup with 0.40f again from its two internal callers. Someone
-    ///     there clearly looked at the incoming value - the line printing it is still in the source,
-    ///     commented out - and decided against it.
-    ///
-    ///     PICKUP_FLY_TIME overrides it. The number is the game's rather than an asset's, so it is
-    ///     worth being able to change without a rebuild.
-    /// </summary>
-    private static readonly float FlightSeconds =
-        float.TryParse(Environment.GetEnvironmentVariable("PICKUP_FLY_TIME"), out var seconds) && seconds > 0f
-            ? Math.Min(seconds, MaxFlightSeconds)
-            : 0.40f;
+    /// <summary>This world's share of FortPickupFlightSystem's state - see FWorldSubsystem.</summary>
+    private sealed class FPickupFlightState : FWorldSubsystem {
+        public readonly List<(AFortPickup Pickup, APawn Target, float LandsAt, Action OnComplete)> InFlight = new();
+        /// <summary>
+        ///     How long a pickup flies, in seconds.
+        ///
+        ///     NOT THE CLIENT'S NUMBER, which is what this used to echo. The client sends InFlyTime and
+        ///     the value it asks for animates at Save The World's pace - reported as "same speed as STW,
+        ///     slow". The real answer is 0.40s, and it is not a guess: PR3.0 discards the client's
+        ///     InFlyTime in both of its pickup hooks and writes 0.40f (FortPlayerPawn.cpp:352 and 128),
+        ///     and calls ServerHandlePickup with 0.40f again from its two internal callers. Someone
+        ///     there clearly looked at the incoming value - the line printing it is still in the source,
+        ///     commented out - and decided against it.
+        ///
+        ///     PICKUP_FLY_TIME overrides it. The number is the game's rather than an asset's, so it is
+        ///     worth being able to change without a rebuild.
+        /// </summary>
+        public float FlightSeconds = default!;
+        protected internal override void Initialize() {
+            FlightSeconds = float.TryParse(Options.Get("PICKUP_FLY_TIME"), out var seconds) && seconds > 0f
+                    ? Math.Min(seconds, MaxFlightSeconds)
+                    : 0.40f;
+        }
+    }
+
+    private static FPickupFlightState StateOf(UWorld world) => world.GetSubsystem<FPickupFlightState>();
 
     /// <summary>
     ///     A ceiling on how long a pickup may be held back.
@@ -74,9 +81,12 @@ public static class FortPickupFlightSystem {
     /// </summary>
     public static void Begin(AFortPickup pickup, APawn target, FVector startDirection,
                              bool playSound, float now, Action onComplete) {
+        if (pickup.GetWorld() is not { } world) return;
+        var state = StateOf(world);
+
         pickup.PickupTarget = target;
         pickup.ItemOwner = target;
-        pickup.FlyTime = FlightSeconds;
+        pickup.FlyTime = state.FlightSeconds;
         pickup.StartDirection = startDirection;
         pickup.bPlayPickupSound = playSound;
         pickup.TossState = EFortPickupTossState.InProgress;
@@ -84,7 +94,7 @@ public static class FortPickupFlightSystem {
 
         pickup.FlushNetDormancy();
 
-        InFlight.Add((pickup, target, now + FlightSeconds, onComplete));
+        state.InFlight.Add((pickup, target, now + state.FlightSeconds, onComplete));
     }
 
     /// <summary>
@@ -95,13 +105,15 @@ public static class FortPickupFlightSystem {
     ///     somewhere nobody can reach it or drop it. Losing it is what the player saw happen anyway.
     /// </summary>
     public static void Tick(UWorld world, float now) {
-        if (InFlight.Count == 0) return;
+        var state = StateOf(world);
 
-        for (var i = InFlight.Count - 1; i >= 0; i--) {
-            var (pickup, target, landsAt, onComplete) = InFlight[i];
+        if (state.InFlight.Count == 0) return;
+
+        for (var i = state.InFlight.Count - 1; i >= 0; i--) {
+            var (pickup, target, landsAt, onComplete) = state.InFlight[i];
             if (now < landsAt) continue;
 
-            InFlight.RemoveAt(i);
+            state.InFlight.RemoveAt(i);
 
             if (target.IsPendingKillPending()) {
                 Console.WriteLine("FortPickupFlightSystem: the pawn a pickup was flying to is gone, dropping the grant");

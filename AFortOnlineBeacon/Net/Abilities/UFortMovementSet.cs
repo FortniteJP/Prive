@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Abilities;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Abilities;
 
 /// <summary>
 ///     The PlayerState's MovementSet, and the one attribute set this server sends VALUES for.
@@ -22,15 +23,12 @@
 ///     costs a restart rather than a rebuild.
 /// </summary>
 public class UFortMovementSet : UFortAttributeSet {
-    private static float Env(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
-
-    public float WalkSpeed { get; set; } = Env("WALK_SPEED", 200.0f);
-    public float RunSpeed { get; set; } = Env("RUN_SPEED", 410.0f);
-    public float SprintSpeed { get; set; } = Env("SPRINT_SPEED", 550.0f);
-    public float CrouchedRunSpeed { get; set; } = Env("CROUCHED_RUN_SPEED", 290.0f);
-    public float CrouchedSprintSpeed { get; set; } = Env("CROUCHED_SPRINT_SPEED", 420.0f);
-    public float BackwardSpeedMultiplier { get; set; } = Env("BACKWARD_SPEED_MULTIPLIER", 0.65f);
+    public float WalkSpeed { get; set; } = 200.0f;
+    public float RunSpeed { get; set; } = 410.0f;
+    public float SprintSpeed { get; set; } = 550.0f;
+    public float CrouchedRunSpeed { get; set; } = 290.0f;
+    public float CrouchedSprintSpeed { get; set; } = 420.0f;
+    public float BackwardSpeedMultiplier { get; set; } = 0.65f;
 
     /// <summary>
     ///     UFortMovementSet::JumpHeight - wire handle 64, and the reason a player could not jump at
@@ -49,6 +47,23 @@ public class UFortMovementSet : UFortAttributeSet {
     ///     multiplier and this is already right; ~1 or 0 means raw, and the number it wants can be
     ///     set with JUMP_HEIGHT without a rebuild.
     /// </summary>
-    public float JumpHeight { get; set; } = Env("JUMP_HEIGHT", 1.0f);
-    public float SpeedMultiplier { get; set; } = Env("SPEED_MULTIPLIER", 1.0f);
+    public float JumpHeight { get; set; } = 1.0f;
+    public float SpeedMultiplier { get; set; } = 1.0f;
+
+    /// <summary>
+    ///     Loads this set's tunables from its WORLD's options. Called by AGameModeBase.Login right
+    ///     after the set is created: a property initialiser runs in the constructor, before the set
+    ///     belongs to any world, so the initialisers above hold only the shipped defaults and this is
+    ///     where a per-playlist value gets in.
+    /// </summary>
+    public void ApplyOptions(FBeaconOptions options) {
+        WalkSpeed = options.Float("WALK_SPEED", 200.0f);
+        RunSpeed = options.Float("RUN_SPEED", 410.0f);
+        SprintSpeed = options.Float("SPRINT_SPEED", 550.0f);
+        CrouchedRunSpeed = options.Float("CROUCHED_RUN_SPEED", 290.0f);
+        CrouchedSprintSpeed = options.Float("CROUCHED_SPRINT_SPEED", 420.0f);
+        BackwardSpeedMultiplier = options.Float("BACKWARD_SPEED_MULTIPLIER", 0.65f);
+        JumpHeight = options.Float("JUMP_HEIGHT", 1.0f);
+        SpeedMultiplier = options.Float("SPEED_MULTIPLIER", 1.0f);
+    }
 }

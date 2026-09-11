@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 public class APawn : AActor {
     /// <summary>
@@ -233,6 +234,16 @@ public class APawn : AActor {
             Console.WriteLine($"APawn.EquipInventoryItem: set DefaultMetadata={buildingMetadata.GetFName()} for building tool");
         }
 
+        // A TRAP's ghost is the tool's ItemDefinition (handle 36), the deco tool's DefaultMetadata -
+        // and on the context tool, ContextTrapItemDefinition (38) too, both the context item itself,
+        // exactly what Project-Reboot-3.0's equip leaves on it. See AFortDecoTool.
+        if (weapon is AFortDecoTool decoTool) {
+            decoTool.ItemDefinition = item.ItemDefinition;
+            if (FortTraps.For(item.ItemDefinition) is { IsContext: true }) decoTool.ContextTrapItemDefinition = item.ItemDefinition;
+            Console.WriteLine($"APawn.EquipInventoryItem: trap tool holding {item.ItemDefinition?.GetFName()}" +
+                              (decoTool.ContextTrapItemDefinition != null ? " (context)" : ""));
+        }
+
         // AFortPawn::ClientInternalEquipWeapon(AFortWeapon*) IS NOT FLAGGED HERE ANY MORE. It used to
         // set a bool on the weapon that UNetDriver consumed when that weapon's channel opened - which
         // meant a RE-equip sent nothing, because the channel is already open and never opens twice.
@@ -261,6 +272,17 @@ public class APawn : AActor {
 
             var spec = abilitySystem.GrantAbility(fireAbility, weapon, replicateInstance: needsInstance);
             weapon.GrantedAbilitySpecHandle = spec.Handle;
+
+            // AND THE OTHER BUTTON, when the item has one - see AFortWeapon.SecondaryAbilitySpecHandle.
+            if (FortWeaponActorClasses.SecondaryAbilityFor(item.ItemDefinition) is { } secondaryAbility) {
+                var secondaryNeedsInstance = FortConsumables.SecondaryNeedsReplicatedAbilityInstance(
+                    item.ItemDefinition?.GetFName().ToString() ?? string.Empty);
+                var secondarySpec = abilitySystem.GrantAbility(secondaryAbility, weapon,
+                                                               replicateInstance: secondaryNeedsInstance);
+                weapon.SecondaryAbilitySpecHandle = secondarySpec.Handle;
+                Console.WriteLine($"APawn.EquipInventoryItem: granted secondary {secondaryAbility.GetFName()} " +
+                                  $"as spec handle {secondarySpec.Handle}");
+            }
             Console.WriteLine($"APawn.EquipInventoryItem: granted {fireAbility.GetFName()} as spec handle {spec.Handle}" +
                               (needsInstance ? " (with a replicated ability instance)" : ""));
 
@@ -305,6 +327,7 @@ public class APawn : AActor {
         if (Controller?.PlayerState?.AbilitySystemComponent is { } abilitySystem) {
             if (weapon.GrantedAbilitySpecHandle != UnrealConstants.IndexNone) abilitySystem.ClearAbility(weapon.GrantedAbilitySpecHandle);
             if (weapon.ReloadAbilitySpecHandle != UnrealConstants.IndexNone) abilitySystem.ClearAbility(weapon.ReloadAbilitySpecHandle);
+            if (weapon.SecondaryAbilitySpecHandle != UnrealConstants.IndexNone) abilitySystem.ClearAbility(weapon.SecondaryAbilitySpecHandle);
         }
 
         CurrentWeapon = null;
@@ -640,7 +663,7 @@ public class APawn : AActor {
         //
         // Deliberately noisy and deliberately default-ON while this is open; MOVE_FLAG_TRACE=0 mutes
         // it. Only CHANGES are printed, so holding a key produces one line, not one per tick.
-        if (compressedMoveFlags != _lastMoveFlags && Environment.GetEnvironmentVariable("MOVE_FLAG_TRACE") is not "0") {
+        if (compressedMoveFlags != _lastMoveFlags && WorldOptions.Get("MOVE_FLAG_TRACE") is not "0") {
             Console.WriteLine($"APawn.TrackMoveFlags: flags 0x{_lastMoveFlags:X2} -> 0x{compressedMoveFlags:X2} " +
                               $"(movementMode={clientMovementMode})");
         }
@@ -661,17 +684,17 @@ public class APawn : AActor {
         _lastMovementMode = clientMovementMode;
     }
 
-    private static float Env(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    private float Env(string name, float fallback) =>
+        float.TryParse(WorldOptions.Get(name), out var value) ? value : fallback;
 
     /// <summary>
     ///     How far a player may fall for free. 1152 uu is three Fortnite storeys (a wall is 384),
     ///     which is roughly where the real game starts hurting. FALL_DAMAGE_MIN_DISTANCE overrides.
     /// </summary>
-    private static readonly float FallDamageMinDistance = Env("FALL_DAMAGE_MIN_DISTANCE", 1152.0f);
+    private float FallDamageMinDistance => Env("FALL_DAMAGE_MIN_DISTANCE", 1152.0f);
 
     /// <summary>Damage per storey fallen beyond the free distance. FALL_DAMAGE_PER_STOREY overrides.</summary>
-    private static readonly float FallDamagePerStorey = Env("FALL_DAMAGE_PER_STOREY", 10.0f);
+    private float FallDamagePerStorey => Env("FALL_DAMAGE_PER_STOREY", 10.0f);
 
     /// <summary>One Fortnite storey, the unit both constants above are expressed in.</summary>
     private const float StoreyHeight = 384.0f;
@@ -698,7 +721,7 @@ public class APawn : AActor {
     public void GrantFallDamageImmunity(float timeSeconds) =>
         _fallDamageImmuneUntil = timeSeconds + ShockwaveImmunitySeconds;
 
-    private static readonly float ShockwaveImmunitySeconds = Env("SHOCKWAVE_IMMUNITY_SECONDS", 8.0f);
+    private float ShockwaveImmunitySeconds => Env("SHOCKWAVE_IMMUNITY_SECONDS", 8.0f);
 
     /// <summary>
     ///     Fall damage, worked out from the movement mode and location every client move carries.

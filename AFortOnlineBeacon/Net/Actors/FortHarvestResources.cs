@@ -91,7 +91,7 @@ internal static partial class FortHarvestResources {
     /// <summary>Fortnite's per-resource stack cap.</summary>
     private const int MaxResourceStack = 999;
 
-    private static readonly HashSet<string> UnknownStemsSeen = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> UnknownStemsSeen = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     ///     Resolves a hit actor's path to the resource it yields, or null if it yields none - which
@@ -169,7 +169,7 @@ internal static partial class FortHarvestResources {
             // Not an error - most things are not harvestable. Logged once per stem, capped, because
             // the list of stems that SHOULD have resolved is the only way a gap in the generated
             // table ever becomes visible.
-            if (UnknownStemsSeen.Add(stem) && UnknownStemsSeen.Count <= 40) {
+            if (UnknownStemsSeen.TryAdd(stem, 0) && UnknownStemsSeen.Count <= 40) {
                 Console.WriteLine($"FortHarvestResources: '{stem}' yields no resource (not in the generated table)");
             }
 

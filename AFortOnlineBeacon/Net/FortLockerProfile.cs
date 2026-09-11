@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 using AFortOnlineBeacon.Core.Objects;
 using AFortOnlineBeacon.Net.Actors;
 using MongoDB.Bson;
@@ -26,15 +27,25 @@ namespace AFortOnlineBeacon.Net;
 internal static class FortLockerProfile {
     /// <summary>MONGO_URL overrides it; the default is the same local instance Prive.Server.Http uses.</summary>
     private static string ConnectionString =>
-        Environment.GetEnvironmentVariable("MONGO_URL") is { Length: > 0 } url ? url : "mongodb://localhost:27017";
+        FBeaconProcess.Options.Get("MONGO_URL") is { Length: > 0 } url ? url : "mongodb://localhost:27017";
 
     /// <summary>LOCKER_FROM_DB=0 pins every player to the built-in default loadout.</summary>
-    private static bool Enabled => Environment.GetEnvironmentVariable("LOCKER_FROM_DB") is not "0";
+    private static bool Enabled => FBeaconProcess.Options.Get("LOCKER_FROM_DB") is not "0";
 
     private static IMongoCollection<BsonDocument>? _profiles;
     private static bool _connectFailed;
 
+    private static readonly object ConnectGate = new();
+
+    /// <summary>
+    ///     One MongoClient for the process, which is how the driver is meant to be used - and made
+    ///     once, under a lock, so two worlds logging players in together do not each open one.
+    /// </summary>
     private static IMongoCollection<BsonDocument>? Profiles() {
+        lock (ConnectGate) return ProfilesLocked();
+    }
+
+    private static IMongoCollection<BsonDocument>? ProfilesLocked() {
         if (_profiles != null || _connectFailed) return _profiles;
 
         try {

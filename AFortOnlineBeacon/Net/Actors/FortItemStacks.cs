@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 using AFortOnlineBeacon.Core.Objects;
 
 namespace AFortOnlineBeacon.Net.Actors;
@@ -60,7 +61,7 @@ internal static partial class FortItemStacks {
 
     /// <summary>See StackCap. NOT read from any asset.</summary>
     private static readonly int UnspecifiedStackSize =
-        int.TryParse(System.Environment.GetEnvironmentVariable("TRAP_STACK_SIZE"), out var cap) && cap > 0
+        int.TryParse(FBeaconProcess.Options.Get("TRAP_STACK_SIZE"), out var cap) && cap > 0
             ? cap
             : 999;
 
@@ -154,7 +155,7 @@ internal static partial class FortItemStacks {
         // reported as "the same weapon with the same rarity can be held twice or more". Two
         // identical rifles in two slots is perfectly legal in Fortnite - what is not legal is a
         // SIXTH slot, and that is the only thing this line is here to decide.
-        if (remaining > 0 && OccupiesQuickbarSlot(definition) && OccupiedSlots(inventory) >= SlotLimit) {
+        if (remaining > 0 && OccupiesQuickbarSlot(definition) && OccupiedSlots(inventory) >= SlotLimitFor(inventory)) {
             return remaining;
         }
 
@@ -289,8 +290,10 @@ internal static partial class FortItemStacks {
     ///     the game's, not something derived from an asset, so it is worth being able to change
     ///     without a rebuild.
     /// </summary>
-    private static readonly int SlotLimit =
-        int.TryParse(System.Environment.GetEnvironmentVariable("INVENTORY_SLOTS"), out var slots) && slots > 0
+    private static int SlotLimitFor(AFortInventory inventory) =>
+        // PER WORLD: a playlist can reasonably want a different number, and every check already
+        // holds the inventory actor whose world it is.
+        int.TryParse(inventory.GetWorld()?.Options.Get("INVENTORY_SLOTS"), out var slots) && slots > 0
             ? slots
             : 5;
 }

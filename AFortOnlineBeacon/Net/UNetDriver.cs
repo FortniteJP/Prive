@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using AFortOnlineBeacon.Runtime;
+using System.Collections.Concurrent;
 using System.Net;
 
 namespace AFortOnlineBeacon.Net;
@@ -32,6 +33,9 @@ public abstract class UNetDriver {
     ///     World this net driver is associated with
     /// </summary>
     public UWorld? World { get; private set; }
+
+    /// <summary>The options of the world this driver serves - see FBeaconOptions.</summary>
+    public FBeaconOptions WorldOptions => World?.Options ?? FBeaconProcess.Options;
     
     public FNetworkNotify Notify { get; private set; }
     
@@ -330,7 +334,9 @@ public abstract class UNetDriver {
     ///     this existed every channel was a one-shot burst at join, so turning it off restores
     ///     exactly the behaviour every earlier live test ran against.
     /// </summary>
-    private static readonly bool RepTickEnabled = Environment.GetEnvironmentVariable("REP_TICK") != "0";
+    private bool RepTickEnabled => _repTickEnabled ??= WorldOptions.Get("REP_TICK") != "0";
+
+    private bool? _repTickEnabled;
 
     /// <summary>
     ///     Heavily reduced UNetDriver::ServerReplicateActors. Real UE builds a prioritised,
@@ -503,7 +509,7 @@ public abstract class UNetDriver {
         // And a per-tick cap even after that, so a burst of newly relevant actors can never again
         // arrive as one indivisible wall of channel opens. Real UE bounds this by bandwidth; this
         // bounds it by count, which is the same idea with the information available here.
-        var budget = int.TryParse(Environment.GetEnvironmentVariable("NEWLY_RELEVANT_PER_TICK"), out var cap)
+        var budget = int.TryParse(WorldOptions.Get("NEWLY_RELEVANT_PER_TICK"), out var cap)
             ? cap
             : 4;
 
@@ -646,7 +652,9 @@ public abstract class UNetDriver {
     ///     still drawn. NET_DORMANCY=0 restores exactly the old behaviour in one run, which makes it
     ///     a cheap thing to rule in or out.
     /// </summary>
-    private static readonly bool DormancyEnabled = Environment.GetEnvironmentVariable("NET_DORMANCY") is not "0";
+    private bool DormancyEnabled => _dormancyEnabled ??= WorldOptions.Get("NET_DORMANCY") is not "0";
+
+    private bool? _dormancyEnabled;
 
     /// <summary>Actor classes that have already been reported as going dormant - once each.</summary>
     private readonly HashSet<string> _LoggedDormantClasses = new();
@@ -673,10 +681,12 @@ public abstract class UNetDriver {
     ///     CAMERA_VIEWPOINT_TIMEOUT sets a bound in seconds if one is ever wanted; -1 turns the
     ///     camera viewpoint off entirely and pins relevancy to the pawn.
     /// </summary>
-    private static readonly float CameraViewpointTimeout =
-        float.TryParse(Environment.GetEnvironmentVariable("CAMERA_VIEWPOINT_TIMEOUT"), out var timeout)
+    private float CameraViewpointTimeout => _cameraViewpointTimeout ??=
+        float.TryParse(WorldOptions.Get("CAMERA_VIEWPOINT_TIMEOUT"), out var timeout)
             ? timeout
             : float.PositiveInfinity;
+
+    private float? _cameraViewpointTimeout;
 
     /// <summary>
     ///     PostTick actions

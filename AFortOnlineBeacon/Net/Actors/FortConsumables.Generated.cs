@@ -998,6 +998,20 @@ internal static class FortConsumables {
     ///     The healing consumables are all ReplicateNo, which is why they work today with no
     ///     instance at all - a live confirmation of the rule rather than a guess about it.
     /// </summary>
+    /// <summary>
+    ///     Item definition name -> its SecondaryFireAbility class, granted on equip beside the
+    ///     primary one. 3 entries.
+    /// </summary>
+    private static readonly Dictionary<string, string> SecondaryAbilities = new(StringComparer.OrdinalIgnoreCase) {
+        ["Athena_Balloons_Consumable"] = "/Game/Athena/Items/Consumables/Balloons/GA_Athena_Balloons_Consumable_AltFireRelease.GA_Athena_Balloons_Consumable_AltFireRelease_C",
+        ["Athena_C4"] = "/Game/Athena/Items/Consumables/C4/GAT_Athena_c4_Detonate.GAT_Athena_c4_Detonate_C",
+        ["Athena_SneakySnowman"] = "/Game/Athena/Items/Consumables/SneakySnowman/GA_Athena_Apply_SneakySnowman.GA_Athena_Apply_SneakySnowman_C",
+    };
+
+    /// <summary>The same ReplicateYes rule as NeedReplicatedAbilityInstance, for the secondary ability.</summary>
+    private static readonly HashSet<string> SecondaryNeedsReplicatedInstance = new(StringComparer.OrdinalIgnoreCase) {
+    };
+
     private static readonly HashSet<string> NeedReplicatedAbilityInstance = new(StringComparer.OrdinalIgnoreCase) {
         "Athena_AppleSauce",
         "Athena_BirthdayGiftBox",
@@ -1216,6 +1230,12 @@ internal static class FortConsumables {
 
     public static string? AbilityFor(string itemDefinitionName) =>
         Abilities.GetValueOrDefault(itemDefinitionName);
+
+    public static string? SecondaryAbilityFor(string itemDefinitionName) =>
+        SecondaryAbilities.GetValueOrDefault(itemDefinitionName);
+
+    public static bool SecondaryNeedsReplicatedAbilityInstance(string itemDefinitionName) =>
+        SecondaryNeedsReplicatedInstance.Contains(itemDefinitionName);
 
     public static string? ItemPathFor(string itemDefinitionName) =>
         ItemPaths.GetValueOrDefault(itemDefinitionName);

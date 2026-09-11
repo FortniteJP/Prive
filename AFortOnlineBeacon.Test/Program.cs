@@ -26,7 +26,10 @@ class Program {
             AFortOnlineBeacon.Net.Actors.FortBuildingHulls.VerifyDoorway();
             return 0;
         }
+        if (args.Contains("--mapactors-selftest")) return AFortOnlineBeacon.Core.Objects.MapActorRegistrySelfTest.RunSelfTest() ? 0 : 1;
+        if (args.Contains("--multiworld-selftest")) return AFortOnlineBeacon.Runtime.MultiWorldSelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--structarray-selftest")) return AFortOnlineBeacon.Net.Replication.StructArraySelfTest.RunSelfTest() ? 0 : 1;
+        if (args.Contains("--traps-selftest")) return AFortOnlineBeacon.Net.Actors.FortTrapsSelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--weaponstats-selftest")) return AFortOnlineBeacon.Net.Actors.FortWeaponStatsSelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--inventoryslots-selftest")) return AFortOnlineBeacon.Net.Actors.FortInventorySlotSelfTest.RunSelfTest() ? 0 : 1;
         if (args.Contains("--ftext-selftest")) return AFortOnlineBeacon.Core.FTextSelfTest.RunSelfTest() ? 0 : 1;

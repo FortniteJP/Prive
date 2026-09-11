@@ -1,6 +1,7 @@
 global using K = System.Text.Json.Serialization.JsonPropertyNameAttribute;
 global using static Prive.Server.Http.Global;
 using MongoDB.Driver;
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
@@ -18,14 +19,41 @@ public static class Global {
     public static object[] BulkStatus { get; private set; } = new object[0];
     public static object ItemShop { get; private set; } = new();
     
-    public static List<ClientToken> ClientTokens { get; } = new();
-    public static List<AuthToken> AuthTokens { get; } = new();
+    /// <summary>Client-credentials tokens, keyed by the token string the client sends back.</summary>
+    public static ConcurrentDictionary<string, ClientToken> ClientTokens { get; } = new();
+
+    /// <summary>
+    ///     Access tokens, keyed by the token string the client sends back.
+    ///     <para>
+    ///         A dictionary rather than a list for two reasons. Every authenticated request used to
+    ///         find its token by scanning the whole list - and <c>List.Add</c> is not atomic, so two
+    ///         logins landing together on Kestrel's threads can both write to the same slot and lose
+    ///         one of the tokens. It does not throw; it just drops it, measured at over 10% with
+    ///         four threads appending flat out. A dropped token is one the server has already handed
+    ///         a client and can no longer recognise, so every later request from that client 401s.
+    ///     </para>
+    ///     <para>
+    ///         Note that a concurrent scan would not have thrown either: since .NET 9 LINQ walks a
+    ///         <c>List</c> through <c>CollectionsMarshal.AsSpan</c>, with no version check. It can
+    ///         read a stale backing array, but never reports the problem.
+    ///     </para>
+    /// </summary>
+    public static ConcurrentDictionary<string, AuthToken> AuthTokens { get; } = new();
     public static List<Party> Parties { get; } = new();
-    public static List<XMPPClient> XMPPClients { get; } = new();
 
     public static MyDiscordRestClient DiscordRest { get; } = new();
 
-    public static int Port { get; set; } = 20000;
+    /// <summary>
+    ///     The port Kestrel ended up on, from <c>PORT</c> or <c>ASPNETCORE_URLS</c>. Assigned once
+    ///     at the top of <see cref="Program.Main"/>, before a route is mapped or an ini generated.
+    /// </summary>
+    public static int HttpPort { get; internal set; } = 8000;
+
+    /// <summary>
+    ///     XMPP listens one port above HTTP. This is the only place that rule is written down -
+    ///     <see cref="Program"/> binds it and DefaultEngine.ini tells the client about it.
+    /// </summary>
+    public static int XmppPort => HttpPort + 1;
 
     static Global() {
         if (!Directory.Exists(CloudStorageLocation)) Directory.CreateDirectory(CloudStorageLocation);
@@ -119,42 +147,61 @@ public class AuthToken {
     public required string AccountId { get; init; }
 }
 
+/// <summary>
+///     A party as the client's own JSON reader expects it. Every name here is the wire name, in
+///     snake_case: without the [K] attributes these serialise as camelCase, and the client's
+///     FPartyConfigInfo reader then finds no <c>sub_type</c>, <c>max_size</c> or <c>invite_ttl</c>
+///     and fails the whole CreateParty.
+/// </summary>
 public class Party {
-    public required string PartyId { get; init; }
-    public DateTime CreatedAt { get; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; private set; }
-    public int Revision { get; private set; }
-    public PartyConfig Config { get; private set; } = new();
-    public PartyMember[] Members { get; private set; } = new PartyMember[16];
-    public Dictionary<string, object> Meta { get; private set; } = new();
+    [K("id")] public required string Id { get; init; }
+    [K("created_at")] public DateTime CreatedAt { get; } = DateTime.UtcNow;
+    [K("updated_at")] public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    ///     Echoed back from the create request rather than rebuilt, so the joinability and
+    ///     discoverability enums cannot be guessed wrong - the client is told exactly what it asked
+    ///     for. <see cref="PartyConfig"/> is the fallback when the request carried no config.
+    /// </summary>
+    [K("config")] public required object Config { get; set; }
+
+    [K("members")] public List<PartyMember> Members { get; } = new();
+    [K("applicants")] public object[] Applicants { get; } = Array.Empty<object>();
+    [K("meta")] public object Meta { get; set; } = new Dictionary<string, string>();
+    [K("invites")] public object[] Invites { get; } = Array.Empty<object>();
+    [K("revision")] public int Revision { get; set; }
+    [K("intentions")] public object[] Intentions { get; } = Array.Empty<object>();
 }
 
+/// <summary>Only used when the create request did not carry a config of its own.</summary>
 public class PartyConfig {
-    public string Type { get; set; } = "DEFAULT";
-    public string Joinability { get; set; } = "OPEN";
-    public string Discoverability { get; set; } = "ALL";
-    public string SubType { get; set; } = "default";
-    public int MaxSize { get; set; } = 16;
-    public int InviteTTL { get; set; } = 14400;
-    public bool JoinConfirmation { get; set; } = true;
+    [K("type")] public string Type { get; set; } = "DEFAULT";
+    [K("joinability")] public string Joinability { get; set; } = "OPEN";
+    [K("discoverability")] public string Discoverability { get; set; } = "ALL";
+    [K("sub_type")] public string SubType { get; set; } = "default";
+    [K("max_size")] public int MaxSize { get; set; } = 16;
+    [K("invite_ttl")] public int InviteTtl { get; set; } = 14400;
+    [K("join_confirmation")] public bool JoinConfirmation { get; set; } = true;
 }
 
 public class PartyMember {
-    public required string AccountId { get; init; }
-    public Dictionary<string, object> Meta { get; set; } = new();
-    public List<PartyMemberConnection> Connections { get; set; } = new();
-    public int Revision { get; set; }
-    public DateTime UpdatedAt { get; set; }
-    public DateTime JoinedAt { get; } = DateTime.UtcNow;
-    public string Role { get; set; } = "MEMBER";
+    [K("account_id")] public required string AccountId { get; init; }
+    [K("meta")] public object Meta { get; set; } = new Dictionary<string, string>();
+    [K("connections")] public List<PartyMemberConnection> Connections { get; } = new();
+    [K("revision")] public int Revision { get; set; }
+    [K("updated_at")] public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    [K("joined_at")] public DateTime JoinedAt { get; } = DateTime.UtcNow;
+
+    /// <summary>CAPTAIN for whoever created the party, MEMBER for everyone else.</summary>
+    [K("role")] public string Role { get; set; } = "MEMBER";
 }
 
 public class PartyMemberConnection {
-    public required string Id { get; init; }
-    public DateTime ConnectedAt { get; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; private set; }
-    public bool YieldLeadership { get; set; }
-    public Dictionary<string, object> Meta { get; set; } = new();
+    [K("id")] public required string Id { get; init; }
+    [K("connected_at")] public DateTime ConnectedAt { get; } = DateTime.UtcNow;
+    [K("updated_at")] public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    [K("yield_leadership")] public bool YieldLeadership { get; set; }
+    [K("meta")] public object Meta { get; set; } = new Dictionary<string, string>();
 }
 
 public static class DB {

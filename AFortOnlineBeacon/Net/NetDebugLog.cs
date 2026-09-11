@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net;
 
 /// <summary>
 ///     Defers the per-packet diagnostic Console.WriteLine calls sprinkled through
@@ -18,7 +19,7 @@ internal static class NetDebugLog {
     ///     Errors and one-shot milestones are logged with Console.WriteLine directly and are never
     ///     suppressed by this.
     /// </summary>
-    public static readonly bool VerboseEnabled = Environment.GetEnvironmentVariable("NET_VERBOSE") == "1";
+    public static readonly bool VerboseEnabled = FBeaconProcess.Options.Get("NET_VERBOSE") == "1";
 
     [ThreadStatic] private static List<string>? _Buffer;
 

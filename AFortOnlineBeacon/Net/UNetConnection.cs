@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿using AFortOnlineBeacon.Runtime;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 
@@ -113,6 +114,9 @@ public abstract class UNetConnection : UPlayer {
     ///     Owning net driver
     /// </summary>
     public UNetDriver? Driver { get; private set; }
+
+    /// <summary>The options of the world this connection's driver serves - see FBeaconOptions.</summary>
+    public FBeaconOptions WorldOptions => Driver?.World?.Options ?? FBeaconProcess.Options;
     
     /// <summary>
     ///     Package map between local and remote. (negotiates net serialization)
@@ -1061,7 +1065,7 @@ public abstract class UNetConnection : UPlayer {
         // NET_HANDLER_COMPONENTS overrides the chain (comma-separated, e.g. "stateless" or
         // "oodle,stateless"). Needed to replay captures taken against a client configured with
         // `!Components=ClearArray`, where the chain really is shorter.
-        var components = Environment.GetEnvironmentVariable("NET_HANDLER_COMPONENTS") is { Length: > 0 } chain
+        var components = WorldOptions.Get("NET_HANDLER_COMPONENTS") is { Length: > 0 } chain
             ? chain.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : new[] { "oodle", "aes", "stateless" };
 

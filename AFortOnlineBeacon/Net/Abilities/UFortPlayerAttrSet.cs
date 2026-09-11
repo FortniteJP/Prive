@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 namespace AFortOnlineBeacon.Net.Abilities;
 
 /// <summary>
@@ -22,18 +23,28 @@ namespace AFortOnlineBeacon.Net.Abilities;
 ///     against a live client without a rebuild.
 /// </summary>
 public class UFortPlayerAttrSet : UFortAttributeSet {
-    private static float Env(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
-
     /// <summary>Current stamina. Wire handles 1 (BaseValue) and 2 (CurrentValue).</summary>
-    public float Stamina { get; set; } = Env("STAMINA", 100.0f);
+    public float Stamina { get; set; } = 100.0f;
 
     /// <summary>Wire handles 10 / 11.</summary>
-    public float StaminaRegenRate { get; set; } = Env("STAMINA_REGEN_RATE", 10.0f);
+    public float StaminaRegenRate { get; set; } = 10.0f;
 
     /// <summary>Wire handles 19 / 20.</summary>
-    public float StaminaRegenDelay { get; set; } = Env("STAMINA_REGEN_DELAY", 1.0f);
+    public float StaminaRegenDelay { get; set; } = 1.0f;
 
     /// <summary>Wire handles 28 / 29.</summary>
-    public float MaxStamina { get; set; } = Env("MAX_STAMINA", 100.0f);
+    public float MaxStamina { get; set; } = 100.0f;
+
+    /// <summary>
+    ///     Loads this set's tunables from its WORLD's options. Called by AGameModeBase.Login right
+    ///     after the set is created: a property initialiser runs in the constructor, before the set
+    ///     belongs to any world, so the initialisers above hold only the shipped defaults and this is
+    ///     where a per-playlist value gets in.
+    /// </summary>
+    public void ApplyOptions(FBeaconOptions options) {
+        Stamina = options.Float("STAMINA", 100.0f);
+        StaminaRegenRate = options.Float("STAMINA_REGEN_RATE", 10.0f);
+        StaminaRegenDelay = options.Float("STAMINA_REGEN_DELAY", 1.0f);
+        MaxStamina = options.Float("MAX_STAMINA", 100.0f);
+    }
 }

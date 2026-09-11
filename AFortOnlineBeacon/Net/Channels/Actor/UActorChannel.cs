@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Channels.Actor;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Channels.Actor;
 
 public class UActorChannel : UChannel {
     public AActor? Actor { get; private set; }
@@ -57,15 +58,17 @@ public class UActorChannel : UChannel {
     ///     (CharacterData.Parts[0]).
     /// </summary>
     /// <summary>One "skipping vehicle blocks" line per vehicle class, not per bunch.</summary>
-    private static readonly HashSet<string> _warnedVehicleBlock = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _warnedVehicleBlock = new();
 
-    private static readonly HashSet<string> DisabledProperties =
-        (Environment.GetEnvironmentVariable("REP_DISABLE") ?? string.Empty)
+    /// <summary>REP_DISABLE, for this actor's world - see the note above.</summary>
+    private static HashSet<string> DisabledPropertiesFor(FBeaconOptions options) =>
+        (options.Get("REP_DISABLE") ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToHashSet();
 
     private static HashSet<string> GetInitialReplicatedProperties(AActor actor) {
         var changed = GetInitialReplicatedPropertiesCore(actor);
+        var DisabledProperties = DisabledPropertiesFor(actor.WorldOptions);
         if (DisabledProperties.Count == 0) return changed;
 
         var typeName = actor.GetType().Name;
@@ -100,7 +103,7 @@ public class UActorChannel : UChannel {
     ///     BUS_ATTACH_PAWN=1 - see the AttachmentReplication note in the pawn's set. Off by default
     ///     because the bus destroys the pawn rather than attaching it.
     /// </summary>
-    private static bool EnvAttachPawn => Environment.GetEnvironmentVariable("BUS_ATTACH_PAWN") is "1";
+    private static bool EnvAttachPawn(AActor pawn) => pawn.WorldOptions.Get("BUS_ATTACH_PAWN") is "1";
 
     /// <summary>
     ///     Adds the six AttachmentReplication handles when BUS_ATTACH_PAWN=1, or - and this is the
@@ -146,8 +149,29 @@ public class UActorChannel : UChannel {
         return names;
     }
 
+    /// <summary>
+    ///     What a deployed actor sends beyond its roles, each only when the actor asks for it - the
+    ///     worn snowman is the one that needs all three: bHidden because its CDO is hidden, its
+    ///     Instigator because its BeginPlay reads the wearer off it, and its attachment because that is
+    ///     how it follows the wearer at all.
+    /// </summary>
+    private static HashSet<string> WithContextTrap(AFortDecoTool tool, HashSet<string> names) {
+        if (tool.ContextTrapItemDefinition != null) names.Add("ContextTrapItemDefinition");
+        return names;
+    }
+
+    private static HashSet<string> WithDeployedExtras(AFortDeployedActor deployed, HashSet<string> names) {
+        if (deployed.bReplicateVisibility) names.Add("bHidden");
+        if (deployed.bReplicateInstigator) {
+            names.Add("Instigator");
+            names.Add("Owner");
+        }
+
+        return WithPawnAttachment(names, deployed);
+    }
+
     private static HashSet<string> WithPawnAttachment(HashSet<string> names, AActor pawn) {
-        if (!EnvAttachPawn && !pawn.bAttachmentEverSet) return names;
+        if (!EnvAttachPawn(pawn) && !pawn.bAttachmentEverSet) return names;
 
         names.UnionWith(new[] {
             "AttachmentReplication.AttachParent", "AttachmentReplication.LocationOffset",
@@ -181,14 +205,14 @@ public class UActorChannel : UChannel {
     ///     bit offsets - 20 chars plus NUL, length 21, with HeroId following cleanly), so the
     ///     transform is applied inside the client, to a value that arrives intact.
     /// </summary>
-    private static HashSet<string> WithPlayerName(HashSet<string> names) {
-        if (Environment.GetEnvironmentVariable("REPLICATE_PLAYER_NAME") is not "0") names.Add("PlayerNamePrivate");
+    private static HashSet<string> WithPlayerName(FBeaconOptions options, HashSet<string> names) {
+        if (options.Get("REPLICATE_PLAYER_NAME") is not "0") names.Add("PlayerNamePrivate");
 
         return names;
     }
 
-    private static HashSet<string> WithDoorRotation(HashSet<string> properties) {
-        if (Environment.GetEnvironmentVariable("DOOR_ROT_OFFSET") is not "0") properties.Add("DoorDesiredRotOffset");
+    private static HashSet<string> WithDoorRotation(FBeaconOptions options, HashSet<string> properties) {
+        if (options.Get("DOOR_ROT_OFFSET") is not "0") properties.Add("DoorDesiredRotOffset");
 
         return properties;
     }
@@ -218,7 +242,7 @@ public class UActorChannel : UChannel {
         // 2895 of them - and a zeroed FRepMovement is a Location of (0, 0, 0). bReplicateMovement
         // bumps the property-set revision when it changes, so the channel rebuilds this at the
         // moment the toss starts and again at the moment it lands.
-        if (pickup.bReplicateMovement && Environment.GetEnvironmentVariable("PICKUP_REPLICATE_MOVEMENT") is not "0") {
+        if (pickup.bReplicateMovement && pickup.WorldOptions.Get("PICKUP_REPLICATE_MOVEMENT") is not "0") {
             properties.Add("bReplicateMovement");
             properties.Add("ReplicatedMovement");
         }
@@ -227,8 +251,8 @@ public class UActorChannel : UChannel {
     }
 
     /// <summary>What a thrown projectile replicates - see the AFortProjectileBase arm below.</summary>
-    private static readonly HashSet<string> ProjectileProperties =
-        Environment.GetEnvironmentVariable("PROJECTILE_REPLICATE_MOVEMENT") is "1"
+    private static HashSet<string> ProjectilePropertiesFor(FBeaconOptions options) =>
+        options.Get("PROJECTILE_REPLICATE_MOVEMENT") is "1"
             ? new HashSet<string> { "RemoteRole", "Role", "Owner", "Instigator", "bHasExploded",
                                     "bIsBeingKilled", "bReplicateMovement", "ReplicatedMovement" }
             : new HashSet<string> { "RemoteRole", "Role", "Owner", "Instigator", "bHasExploded",
@@ -334,7 +358,7 @@ public class UActorChannel : UChannel {
         // that switch actually decides. Listing them unconditionally would send a Location that the
         // server only updates when the simulation runs, which is worse than sending none.
         AFortProjectileBase projectile =>
-            WithSpeedOverride(projectile, new HashSet<string>(ProjectileProperties)),
+            WithSpeedOverride(projectile, ProjectilePropertiesFor(projectile.WorldOptions)),
         // The storm circle. Every one of these changes at each phase - the client interpolates from
         // Last to Next between the two shrink times - so the per-tick diff has to be walking them.
         AFortSafeZoneIndicator => new HashSet<string> {
@@ -354,7 +378,7 @@ public class UActorChannel : UChannel {
             "FlightStartTime", "FlightEndTime", "DropStartTime", "DropEndTime",
             "ReplicatedFlightTimestamp", "AircraftIndex"
         },
-        APlayerState => WithPlayerName(new HashSet<string> { "RemoteRole", "Role", "UniqueId", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
+        APlayerState => WithPlayerName(actor.WorldOptions, new HashSet<string> { "RemoteRole", "Role", "UniqueId", "bHasFinishedLoading", "bHasStartedPlaying", "HeroId", "HeroType",
             // ALL SIX SLOTS, not the three the built-in default happened to fill. Head/Body/Backpack
             // was enough while every player was the same commando; a real locker outfit brings a HAT
             // (CID_028's Hat_F_Commando_08_V01) and some bring a face or a charm, and a slot that is
@@ -409,12 +433,28 @@ public class UActorChannel : UChannel {
         // twice, disconnecting during the very first few ticks after spawn, well before any
         // building tool was ever equipped (the pickaxe alone was enough to trigger it). Same failure
         // shape as the historical ATOMIC_STRUCTS bug in [[rep_handle_derivation]].
+        // A TRAP TOOL. Above every AFortWeapon arm: it is one, and its layout has 36-38 of its own
+        // (NativeRepLayouts.DecoToolProps). No ability handles and no ammo - placing a trap is the
+        // tool's native code, not a granted ability. ContextTrapItemDefinition (38) only while set:
+        // a plain TrapTool_C's class ends at 37. See AFortDecoTool.
+        AFortDecoTool decoTool => WithContextTrap(decoTool, new HashSet<string> {
+            "RemoteRole", "Role", "Owner", "Instigator", "WeaponData",
+            "ItemEntryGuid.A", "ItemEntryGuid.B", "ItemEntryGuid.C", "ItemEntryGuid.D",
+            "WeaponLevel", "ItemDefinition"
+        }),
         AFortWeapon w when w.DefaultMetadata != null => new HashSet<string> {
             "RemoteRole", "Role", "Owner", "Instigator", "WeaponData",
             "ItemEntryGuid.A", "ItemEntryGuid.B", "ItemEntryGuid.C", "ItemEntryGuid.D",
             "WeaponLevel", "AmmoCount",
             "PrimaryAbilitySpecHandle", "ReloadAbilitySpecHandle",
             "DefaultMetadata"
+        },
+        AFortWeapon { SecondaryAbilitySpecHandle: >= 0 } secondaryWeapon => new HashSet<string> {
+            // An item with a SECOND button - everything the plain arm below sends, plus handle 32.
+            "RemoteRole", "Role", "Owner", "Instigator", "WeaponData",
+            "ItemEntryGuid.A", "ItemEntryGuid.B", "ItemEntryGuid.C", "ItemEntryGuid.D",
+            "WeaponLevel", "AmmoCount",
+            "PrimaryAbilitySpecHandle", "SecondaryAbilitySpecHandle", "ReloadAbilitySpecHandle"
         },
         AFortWeapon => new HashSet<string> {
             // Instigator (handle 15) is what the client's own weapon code reads to find the pawn
@@ -561,7 +601,7 @@ public class UActorChannel : UChannel {
         // PLAYER built is also an ABuildingWall and must NOT take this arm: it is a real spawned
         // building piece and needs everything a building piece sends. It falls through to the
         // ABuildingActor arm below, which adds the door handles back through WithDoorProperties.
-        ABuildingWall { bPlayerPlaced: false } => WithDoorRotation(new HashSet<string> {
+        ABuildingWall { bPlayerPlaced: false } => WithDoorRotation(actor.WorldOptions, new HashSet<string> {
             "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced",
             "bDoorOpen", "bDoorCollisionDisabled"
         }),
@@ -591,7 +631,14 @@ public class UActorChannel : UChannel {
         // rides SerializeNewActor's own header rather than the property list (which is why the llama
         // works with this same pair), and everything it looks like and does afterwards belongs to
         // the Blueprint the client builds from the class path.
-        AFortDeployedActor => new HashSet<string> { "RemoteRole", "Role" },
+        AFortDeployedActor deployedActor => WithDeployedExtras(deployedActor, new HashSet<string> { "RemoteRole", "Role" }),
+        // A PLACED TRAP. Above the ABuildingActor arm for the llama's reason: that arm's build-in
+        // animation and health proxy are a player-built piece's, and a trap has no build-in. What it
+        // is (69), what it sits on (71) and its level (72), plus the two flags every placed piece
+        // carries. See ABuildingTrap.
+        ABuildingTrap => new HashSet<string> {
+            "RemoteRole", "Role", "bDestroyed", "bPlayerPlaced", "TrapData", "AttachedTo", "TrapLevel"
+        },
         ABuildingActor placedBuilding => WithDoorProperties(placedBuilding,
             WithBuildingAttributeSet(placedBuilding, new HashSet<string> {
             "RemoteRole", "Role", "HealthBarIndicatorDifficultyRating",
@@ -644,7 +691,7 @@ public class UActorChannel : UChannel {
 
         properties.Add("bDoorOpen");
         properties.Add("bDoorCollisionDisabled");
-        return WithDoorRotation(properties);
+        return WithDoorRotation(building.WorldOptions, properties);
     }
 
     /// <summary>
@@ -660,7 +707,7 @@ public class UActorChannel : UChannel {
     ///     sources of health" for "one dangling pointer", which is not obviously better.
     /// </summary>
     private static HashSet<string> WithBuildingAttributeSet(ABuildingActor building, HashSet<string> properties) {
-        if (building.bPlayerPlaced && Environment.GetEnvironmentVariable("BUILDING_ATTR_SET") != "1") {
+        if (building.bPlayerPlaced && building.WorldOptions.Get("BUILDING_ATTR_SET") != "1") {
             return properties;
         }
 
@@ -782,7 +829,7 @@ public class UActorChannel : UChannel {
         // Any handle is valid, including the already-confirmed 1-22, which are useful as calibration
         // targets; there is deliberately no guard that can throw here, since this runs deep inside
         // packet dispatch where an exception kills the server outright.
-        var probeHandleEnv = Environment.GetEnvironmentVariable("REPLAYOUT_PROBE_HANDLE");
+        var probeHandleEnv = WorldOptions.Get("REPLAYOUT_PROBE_HANDLE");
         // REPLAYOUT_PROBE_ACTOR picks which actor's channel carries the probe, matched against the
         // runtime type name (case-insensitive substring, e.g. "AFortInventory"). Defaults to
         // APlayerController, which is what every probe so far has targeted. Only one actor should
@@ -794,7 +841,7 @@ public class UActorChannel : UChannel {
         // believing it owns somebody else's pawn.
         using var openRoleDowngrade = new FScopedRoleDowngrade(Actor, IsNetOwner);
 
-        var probeActor = Environment.GetEnvironmentVariable("REPLAYOUT_PROBE_ACTOR") ?? nameof(APlayerController);
+        var probeActor = WorldOptions.Get("REPLAYOUT_PROBE_ACTOR") ?? nameof(APlayerController);
         if (Actor.GetType().Name.Contains(probeActor, StringComparison.OrdinalIgnoreCase)
             && uint.TryParse(probeHandleEnv, out var probeHandle) && probeHandle > 0) {
             Console.WriteLine($"ReplicateActor: REPLAYOUT_PROBE_HANDLE={probeHandle} on {Actor.GetType().Name} - sending TRUNCATED name probe (RemoteRole anchor + bare handle, no value bits, no terminator) instead of the normal layout");
@@ -850,10 +897,10 @@ public class UActorChannel : UChannel {
         //
         // ASC_ON_OPEN=1 puts the early push back, for bisecting only. It is expected to break
         // jumping; that is the finding, not a regression.
-        if (Environment.GetEnvironmentVariable("ASC_ON_OPEN") is "1" && PossessionComplete) {
+        if (WorldOptions.Get("ASC_ON_OPEN") is "1" && PossessionComplete) {
             ReplicateAbilitySystemComponent(fastArraysOnly: true);
         } else {
-            _ascOpenPushPending = Environment.GetEnvironmentVariable("ASC_ON_OPEN") is "1";
+            _ascOpenPushPending = WorldOptions.Get("ASC_ON_OPEN") is "1";
         }
     }
 
@@ -1705,7 +1752,7 @@ public class UActorChannel : UChannel {
         // carries name an emote asset and its ability class by GUID; if those are what a stalled
         // channel is waiting on, this is the switch that says so - and it leaves every other
         // channel's queueing, including the join burst's, exactly as it was.
-        if (Environment.GetEnvironmentVariable("ASC_MUST_BE_MAPPED") is "0"
+        if (WorldOptions.Get("ASC_MUST_BE_MAPPED") is "0"
             && Connection.PackageMap is UPackageMapClient packageMap) {
             var pending = packageMap.GetMustBeMappedGuidsInLastBunch();
             if (pending.Count > 0) {
@@ -1842,7 +1889,7 @@ public class UActorChannel : UChannel {
     /// </summary>
     private unsafe bool ReplicateVehicleSeats() {
         if (Connection == null || Actor is not AFortAthenaVehicle vehicle) return false;
-        if (Environment.GetEnvironmentVariable("VEHICLE_SEATS") is "0") return false;
+        if (WorldOptions.Get("VEHICLE_SEATS") is "0") return false;
 
         // Nothing to say until someone has actually been seated: creating the component early would
         // export a NetGUID for it and change nothing on the client.
@@ -1927,7 +1974,7 @@ public class UActorChannel : UChannel {
         // stairs, so NONE of them was ever damaged, and "no health traffic" there is as consistent
         // with "nothing to send" as with "never sent". BUILDING_ATTR_SET=1 restores the old
         // behaviour for a side-by-side, which is the only way to settle it.
-        if (buildingActor.bPlayerPlaced && Environment.GetEnvironmentVariable("BUILDING_ATTR_SET") != "1") {
+        if (buildingActor.bPlayerPlaced && WorldOptions.Get("BUILDING_ATTR_SET") != "1") {
             return false;
         }
 
@@ -2372,7 +2419,7 @@ public class UActorChannel : UChannel {
         // decode goes wrong, and making that cost a second run with an env var set is a wasted round
         // trip - the evidence should be captured the first time the problem happens.
         if (reason == null) {
-            if (Environment.GetEnvironmentVariable("RPC_DUMP") is not { Length: > 0 } wanted) return;
+            if (WorldOptions.Get("RPC_DUMP") is not { Length: > 0 } wanted) return;
             if (!wanted.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                        .Contains(fieldName, StringComparer.OrdinalIgnoreCase)) return;
         }
@@ -2381,10 +2428,13 @@ public class UActorChannel : UChannel {
         // whose layout is still unknown: one sample cannot distinguish a FIXED-width encoding from a
         // packed one that happened to land on the same size, and it is the second sample, taken
         // somewhere else, that tells them apart. Four is enough for that and still bounded.
-        _rpcDumpCounts.TryGetValue(fieldName, out var already);
-        if (already >= (reason == null ? 1 : 4)) return;
-        _rpcDumpCounts[fieldName] = already + 1;
-        DumpedRpcPayloads.Add(fieldName);
+        int already;
+        lock (_rpcDumpCounts) {
+            _rpcDumpCounts.TryGetValue(fieldName, out already);
+            if (already >= (reason == null ? 1 : 4)) return;
+            _rpcDumpCounts[fieldName] = already + 1;
+            DumpedRpcPayloads.Add(fieldName);
+        }
 
         var numBits = (int) Math.Max(0, fieldEnd - fieldStart);
         var resumeAt = bunch.Pos;
@@ -3822,7 +3872,7 @@ public class UActorChannel : UChannel {
                 // field - it reads the index at the wrong width and turns the rest of the block into
                 // noise. Nothing needs these RPCs yet, and the block carries its own size, so skipping
                 // it costs nothing and keeps the bunch intact.
-                if (_warnedVehicleBlock.Add(vehicleActor.GetType().Name)) {
+                if (_warnedVehicleBlock.TryAdd(vehicleActor.GetType().Name, 0)) {
                     Console.WriteLine($"UActorChannel.ReceivedBunch: skipping content blocks on " +
                                       $"{vehicleActor.GetFName()} - vehicle field numbering is unverified, " +
                                       "VEHICLE_RPC_DECODE=1 to attempt it anyway.");

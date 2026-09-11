@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     Server-side stand-in for a placed building piece (real Fortnite's ABuildingSMActor). Spawned
@@ -44,11 +45,10 @@ public class ABuildingActor : AActor {
     ///     (see [[re-and-capture-techniques]]) - that has not been done, and doing it would retire
     ///     both of these guesses at once.
     /// </summary>
-    public ABuildingActor() =>
-        NetCullDistanceSquared =
-            float.TryParse(Environment.GetEnvironmentVariable("BUILDING_CULL_DISTANCE"), out var units) && units > 0
-                ? units * units
-                : 40000f * 40000f;
+    public ABuildingActor() => NetCullDistanceSquared = 40000f * 40000f;
+
+    /// <summary>BUILDING_CULL_DISTANCE, from this world's options - see AActor.NetCullDistanceKnob.</summary>
+    protected override string? NetCullDistanceKnob => "BUILDING_CULL_DISTANCE";
 
     public EBuildingMaterial Material { get; private set; } = EBuildingMaterial.Unknown;
     public EFortBuildingType BuildingType { get; private set; } = EFortBuildingType.None;
@@ -289,13 +289,13 @@ public class ABuildingActor : AActor {
     ///     it will act on. The shipped per-class figure now drives <see cref="HardenTime"/> instead,
     ///     which never touches the wire.
     /// </summary>
-    public float BuildTime { get; private set; } = BuildInDurationDefault;
+    public float BuildTime { get; private set; } = BuildInDurationShipped;
 
     /// <summary>
     ///     FortBuildingActorSet::RepairTime - wire handle 60, and the repair half of what handle 59
     ///     is for a placement. See where it is assigned.
     /// </summary>
-    public float RepairTime { get; private set; } = BuildInDurationDefault;
+    public float RepairTime { get; private set; } = BuildInDurationShipped;
 
     /// <summary>
     ///     FALLBACK build time only, for a class FortBuildingAttributes has no row for. A piece the
@@ -307,7 +307,14 @@ public class ABuildingActor : AActor {
     ///     back when the real table had not been resolved, and it stayed as the REPLICATED value for
     ///     every piece long after the real one was known.
     /// </summary>
-    private static readonly float BuildInDurationDefault = Env("BUILD_IN_TIME", 0.5f);
+    private float BuildInDurationDefault => Env("BUILD_IN_TIME", BuildInDurationShipped);
+
+    /// <summary>
+    ///     BUILD_IN_TIME's default, as a constant, for the property initialisers above: those run in
+    ///     the constructor, before the piece has a world to read the knob from. Every piece whose
+    ///     build time matters goes through InitializeFromClass, which applies the world's value.
+    /// </summary>
+    private const float BuildInDurationShipped = 0.5f;
 
     /// <summary>
     ///     How long the piece takes to reach full strength - a SERVER-SIDE number, never replicated.
@@ -321,24 +328,24 @@ public class ABuildingActor : AActor {
     ///     The client is told about it only through the health it sees climbing, which is exactly how
     ///     it learns about damage too, so nothing here depends on a wire format being right.
     /// </summary>
-    public float HardenTime { get; private set; } = BuildInDurationDefault;
+    public float HardenTime { get; private set; } = BuildInDurationShipped;
 
     /// <summary>Overrides the per-class harden time when >= 0, the same arrangement BUILD_IN_START_HEALTH_PCT uses.</summary>
-    private static readonly float HardenTimeOverride = Env("BUILD_HARDEN_TIME", -1f);
+    private float HardenTimeOverride => Env("BUILD_HARDEN_TIME", -1f);
 
     /// <summary>
     ///     Overrides the real per-material figure when set; unset, each material uses its own
     ///     Default.BuildingInitialHealthPercent_* from the shipped game data (wood 0.6, stone 0.333,
     ///     metal 0.22) rather than the single 0.15 this used for everything.
     /// </summary>
-    private static readonly float BuildInStartHealthPctOverride = Env("BUILD_IN_START_HEALTH_PCT", -1f);
+    private float BuildInStartHealthPctOverride => Env("BUILD_IN_START_HEALTH_PCT", -1f);
 
     private float BuildInStartHealthPct => BuildInStartHealthPctOverride >= 0f
         ? BuildInStartHealthPctOverride
         : FortBuildingAttributes.InitialHealthPercent(Material);
 
-    private static float Env(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    private float Env(string name, float fallback) =>
+        float.TryParse(WorldOptions.Get(name), out var value) ? value : fallback;
 
     /// <summary>
     ///     ABuildingSMActor::ProxyGameplayCueDamagePhysical's magnitude (wire handle 67). The struct
@@ -656,14 +663,14 @@ public class ABuildingActor : AActor {
     ///     which updates a building it is placing about twice a second - not a comfort setting.
     ///     BUILD_HEALTH_PUBLISH_INTERVAL overrides it.
     /// </summary>
-    private static readonly float HealthPublishInterval = Env("BUILD_HEALTH_PUBLISH_INTERVAL", 0.5f);
+    private float HealthPublishInterval => Env("BUILD_HEALTH_PUBLISH_INTERVAL", 0.5f);
 
     /// <summary>
     ///     Which EBuildingAnim a piece plays while it builds in. 4 = EBA_Placement (the default now),
     ///     1 = EBA_Building. See StartHardening for why this is a switch rather than a constant.
     /// </summary>
-    private static readonly byte PlacementAnim =
-        byte.TryParse(Environment.GetEnvironmentVariable("BUILD_PLACEMENT_ANIM"), out var anim)
+    private byte PlacementAnim =>
+        byte.TryParse(WorldOptions.Get("BUILD_PLACEMENT_ANIM"), out var anim)
             ? anim
             : (byte) EBuildingAnim.EBA_Placement;
 
@@ -671,8 +678,8 @@ public class ABuildingActor : AActor {
     ///     Which EBuildingAnim a REPAIR plays. 1 = EBA_Building, the assemble-out-of-nothing
     ///     build-up - see StartHardening. BUILD_REPAIR_ANIM overrides it.
     /// </summary>
-    private static readonly byte RepairAnim =
-        byte.TryParse(Environment.GetEnvironmentVariable("BUILD_REPAIR_ANIM"), out var repair)
+    private byte RepairAnim =>
+        byte.TryParse(WorldOptions.Get("BUILD_REPAIR_ANIM"), out var repair)
             ? repair
             : (byte) EBuildingAnim.EBA_Building;
 
@@ -759,7 +766,10 @@ public class ABuildingActor : AActor {
     ///     floods over, so a destroyed piece left in it would go on "supporting" its neighbours
     ///     forever.
     /// </summary>
-    protected override void Destroyed() => BuildingStructuralSupportSystem.Unregister(this);
+    protected override void Destroyed() {
+        // THIS world's grid. A piece that has somehow lost its world has nothing to leave.
+        if (GetWorld() is { } world) BuildingStructuralSupportSystem.Of(world).Unregister(this);
+    }
 
     private const int DefaultHitPoints = 200;
 

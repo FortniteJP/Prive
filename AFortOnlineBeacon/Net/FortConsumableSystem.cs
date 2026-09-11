@@ -1,3 +1,4 @@
+﻿using AFortOnlineBeacon.Runtime;
 namespace AFortOnlineBeacon.Net;
 
 /// <summary>
@@ -130,13 +131,21 @@ internal static class FortConsumableSystem {
         public float NextTickTime;
     }
 
-    private static readonly List<FHealOverTime> Running = new();
+    /// <summary>This world's share of FortConsumableSystem's state - see FWorldSubsystem.</summary>
+    private sealed class FConsumableState : FWorldSubsystem {
+        public readonly List<FHealOverTime> Running = new();
+    }
+
+    private static FConsumableState StateOf(UWorld world) => world.GetSubsystem<FConsumableState>();
 
     private static void StartOverTime(APlayerState playerState, FortConsumables.FConsumableEffect effect) {
-        // Re-drinking REPLACES rather than stacks: GE_Athena_PurpleStuff_C is StackLimitCount 1.
-        Running.RemoveAll(entry => entry.Target == playerState && entry.DisplayName == effect.DisplayName);
+        if (playerState.GetWorld() is not { } world) return;
+        var state = StateOf(world);
 
-        Running.Add(new FHealOverTime {
+        // Re-drinking REPLACES rather than stacks: GE_Athena_PurpleStuff_C is StackLimitCount 1.
+        state.Running.RemoveAll(entry => entry.Target == playerState && entry.DisplayName == effect.DisplayName);
+
+        state.Running.Add(new FHealOverTime {
             Target = playerState,
             DisplayName = effect.DisplayName,
             PerTick = effect.OverTimePerTick,
@@ -163,12 +172,14 @@ internal static class FortConsumableSystem {
     ///     one, which is bytecode; this is the reading that matches both the assets and how the item
     ///     behaves.
     /// </summary>
-    public static void Tick(float now) {
-        for (var i = Running.Count - 1; i >= 0; i--) {
-            var entry = Running[i];
+    public static void Tick(UWorld world, float now) {
+        var state = StateOf(world);
+
+        for (var i = state.Running.Count - 1; i >= 0; i--) {
+            var entry = state.Running[i];
 
             if (entry.Target is not { bIsDead: false, HealthSet: { } set }) {
-                Running.RemoveAt(i);
+                state.Running.RemoveAt(i);
                 continue;
             }
 
@@ -185,7 +196,7 @@ internal static class FortConsumableSystem {
                 // takes damage mid-drink, and stopping is the conservative half of that.
                 Console.WriteLine($"FortConsumableSystem: {entry.Target.GetFName()}'s {entry.DisplayName} " +
                                   $"ended with {entry.Remaining} unused - already full");
-                Running.RemoveAt(i);
+                state.Running.RemoveAt(i);
                 continue;
             }
 
@@ -196,7 +207,7 @@ internal static class FortConsumableSystem {
 
             Console.WriteLine($"FortConsumableSystem: {entry.Target.GetFName()}'s {entry.DisplayName} finished - " +
                               $"health {set.Health}/{set.MaxHealth}, shield {set.CurrentShield}/{set.Shield}");
-            Running.RemoveAt(i);
+            state.Running.RemoveAt(i);
         }
     }
 

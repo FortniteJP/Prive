@@ -4,15 +4,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- ASP0016: a route handler taking only an HttpContext binds to the RequestDelegate overload
+         of MapGet/MapPost, which silently discards the return value and answers with an empty
+         body. Cast such handlers to (Delegate). Too easy to miss as a warning. -->
+    <WarningsAsErrors>ASP0016</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Discord.Net" Version="3.11.0" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="7.0.5" />
     <PackageReference Include="MongoDB.Driver" Version="2.19.1" />
-    <PackageReference Include="SuperSimpleTcp" Version="3.0.10" />
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.4.0" />
-    <PackageReference Include="WebSocketSharp" Version="1.0.3-rc11" />
   </ItemGroup>
 
 </Project>

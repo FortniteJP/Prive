@@ -305,4 +305,7 @@ def main():
         print(__doc__)
 
 
-main()
+# Guarded, so this stays importable: without it, `from dumpxref import Mem` runs main() against the
+# importer's own argv and dies trying to open argv[1] as the dump.
+if __name__ == "__main__":
+    main()

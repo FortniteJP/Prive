@@ -40,7 +40,7 @@ public static partial class FortGameplayTags {
     public static uint IndexOrWarn(string tagName) {
         if (IndexOf(tagName) is { } index) return index;
 
-        if (Warned.Add(tagName)) {
+        if (Warned.TryAdd(tagName, 0)) {
             Console.WriteLine($"FortGameplayTags: '{tagName}' has no derivable net index " +
                               "(it is one of the slots Tools/GameplayTags could not force, or it is not a tag at " +
                               "all). Sending the empty tag instead - whatever needed it will do nothing.");
@@ -49,7 +49,7 @@ public static partial class FortGameplayTags {
         return InvalidNetIndex;
     }
 
-    private static readonly HashSet<string> Warned = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> Warned = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     ///     BUILT ON FIRST USE, NOT IN A FIELD INITIALIZER, and that is not a style choice.

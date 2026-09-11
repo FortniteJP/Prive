@@ -1,9 +1,16 @@
-﻿namespace AFortOnlineBeacon.Net.Channels;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Channels;
 
 public abstract class UChannel {
     private const int NetMaxConstructedPartialBunchSizeBytes = 1024 * 64;
 
     public UNetConnection? Connection { get; set; }
+
+    /// <summary>
+    ///     The options of the world this channel's connection belongs to - see FBeaconOptions. A
+    ///     channel with no connection or driver yet reads the process defaults.
+    /// </summary>
+    public FBeaconOptions WorldOptions => Connection?.Driver?.World?.Options ?? FBeaconProcess.Options;
     public bool OpenAcked { get; set; }
     public bool Closing { get; set; }
     public bool Dormant { get; set; }

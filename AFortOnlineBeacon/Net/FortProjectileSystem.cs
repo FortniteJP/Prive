@@ -18,122 +18,245 @@ namespace AFortOnlineBeacon.Net;
 ///     sends the exact muzzle transform it used; the speed and gravity are read off the ability CDO.
 /// </summary>
 internal static class FortProjectileSystem {
-    /// <summary>
-    ///     GA_Athena_Grenade_WithTrajectory_C's GrenadeSpeedMin and GrenadeSpeedMax, which are both
-    ///     4000 - the ability interpolates between them by throw pitch (CalcGrenadeSpeedFromPitch)
-    ///     and, with the two equal, that always lands on 4000.
-    ///
-    ///     ONE NUMBER FOR THE WHOLE FAMILY, for now. Every thrown consumable in the loot tables
-    ///     inherits from that one ability and does not override the speed, but a future one could,
-    ///     and the honest fix then is another generated column beside ProjectileClasses rather than
-    ///     a second constant here. PROJECTILE_SPEED overrides it for experiments.
-    /// </summary>
-    private static float Speed =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_SPEED"), out var s) && s > 0 ? s : 4000f;
 
-    /// <summary>
-    ///     How long a projectile actor lives on the server before it is destroyed.
-    ///
-    ///     NOT a fuse - the client owns the fuse and the explosion, and this server sees neither. It
-    ///     is only here so the actor and its channel do not leak for the rest of the match. Longer
-    ///     than any real fuse on purpose: destroying one early would delete a grenade out from under
-    ///     the client's own explosion.
-    /// </summary>
-    private static float Lifetime =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_LIFETIME"), out var s) && s > 0 ? s : 15f;
+    /// <summary>This world's share of FortProjectileSystem's state - see FWorldSubsystem.</summary>
+    private sealed class FProjectileState : FWorldSubsystem {
+        /// <summary>
+        ///     GA_Athena_Grenade_WithTrajectory_C's GrenadeSpeedMin and GrenadeSpeedMax, which are both
+        ///     4000 - the ability interpolates between them by throw pitch (CalcGrenadeSpeedFromPitch)
+        ///     and, with the two equal, that always lands on 4000.
+        ///
+        ///     ONE NUMBER FOR THE WHOLE FAMILY, for now. Every thrown consumable in the loot tables
+        ///     inherits from that one ability and does not override the speed, but a future one could,
+        ///     and the honest fix then is another generated column beside ProjectileClasses rather than
+        ///     a second constant here. PROJECTILE_SPEED overrides it for experiments.
+        /// </summary>
+        public float Speed =>
+            float.TryParse(Options.Get("PROJECTILE_SPEED"), out var s) && s > 0 ? s : 4000f;
 
-    /// <summary>
-    ///     GA_Athena_Grenade_WithTrajectory_C's PostThrowEndDelay, read from the pak: 0.4 seconds.
-    ///
-    ///     This is how long AFTER the projectile appears that the real ability ends. Its graph is
-    ///     literally `Created -> AthenaProjectileSpawned -> WaitDelay(PostThrowEndDelay) ->
-    ///     K2_AbilityCompleted`, and 0.4s is why a real player can throw grenades about twice a
-    ///     second rather than once per fuse. PROJECTILE_END_DELAY overrides it.
-    /// </summary>
-    private static float PostThrowEndDelay =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_END_DELAY"), out var s) && s > 0 ? s : 0.4f;
+        /// <summary>
+        ///     How long a projectile actor lives on the server before it is destroyed.
+        ///
+        ///     NOT a fuse - the client owns the fuse and the explosion, and this server sees neither. It
+        ///     is only here so the actor and its channel do not leak for the rest of the match. Longer
+        ///     than any real fuse on purpose: destroying one early would delete a grenade out from under
+        ///     the client's own explosion.
+        /// </summary>
+        public float Lifetime =>
+            float.TryParse(Options.Get("PROJECTILE_LIFETIME"), out var s) && s > 0 ? s : 15f;
 
-    /// <summary>
-    ///     The projectile's gravity scale, as the ABILITY passes it to SpawnProjectileAndWait: 0.8.
-    ///
-    ///     NOT the 0.7 on B_Prj_Athena_Grenade_Base - that is the Blueprint's own default, and the
-    ///     task overwrites it with the ability's value on every spawn. Both are real numbers in the
-    ///     paks and picking the wrong one is a plausible-looking arc that is quietly 12% off.
-    /// </summary>
-    private static float GravityScale =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_GRAVITY_SCALE"), out var s) && s > 0 ? s : 0.8f;
+        /// <summary>
+        ///     GA_Athena_Grenade_WithTrajectory_C's PostThrowEndDelay, read from the pak: 0.4 seconds.
+        ///
+        ///     This is how long AFTER the projectile appears that the real ability ends. Its graph is
+        ///     literally `Created -> AthenaProjectileSpawned -> WaitDelay(PostThrowEndDelay) ->
+        ///     K2_AbilityCompleted`, and 0.4s is why a real player can throw grenades about twice a
+        ///     second rather than once per fuse. PROJECTILE_END_DELAY overrides it.
+        /// </summary>
+        public float PostThrowEndDelay =>
+            float.TryParse(Options.Get("PROJECTILE_END_DELAY"), out var s) && s > 0 ? s : 0.4f;
 
-    /// <summary>
-    ///     The explosion's radius in units, read from the ability's own effect container:
-    ///     TargetSelection.List[0] is Shape=Sphere, TestType=Overlap, Range=500.
-    /// </summary>
-    private static float ExplosionRadius =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_RADIUS"), out var s) && s > 0 ? s : 500f;
+        /// <summary>
+        ///     The projectile's gravity scale, as the ABILITY passes it to SpawnProjectileAndWait: 0.8.
+        ///
+        ///     NOT the 0.7 on B_Prj_Athena_Grenade_Base - that is the Blueprint's own default, and the
+        ///     task overwrites it with the ability's value on every spawn. Both are real numbers in the
+        ///     paks and picking the wrong one is a plausible-looking arc that is quietly 12% off.
+        /// </summary>
+        public float GravityScale =>
+            float.TryParse(Options.Get("PROJECTILE_GRAVITY_SCALE"), out var s) && s > 0 ? s : 0.8f;
 
-    /// <summary>
-    ///     Damage to a PLAYER at any range inside the radius - the item's UtilityItemDamage row has
-    ///     DmgPB, DmgMid, DmgLong and DmgMaxRange all equal to 100, i.e. no falloff at all.
-    /// </summary>
-    private static float PlayerDamage =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_DAMAGE"), out var s) && s > 0 ? s : 100f;
+        /// <summary>
+        ///     The explosion's radius in units, read from the ability's own effect container:
+        ///     TargetSelection.List[0] is Shape=Sphere, TestType=Overlap, Range=500.
+        /// </summary>
+        public float ExplosionRadius =>
+            float.TryParse(Options.Get("PROJECTILE_RADIUS"), out var s) && s > 0 ? s : 500f;
 
-    /// <summary>Damage to a BUILDING - the same row's EnvDmgPB/Mid/Long/MaxRange, all 375.</summary>
-    private static float EnvironmentDamage =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_ENV_DAMAGE"), out var s) && s > 0 ? s : 375f;
+        /// <summary>
+        ///     Damage to a PLAYER at any range inside the radius - the item's UtilityItemDamage row has
+        ///     DmgPB, DmgMid, DmgLong and DmgMaxRange all equal to 100, i.e. no falloff at all.
+        /// </summary>
+        public float PlayerDamage =>
+            float.TryParse(Options.Get("PROJECTILE_DAMAGE"), out var s) && s > 0 ? s : 100f;
 
-    /// <summary>
-    ///     B_Prj_Athena_Grenade_Base's ProjectileComp0.Bounciness (0.3) and Friction (0.4) - the
-    ///     coefficient of restitution and the tangential drag its bounces actually use. Read, not
-    ///     tuned. PROJECTILE_BOUNCINESS / PROJECTILE_FRICTION override them.
-    /// </summary>
-    private static float Bounciness =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_BOUNCINESS"), out var s) && s >= 0 ? s : 0.3f;
+        /// <summary>Damage to a BUILDING - the same row's EnvDmgPB/Mid/Long/MaxRange, all 375.</summary>
+        public float EnvironmentDamage =>
+            float.TryParse(Options.Get("PROJECTILE_ENV_DAMAGE"), out var s) && s > 0 ? s : 375f;
 
-    private static float BounceFriction =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_FRICTION"), out var s) && s >= 0 ? s : 0.4f;
+        /// <summary>
+        ///     B_Prj_Athena_Grenade_Base's ProjectileComp0.Bounciness (0.3) and Friction (0.4) - the
+        ///     coefficient of restitution and the tangential drag its bounces actually use. Read, not
+        ///     tuned. PROJECTILE_BOUNCINESS / PROJECTILE_FRICTION override them.
+        /// </summary>
+        public float Bounciness =>
+            float.TryParse(Options.Get("PROJECTILE_BOUNCINESS"), out var s) && s >= 0 ? s : 0.3f;
+
+        public float BounceFriction =>
+            float.TryParse(Options.Get("PROJECTILE_FRICTION"), out var s) && s >= 0 ? s : 0.4f;
+
+        /// <summary>
+        ///     How long after the explosion the actor is destroyed - AFortGameplayEffectDeliveryActor's
+        ///     LifespanAfterKill, in effect.
+        ///
+        ///     CHOSEN, not read: the value is a default on the native CDO and does not appear in the
+        ///     cooked asset, so this is the one number here that is not from the paks. It only has to be
+        ///     long enough for bHasExploded and bIsBeingKilled to reach the client and short enough that
+        ///     the grenade is not still lying there when the player throws the next one. The 15-second
+        ///     PROJECTILE_LIFETIME it replaces was far too long for the latter: the client's own log
+        ///     showed the first grenade still replicating, and still being simulated, at the moment it
+        ///     refused the second throw. PROJECTILE_KILL_DELAY overrides it.
+        /// </summary>
+        public float KillDelay =>
+            float.TryParse(Options.Get("PROJECTILE_KILL_DELAY"), out var s) && s > 0 ? s : 1f;
+
+        /// <summary>
+        ///     B_Prj_Athena_Grenade_Base's FuseTime, read from the pak: 2.75 seconds.
+        ///
+        ///     The same "one number for the whole family" caveat as Speed - every thrown consumable in
+        ///     the loot tables inherits this projectile base and none overrides it, and the honest fix
+        ///     if one ever does is a generated column. PROJECTILE_FUSE overrides it.
+        ///
+        ///     NOT the only way a real grenade goes off: the base also carries NumberOfBouncesTillExplode
+        ///     = 5, and StepFlight counts bounces, so a grenade that hits five surfaces explodes early.
+        ///     It only counts bounces off the ground the server knows about, though - see StepFlight.
+        /// </summary>
+        public float FuseTime =>
+            float.TryParse(Options.Get("PROJECTILE_FUSE"), out var s) && s > 0 ? s : 2.75f;
+
+        /// <summary>
+        ///     Every projectile currently in flight, so the fuse has something to walk.
+        ///
+        ///     NOT world.PersistentLevel.Actors - and that mistake cost a whole live round. UWorld's
+        ///     level actor array is not where SpawnActor puts a runtime actor; replication finds them
+        ///     through UNetDriver.NetworkObjectList instead, which is why the grenade flew perfectly
+        ///     (it was replicating) while the fuse never fired once (the tick walked an array it was
+        ///     not in). A dedicated list depends on neither registry.
+        /// </summary>
+        public readonly List<AFortProjectileBase> InFlight = new();
+
+        /// <summary>
+        ///     FORTNITE'S GRAVITY IS -2800, not UE's -980. Read from `DefaultGravityZ` in the shipped
+        ///     FortniteGame/Config/DefaultEngine.ini.
+        ///
+        ///     Assuming the engine default made the server's grenades fall at barely a third of the real
+        ///     rate, so they sailed far past where the player's own grenade landed - which is exactly what
+        ///     replicating the server's flight made visible the moment it could be seen at all. Worth
+        ///     remembering beyond projectiles: anything here that integrates gravity wants this number.
+        /// </summary>
+        public float WorldGravity =>
+            float.TryParse(Options.Get("WORLD_GRAVITY_Z"), out var s) && s > 0 ? s : 2800f;
+
+        /// <summary>
+        ///     PROJECTILE_REPLICATE_MOVEMENT=1 sends the server's own simulated position to the client, so
+        ///     the grenade the player watches is the one the damage is computed from. Off by default: the
+        ///     server has less collision than the client does, so turning it on trades a flight that looks
+        ///     right for a flight that is HONEST about what the server believes. See where it is used.
+        /// </summary>
+        public bool ReplicateMovement =>
+            Options.Get("PROJECTILE_REPLICATE_MOVEMENT") is "1";
+
+        /// <summary>
+        ///     Whether a measured surface may pull the simulation floor DOWN as well as up. Off, because
+        ///     a walked cell records the surfaces people walked and says nothing about the ones they did
+        ///     not - see the floor block in StepFlight.
+        /// </summary>
+        public bool MeasuredFloorLowers =>
+            Options.Get("PROJECTILE_MEASURED_FLOOR_LOWERS") is "1";
+
+        public readonly List<FPendingAbilityEnd> PendingEnds = new();
+
+        /// <summary>
+        ///     A server-initiated prediction key counter, exactly like the emote system's and for the
+        ///     same reason - see FPredictionKey::CreateNewServerInitiatedKey. Separate because the two
+        ///     are independent streams and sharing a counter would only couple them.
+        /// </summary>
+        public short _nextDancePredictionKey = 1;
+
+        /// <summary>
+        ///     CLEARING PushMomentum STOPS THE VICTIM DEAD IN MID-AIR, and that is not a side effect -
+        ///     it is the whole of what the zero branch does.
+        ///
+        ///     `AFortPawn::OnRep_PushMomentum` (0x1419347C0) branches on the length: non-zero writes
+        ///     Velocity.X/Y, and ZERO calls the movement component's vtable slot 0x400. For the real
+        ///     PlayerPawn_Athena that slot is 0x140C5DB60, whose first three instructions are:
+        ///
+        ///         movsd  qword ptr [rcx+0xC4], xmm0     ; Velocity.X = Velocity.Y = 0
+        ///         mov    dword ptr [rcx+0xCC], eax      ; Velocity.Z = 0
+        ///
+        ///     **All three components.** So the old fixed 0.5s clear was, half a second into every
+        ///     throw, telling the client to freeze in the air - which is exactly the reported "it flies
+        ///     a certain distance, then the impulse suddenly vanishes and it drops straight down".
+        ///     (The engine's own UCharacterMovementComponent::StopActiveMovement only clears
+        ///     Acceleration, which is what the vtable slot's NAME says and what this was reasoned from
+        ///     the first time. Fortnite's override is the one that runs, and reading it was the only
+        ///     way to know.)
+        ///
+        ///     Nothing else decays the throw. The client's own falling physics leaves lateral velocity
+        ///     completely alone on this build: `BrakingDecelerationFalling` and `FallingLateralFriction`
+        ///     are BOTH 0 in AFortPlayerPawnAthena's CDO, read out of the dump
+        ///     (PriveDev/dumpwork/movedefaults.py), so ApplyVelocityBraking returns without touching
+        ///     anything and a launched player keeps their speed until they hit something.
+        ///
+        ///     So the push is now taken off on LANDING instead of on a timer - where zeroing the
+        ///     velocity is what landing means anyway - and the timeout below is only a backstop for a
+        ///     landing this server never sees.
+        /// </summary>
+        public float PushMomentumMaxSeconds =>
+            float.TryParse(Options.Get("PUSH_MOMENTUM_MAX_SECONDS"), out var seconds)
+                ? seconds
+                : 12.0f;
+
+        /// <summary>
+        ///     Deployed actors with an end time, and the reason there is one at all: the CLIENT already
+        ///     removes these on its own - the shield dome's BeginPlay sets a timer off its LifespanTime
+        ///     and the air strike's spawner has an InitialLifeSpan - so a server that keeps replicating
+        ///     them is holding a channel open for something nobody can see any more.
+        ///
+        ///     Not a substitute for the client's timer and not trying to be: the durations here are read
+        ///     from the same rows the Blueprint reads, so the two agree rather than one driving the other.
+        /// </summary>
+        public readonly List<(ABuildingActor Actor, float EndsAt)> Deployed = new();
+
+        /// <summary>
+        ///     The longest a low-gravity aura may stay on without the pawn being seen to land. Not a row
+        ///     - the game ends it from the landing itself - but a backstop; see TickLowGravity for why
+        ///     there has to be one. SHOCKWAVE_LOWGRAV_MAX_SECONDS overrides it.
+        /// </summary>
+        public float LowGravityMaxSeconds =>
+            float.TryParse(Options.Get("SHOCKWAVE_LOWGRAV_MAX_SECONDS"), out var seconds)
+                ? seconds
+                : 12.0f;
+
+        public readonly List<FThrownFlight> _flights = new();
+        /// <summary>
+        ///     How far a pawn's replicated location sits ABOVE its feet.
+        ///
+        ///     AActor::GetActorLocation on a character is the CAPSULE CENTRE, not the ground it stands on,
+        ///     and using it as the simulation floor put that floor about a metre too high everywhere - so
+        ///     every grenade "landed" in mid-air, bounced early, and every explosion was biased upward.
+        ///     The log showed it plainly: a pawn at Z=3941 standing where the baked landscape reads 3864.
+        ///
+        ///     96 is the standard Fortnite character capsule half-height. It is NOT read from the cooked
+        ///     asset - PlayerPawn_Athena does not override CapsuleHalfHeight, it inherits it - so this is
+        ///     the one geometry number here that is taken on convention rather than from the paks.
+        ///     PAWN_CAPSULE_HALF_HEIGHT overrides it.
+        /// </summary>
+        public float CapsuleHalfHeight =>
+            float.TryParse(Options.Get("PAWN_CAPSULE_HALF_HEIGHT"), out var s) && s > 0 ? s : 96f;
+
+        /// <summary>
+        ///     PROJECTILE_REGRANT=0 turns the re-grant workaround off, leaving only the ClientEndAbility
+        ///     handshake - which is the right thing to run when working out why that handshake does not
+        ///     land on its own.
+        /// </summary>
+        public bool PROJECTILE_REGRANT => Options.Get("PROJECTILE_REGRANT") is not "0";
+    }
+
+    private static FProjectileState StateOf(UWorld world) => world.GetSubsystem<FProjectileState>();
 
     /// <summary>NumberOfBouncesTillExplode on B_Prj_Athena_Grenade_Base - a grenade that hits five surfaces goes off early.</summary>
     private const int BouncesTillExplode = 5;
-
-    /// <summary>
-    ///     How long after the explosion the actor is destroyed - AFortGameplayEffectDeliveryActor's
-    ///     LifespanAfterKill, in effect.
-    ///
-    ///     CHOSEN, not read: the value is a default on the native CDO and does not appear in the
-    ///     cooked asset, so this is the one number here that is not from the paks. It only has to be
-    ///     long enough for bHasExploded and bIsBeingKilled to reach the client and short enough that
-    ///     the grenade is not still lying there when the player throws the next one. The 15-second
-    ///     PROJECTILE_LIFETIME it replaces was far too long for the latter: the client's own log
-    ///     showed the first grenade still replicating, and still being simulated, at the moment it
-    ///     refused the second throw. PROJECTILE_KILL_DELAY overrides it.
-    /// </summary>
-    private static float KillDelay =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_KILL_DELAY"), out var s) && s > 0 ? s : 1f;
-
-    /// <summary>
-    ///     B_Prj_Athena_Grenade_Base's FuseTime, read from the pak: 2.75 seconds.
-    ///
-    ///     The same "one number for the whole family" caveat as Speed - every thrown consumable in
-    ///     the loot tables inherits this projectile base and none overrides it, and the honest fix
-    ///     if one ever does is a generated column. PROJECTILE_FUSE overrides it.
-    ///
-    ///     NOT the only way a real grenade goes off: the base also carries NumberOfBouncesTillExplode
-    ///     = 5, and StepFlight counts bounces, so a grenade that hits five surfaces explodes early.
-    ///     It only counts bounces off the ground the server knows about, though - see StepFlight.
-    /// </summary>
-    private static float FuseTime =>
-        float.TryParse(Environment.GetEnvironmentVariable("PROJECTILE_FUSE"), out var s) && s > 0 ? s : 2.75f;
-
-    /// <summary>
-    ///     Every projectile currently in flight, so the fuse has something to walk.
-    ///
-    ///     NOT world.PersistentLevel.Actors - and that mistake cost a whole live round. UWorld's
-    ///     level actor array is not where SpawnActor puts a runtime actor; replication finds them
-    ///     through UNetDriver.NetworkObjectList instead, which is why the grenade flew perfectly
-    ///     (it was replicating) while the fuse never fired once (the tick walked an array it was
-    ///     not in). A dedicated list depends on neither registry.
-    /// </summary>
-    private static readonly List<AFortProjectileBase> InFlight = new();
 
     /// <summary>
     ///     Spawns the projectile for a throw the client has just asked for, or does nothing if the
@@ -160,6 +283,8 @@ internal static class FortProjectileSystem {
         }
 
         var world = pawn.GetWorld();
+        var state = StateOf(world);
+
         if (world == null) return;
 
         var projectile = world.SpawnActor<AFortProjectileBase>(
@@ -180,9 +305,9 @@ internal static class FortProjectileSystem {
         // THE ITEM'S OWN SPEED, not the frag grenade's. Nine abilities override the family's 4000
         // and the difference is visible: a firework mortar throws at 2500 and used to sail past
         // whatever it was aimed at, a clinger throws at 6000. See FortThrowSpeeds.
-        var speed = FortThrowSpeeds.For(itemName, Speed);
+        var speed = FortThrowSpeeds.For(itemName, state.Speed);
         projectile.Velocity = new FVector { X = forward.X * speed, Y = forward.Y * speed, Z = forward.Z * speed };
-        if (ReplicateMovement) projectile.ReplicatedMovement.LinearVelocity = projectile.Velocity;
+        if (state.ReplicateMovement) projectile.ReplicatedMovement.LinearVelocity = projectile.Velocity;
 
         // WHOSE grenade this is. Instigator (handle 15) is already known to be load-bearing on this
         // project's other spawned actors - a weapon whose Instigator never arrives makes the client
@@ -196,14 +321,14 @@ internal static class FortProjectileSystem {
         projectile.SetOwner(pawn);
 
         projectile.SimulatedLocation = location;
-        projectile.ThrowerGroundZ = pawn.GetActorLocation().Z - CapsuleHalfHeight;
+        projectile.ThrowerGroundZ = pawn.GetActorLocation().Z - state.CapsuleHalfHeight;
 
         // SEED IT BEFORE THE CHANNEL OPENS. The open bunch carries whatever ReplicatedMovement holds,
         // and an unset one is Location (0,0,0) - so the client dutifully put every grenade at the world
         // origin the instant it was thrown and it simply vanished, while the server went on simulating
         // and damaging correctly. Filling it here means the first thing the client ever hears about
         // this projectile is where it actually is.
-        if (ReplicateMovement) {
+        if (state.ReplicateMovement) {
             projectile.bReplicateMovement = true;
 
             // A projectile does not override FRepMovement's quantization, so it uses the ENGINE
@@ -211,17 +336,17 @@ internal static class FortProjectileSystem {
             // ends read their own - so getting it wrong is silent and total: the client decodes the
             // position at the wrong scale and the grenade disappears.
             projectile.ReplicatedMovement.LocationQuantization =
-                Environment.GetEnvironmentVariable("PROJECTILE_REP_SCALE") is "100"
+                world.Options.Get("PROJECTILE_REP_SCALE") is "100"
                     ? (100u, 30u)   // the pawn's RoundTwoDecimals, if a projectile turns out to use it
                     : FRepMovement.RoundWholeNumber;
             projectile.ReplicatedMovement.Location = location;
             projectile.ReplicatedMovement.Rotation = direction;
         }
-        projectile.ExplodesAtWorldTime = world.TimeSeconds + FuseTime;
-        projectile.ExpiresAtWorldTime = world.TimeSeconds + Lifetime;
+        projectile.ExplodesAtWorldTime = world.TimeSeconds + state.FuseTime;
+        projectile.ExpiresAtWorldTime = world.TimeSeconds + state.Lifetime;
         projectile.SetRole(ENetRole.ROLE_Authority);
         projectile.SetReplicates(true);
-        InFlight.Add(projectile);
+        state.InFlight.Add(projectile);
 
         // END THE ABILITY, ON A TIMER, THE WAY THE ABILITY'S OWN GRAPH WOULD.
         //
@@ -237,12 +362,12 @@ internal static class FortProjectileSystem {
                           .FirstOrDefault(item => item.Handle == pawn.CurrentWeapon.GrantedAbilitySpecHandle);
 
             if (spec?.ActivationPredictionKey is { } key) {
-                PendingEnds.Add(new FPendingAbilityEnd {
+                state.PendingEnds.Add(new FPendingAbilityEnd {
                     PlayerState = ps,
                     AbilitySystem = asc,
                     Handle = spec.Handle,
                     PredictionKey = key,
-                    EndsAtWorldTime = world.TimeSeconds + PostThrowEndDelay,
+                    EndsAtWorldTime = world.TimeSeconds + state.PostThrowEndDelay,
                     Weapon = pawn.CurrentWeapon,
                     AbilityClass = spec.Ability
                 });
@@ -260,7 +385,7 @@ internal static class FortProjectileSystem {
 
         Console.WriteLine($"FortProjectileSystem: threw '{itemName}' as {classPath.Split('.')[^1]} " +
                           $"from {location} direction {direction} velocity {projectile.Velocity} " +
-                          $"(speed {Speed:F0}, fuse {FuseTime:F2}s, server-side lifetime {Lifetime:F0}s)");
+                          $"(speed {state.Speed:F0}, fuse {state.FuseTime:F2}s, server-side lifetime {state.Lifetime:F0}s)");
     }
 
     /// <summary>
@@ -296,6 +421,11 @@ internal static class FortProjectileSystem {
     ///     off a wall carried straight on here. It no longer does.
     /// </summary>
     private static void StepFlight(UWorld world, AFortProjectileBase projectile) {
+        if (projectile.Velocity.X * projectile.Velocity.X + projectile.Velocity.Y * projectile.Velocity.Y > 1f)
+            projectile.LastFlightYaw = MathF.Atan2(projectile.Velocity.Y, projectile.Velocity.X) * (180f / MathF.PI);
+
+        var state = StateOf(world);
+
         var dt = world.DeltaTimeSeconds;
         if (dt <= 0f) return;
 
@@ -309,7 +439,7 @@ internal static class FortProjectileSystem {
         projectile.Velocity = new FVector {
             X = projectile.Velocity.X,
             Y = projectile.Velocity.Y,
-            Z = projectile.Velocity.Z - WorldGravity * GravityScale * dt
+            Z = projectile.Velocity.Z - state.WorldGravity * state.GravityScale * dt
         };
 
         var next = new FVector {
@@ -364,7 +494,7 @@ internal static class FortProjectileSystem {
             knownSource = "the baked height grid";
         }
 
-        if (measured is { } measuredZ && (known is not { } k || measuredZ > k || MeasuredFloorLowers)) {
+        if (measured is { } measuredZ && (known is not { } k || measuredZ > k || state.MeasuredFloorLowers)) {
             known = measuredZ;
             knownSource = "measured ground";
         }
@@ -448,10 +578,10 @@ internal static class FortProjectileSystem {
             // The factors are READ from B_Prj_Athena_Grenade_Base's ProjectileComp0 (Bounciness 0.3,
             // Friction 0.4) and ComputeBounceResult applies them to DIFFERENT axes: tangential by
             // (1 - Friction), and only perpendicular by Bounciness. The SLIDE THRESHOLD is chosen.
-            var rebound = -projectile.Velocity.Z * Bounciness;
+            var rebound = -projectile.Velocity.Z * state.Bounciness;
 
             if (rebound < SlideSpeed) {
-                var drag = MathF.Pow(1f - BounceFriction, dt);
+                var drag = MathF.Pow(1f - state.BounceFriction, dt);
                 projectile.Velocity = new FVector {
                     X = projectile.Velocity.X * drag,
                     Y = projectile.Velocity.Y * drag,
@@ -467,8 +597,8 @@ internal static class FortProjectileSystem {
                 projectile.Velocity = ArmOnHitDelay(world, projectile)
                     ? new FVector()
                     : new FVector {
-                        X = projectile.Velocity.X * (1f - BounceFriction),
-                        Y = projectile.Velocity.Y * (1f - BounceFriction),
+                        X = projectile.Velocity.X * (1f - state.BounceFriction),
+                        Y = projectile.Velocity.Y * (1f - state.BounceFriction),
                         Z = rebound
                     };
             }
@@ -485,7 +615,7 @@ internal static class FortProjectileSystem {
         // Each is asked for the same thing - where the segment first meets something, and the SURFACE
         // NORMAL there - and the nearest answer wins. A box sweep gives an axis rather than a normal,
         // which is turned into one here so a single bounce rule serves all three.
-        var buildHit = BuildingStructuralSupportSystem.SweepToBuild(from, next);
+        var buildHit = BuildingStructuralSupportSystem.Of(world).SweepToBuild(from, next);
         var hullHit = WorldCollision.Sweep(from, next);
         var wallHit = TerrainWalls.Sweep(from, next);
 
@@ -524,15 +654,20 @@ internal static class FortProjectileSystem {
 
             // A rebound too small to matter is a SLIDE rather than one of the five bounces that
             // detonate a grenade.
-            var sliding = reboundSpeed * Bounciness < SlideSpeed;
+            var sliding = reboundSpeed * state.Bounciness < SlideSpeed;
             var deploying = false;
             if (!sliding) {
                 projectile.BounceCount++;
-                deploying = ArmOnHitDelay(world, projectile);
+
+                // A FLOOR-ONLY DEPLOYABLE BOUNCES OFF ANYTHING STEEPER - see FDeployRule. The
+                // ground-plane contact above never needs this test: its normal is straight up.
+                var landsHere = FortDeployables.RuleFor(projectile.SourceItemName).MinFloorNormalZ is not { } minZ
+                                || n.Z > minZ;
+                deploying = landsHere && ArmOnHitDelay(world, projectile);
             }
 
-            var tangentScale = sliding ? MathF.Pow(1f - BounceFriction, dt) : 1f - BounceFriction;
-            var bounce = sliding ? 0f : Bounciness;
+            var tangentScale = sliding ? MathF.Pow(1f - state.BounceFriction, dt) : 1f - state.BounceFriction;
+            var bounce = sliding ? 0f : state.Bounciness;
 
             // A piece that has landed to deploy does not bounce off whatever it landed on - same as
             // the ground case above.
@@ -554,13 +689,13 @@ internal static class FortProjectileSystem {
             }
 
             if (SpeedSquared(projectile.Velocity) < StopSpeed * StopSpeed) projectile.Velocity = new FVector();
-            PublishMovement(projectile);
+            PublishMovement(world, projectile);
             return;
         }
 
         projectile.SimulatedLocation = next;
 
-        PublishMovement(projectile);
+        PublishMovement(world, projectile);
     }
 
     /// <summary>
@@ -574,13 +709,15 @@ internal static class FortProjectileSystem {
     ///     moving authority to the server, and those turned out to be the same thing: replicating the
     ///     flight is what made "the arc is too long" observable at a glance.
     /// </summary>
-    private static void PublishMovement(AFortProjectileBase projectile) {
+    private static void PublishMovement(UWorld world, AFortProjectileBase projectile) {
+        var worldState = StateOf(world);
+
         // Settle FIRST, and unconditionally. This is flight state, not presentation - leaving it
         // behind the knob would make the projectile behave differently depending on whether anyone
         // was watching. A hop smaller than the threshold is the end of the flight, not a bounce.
         if (SpeedSquared(projectile.Velocity) < StopSpeed * StopSpeed) projectile.Velocity = new FVector();
 
-        if (!ReplicateMovement) return;
+        if (!worldState.ReplicateMovement) return;
 
         projectile.bReplicateMovement = true;
         projectile.SetActorLocation(projectile.SimulatedLocation);
@@ -607,51 +744,6 @@ internal static class FortProjectileSystem {
     ///     a bogus spike rather than ground. Chosen; the bake is known to contain at least one.
     /// </summary>
     private const float MaxGroundStep = 128f;
-
-    /// <summary>
-    ///     FORTNITE'S GRAVITY IS -2800, not UE's -980. Read from `DefaultGravityZ` in the shipped
-    ///     FortniteGame/Config/DefaultEngine.ini.
-    ///
-    ///     Assuming the engine default made the server's grenades fall at barely a third of the real
-    ///     rate, so they sailed far past where the player's own grenade landed - which is exactly what
-    ///     replicating the server's flight made visible the moment it could be seen at all. Worth
-    ///     remembering beyond projectiles: anything here that integrates gravity wants this number.
-    /// </summary>
-    private static float WorldGravity =>
-        float.TryParse(Environment.GetEnvironmentVariable("WORLD_GRAVITY_Z"), out var s) && s > 0 ? s : 2800f;
-
-    /// <summary>
-    ///     PROJECTILE_REPLICATE_MOVEMENT=1 sends the server's own simulated position to the client, so
-    ///     the grenade the player watches is the one the damage is computed from. Off by default: the
-    ///     server has less collision than the client does, so turning it on trades a flight that looks
-    ///     right for a flight that is HONEST about what the server believes. See where it is used.
-    /// </summary>
-    internal static bool ReplicateMovement =>
-        Environment.GetEnvironmentVariable("PROJECTILE_REPLICATE_MOVEMENT") is "1";
-
-    /// <summary>
-    ///     How far a pawn's replicated location sits ABOVE its feet.
-    ///
-    ///     AActor::GetActorLocation on a character is the CAPSULE CENTRE, not the ground it stands on,
-    ///     and using it as the simulation floor put that floor about a metre too high everywhere - so
-    ///     every grenade "landed" in mid-air, bounced early, and every explosion was biased upward.
-    ///     The log showed it plainly: a pawn at Z=3941 standing where the baked landscape reads 3864.
-    ///
-    ///     96 is the standard Fortnite character capsule half-height. It is NOT read from the cooked
-    ///     asset - PlayerPawn_Athena does not override CapsuleHalfHeight, it inherits it - so this is
-    ///     the one geometry number here that is taken on convention rather than from the paks.
-    ///     PAWN_CAPSULE_HALF_HEIGHT overrides it.
-    /// </summary>
-    private static float CapsuleHalfHeight =>
-        float.TryParse(Environment.GetEnvironmentVariable("PAWN_CAPSULE_HALF_HEIGHT"), out var s) && s > 0 ? s : 96f;
-
-    /// <summary>
-    ///     Whether a measured surface may pull the simulation floor DOWN as well as up. Off, because
-    ///     a walked cell records the surfaces people walked and says nothing about the ones they did
-    ///     not - see the floor block in StepFlight.
-    /// </summary>
-    private static bool MeasuredFloorLowers =>
-        Environment.GetEnvironmentVariable("PROJECTILE_MEASURED_FLOOR_LOWERS") is "1";
 
     /// <summary>
     ///     The outward normal of an axis-aligned face, chosen to oppose the motion - the bridge
@@ -701,8 +793,8 @@ internal static class FortProjectileSystem {
     ///     invisible - the grenade simply does no damage and looks weak - so being able to take the
     ///     test out of the picture in one run is how that gets diagnosed rather than argued about.
     /// </summary>
-    private static bool WorldLineBlocked(FVector from, FVector to) {
-        if (Environment.GetEnvironmentVariable("BLAST_WORLD_LINE_OF_SIGHT") is "0") return false;
+    private static bool WorldLineBlocked(UWorld world, FVector from, FVector to) {
+        if (world.Options.Get("BLAST_WORLD_LINE_OF_SIGHT") is "0") return false;
 
         if (WorldCollision.Sweep(from, to) is not null) return true;
 
@@ -717,7 +809,6 @@ internal static class FortProjectileSystem {
     }
 
     private static float SpeedSquared(FVector v) => v.X * v.X + v.Y * v.Y + v.Z * v.Z;
-
 
     /// <summary>
     ///     Radial damage, at wherever the server's own simulation ended up.
@@ -738,13 +829,15 @@ internal static class FortProjectileSystem {
     ///     StepFlight's collision.
     /// </summary>
     private static void Explode(UWorld world, AFortProjectileBase projectile) {
+        var state = StateOf(world);
+
         var origin = projectile.SimulatedLocation;
 
         // THE ITEM'S OWN RADIUS. A shockwave grenade's is 500 (Default.KnockGrenade.Radius) and a
         // stink bomb's cloud is 512, where the frag's constant is what everything used to use. The
         // constant remains the fallback for an item with no row.
         var effect = FortGrenadeEffects.For(projectile.SourceItemName);
-        var blastRadius = effect is { Radius: > 0f } ? effect.Value.Radius : ExplosionRadius;
+        var blastRadius = effect is { Radius: > 0f } ? effect.Value.Radius : state.ExplosionRadius;
         var radiusSquared = blastRadius * blastRadius;
 
         // THE ITEM'S OWN NUMBERS, not the frag grenade's. Everything thrown used to explode for
@@ -753,8 +846,8 @@ internal static class FortProjectileSystem {
         // outright. See FortProjectileStats; the frag's numbers remain the fallback for an item the
         // table does not know, and the fallback SAYS SO rather than passing silently.
         var stats = FortProjectileStats.For(projectile.SourceItemName);
-        var playerDamage = stats?.Player ?? PlayerDamage;
-        var environmentDamage = stats?.Environment ?? EnvironmentDamage;
+        var playerDamage = stats?.Player ?? state.PlayerDamage;
+        var environmentDamage = stats?.Environment ?? state.EnvironmentDamage;
 
         // AND ZERO WHEN THE ITEM DOES NOT DAMAGE, which the stat row cannot tell you: a boogie
         // bomb's own WeaponStatHandle names the FRAG's row (100/375), so it exploded for 100 and
@@ -773,14 +866,14 @@ internal static class FortProjectileSystem {
         // the moment it touched the ground and the emplacement never got a chance to be the item.
         // The snowman and the shield bubble are already 0/0 in the table and are unaffected either
         // way; naming the rule here rather than per item is what keeps the next one right.
-        if (FortDeployables.For(projectile.SourceItemName) != null) {
+        if (FortDeployables.For(projectile.SourceItemName).Length > 0) {
             playerDamage = 0f;
             environmentDamage = 0f;
         }
 
         if (stats is null && projectile.SourceItemName is { Length: > 0 } unknown)
             Console.WriteLine($"FortProjectileSystem: '{unknown}' has no row in FortProjectileStats - " +
-                              $"exploding for the frag grenade's {PlayerDamage:F0}/{EnvironmentDamage:F0}.");
+                              $"exploding for the frag grenade's {state.PlayerDamage:F0}/{state.EnvironmentDamage:F0}.");
         var instigator = projectile.GetInstigator();
 
         // Everyone the blast reached, for the NON-damage half. Collected rather than acted on
@@ -821,12 +914,12 @@ internal static class FortProjectileSystem {
             // right against a wall would otherwise be judged as blocked from damaging that wall. The
             // world trace needs no such exclusion, since nothing here damages world geometry.
             if (actor is not ABuildingActor
-                && BuildingStructuralSupportSystem.IsLineBlocked(origin, actor.GetActorLocation())) {
+                && BuildingStructuralSupportSystem.Of(world).IsLineBlocked(origin, actor.GetActorLocation())) {
                 blocked++;
                 continue;
             }
 
-            if (actor is not ABuildingActor && WorldLineBlocked(origin, actor.GetActorLocation())) {
+            if (actor is not ABuildingActor && WorldLineBlocked(world, origin, actor.GetActorLocation())) {
                 blockedByWorld++;
                 continue;
             }
@@ -848,9 +941,9 @@ internal static class FortProjectileSystem {
                     break;
 
                 case ABuildingActor building when !building.bDestroyed
-                        && !BuildingStructuralSupportSystem.IsLineBlocked(origin, building.GetActorLocation(), building)
-                        && !WorldLineBlocked(origin, building.GetActorLocation()):
-                    BuildingStructuralSupportSystem.ApplyDamage(building, (int) environmentDamage);
+                        && !BuildingStructuralSupportSystem.Of(world).IsLineBlocked(origin, building.GetActorLocation(), building)
+                        && !WorldLineBlocked(world, origin, building.GetActorLocation()):
+                    BuildingStructuralSupportSystem.Of(world).ApplyDamage(building, (int) environmentDamage);
                     buildingsHit++;
                     break;
 
@@ -918,8 +1011,8 @@ internal static class FortProjectileSystem {
                               $"{instigator.GetActorLocation()} is {distance:F0} units away " +
                               $"(radius {blastRadius:F0}), inNetworkObjectList={inList}, " +
                               $"knownLocation={instigator.bHasKnownLocation}; " +
-                              $"{BuildingStructuralSupportSystem.PiecesWithin(origin, 1000f)} build(s) within 1000 " +
-                              $"of the blast, {BuildingStructuralSupportSystem.PiecesWithin(instigator.GetActorLocation(), 1000f)} " +
+                              $"{BuildingStructuralSupportSystem.Of(world).PiecesWithin(origin, 1000f)} build(s) within 1000 " +
+                              $"of the blast, {BuildingStructuralSupportSystem.Of(world).PiecesWithin(instigator.GetActorLocation(), 1000f)} " +
                               "near the thrower; baked landscape under " +
                               $"the blast = {(baked is { } b ? b.ToString("F0") : "NONE")}, " +
                               $"simulation floor = {projectile.ThrowerGroundZ:F0}, " +
@@ -944,25 +1037,18 @@ internal static class FortProjectileSystem {
         public required UObject AbilityClass;
     }
 
-    /// <summary>
-    ///     PROJECTILE_REGRANT=0 turns the re-grant workaround off, leaving only the ClientEndAbility
-    ///     handshake - which is the right thing to run when working out why that handshake does not
-    ///     land on its own.
-    /// </summary>
-    private static bool PROJECTILE_REGRANT => Environment.GetEnvironmentVariable("PROJECTILE_REGRANT") is not "0";
-
-    private static readonly List<FPendingAbilityEnd> PendingEnds = new();
-
     public static void Tick(UWorld world) {
+        var state = StateOf(world);
+
         // The lingering half of the thrown items: a knockback that has to be taken back off, and a
         // stink bomb's cloud that keeps biting. See TickGrenadeEffects.
         TickGrenadeEffects(world, world.TimeSeconds);
 
-        for (var i = PendingEnds.Count - 1; i >= 0; i--) {
-            var pending = PendingEnds[i];
+        for (var i = state.PendingEnds.Count - 1; i >= 0; i--) {
+            var pending = state.PendingEnds[i];
             if (world.TimeSeconds < pending.EndsAtWorldTime) continue;
 
-            PendingEnds.RemoveAt(i);
+            state.PendingEnds.RemoveAt(i);
 
             if (pending.StopEmoteMontage is { } dancer) {
                 dancer.EmoteMontageIsStopped = true;
@@ -1004,7 +1090,7 @@ internal static class FortProjectileSystem {
             //
             // The cost is a spec churn per throw: a new handle, a new replicated ability instance,
             // and one FastArray delta. Remove this the moment the end handshake is understood.
-            if (pending.Weapon is { } weapon && PROJECTILE_REGRANT) {
+            if (pending.Weapon is { } weapon && state.PROJECTILE_REGRANT) {
                 pending.AbilitySystem.ClearAbility(pending.Handle);
 
                 var regranted = pending.AbilitySystem.GrantAbility(
@@ -1016,17 +1102,20 @@ internal static class FortProjectileSystem {
             }
 
             Console.WriteLine($"FortProjectileSystem: told the client to end throw ability spec {pending.Handle} " +
-                              $"after {PostThrowEndDelay:F2}s.");
+                              $"after {state.PostThrowEndDelay:F2}s.");
         }
 
-        if (InFlight.Count == 0) return;
+        if (state.InFlight.Count == 0) return;
 
         List<AFortProjectileBase>? expired = null;
 
-        foreach (var projectile in InFlight) {
+        foreach (var projectile in state.InFlight) {
             if (!projectile.bHasExploded) StepFlight(world, projectile);
 
-            var bouncedOut = projectile.BounceCount >= BouncesTillExplode;
+            // Not for a floor-only deployable: its wall bounces are the item working as designed, and
+            // five of them would otherwise put a snowman in mid-air beside the wall it kept hitting.
+            var bouncedOut = projectile.BounceCount >= BouncesTillExplode
+                             && FortDeployables.RuleFor(projectile.SourceItemName).MinFloorNormalZ == null;
             if (!projectile.bHasExploded && (bouncedOut || world.TimeSeconds >= projectile.ExplodesAtWorldTime)) {
                 // No MarkPropertyDirty: the per-tick layout diff finds this by itself, the same way
                 // every other replicated property on this server is sent.
@@ -1041,14 +1130,14 @@ internal static class FortProjectileSystem {
                 // Bring the destroy forward to just after the explosion instead of the flight-time
                 // safety net. Not at the same instant: both properties have to actually reach the
                 // client, and destroying the actor first would close the channel with them unsent.
-                projectile.ExpiresAtWorldTime = world.TimeSeconds + KillDelay;
+                projectile.ExpiresAtWorldTime = world.TimeSeconds + state.KillDelay;
 
                 Explode(world, projectile);
 
                 Console.WriteLine($"FortProjectileSystem: '{projectile.GetFName()}' exploded at " +
                                   $"{projectile.SimulatedLocation} " +
                                   $"({(bouncedOut ? $"{projectile.BounceCount} bounces" : "fuse")}) - " +
-                                  $"destroying it in {KillDelay:F1}s.");
+                                  $"destroying it in {state.KillDelay:F1}s.");
             }
 
             if (world.TimeSeconds >= projectile.ExpiresAtWorldTime)
@@ -1058,11 +1147,10 @@ internal static class FortProjectileSystem {
         if (expired == null) return;
         foreach (var projectile in expired) {
             Console.WriteLine($"FortProjectileSystem: '{projectile.GetFName()}' expired - destroying it server-side.");
-            InFlight.Remove(projectile);
+            state.InFlight.Remove(projectile);
             projectile.Destroy();
         }
     }
-
 
     /// <summary>
     ///     The half of a thrown item that is not damage: the throw, the dance, the cloud.
@@ -1162,6 +1250,8 @@ internal static class FortProjectileSystem {
     ///     visible if the ability ever stops agreeing.
     /// </summary>
     private static void BoogieBomb(UWorld world, APawn pawn, float duration) {
+        var state = StateOf(world);
+
         if (pawn.PlayerState is not { AbilitySystemComponent: { } abilitySystem } playerState) return;
         if (world.NetDriver is not { } netDriver) return;
 
@@ -1186,7 +1276,7 @@ internal static class FortProjectileSystem {
         var danceKey = new FPredictionKey {
             bValidKeyForConnection = true,
             bIsServerInitiated = true,
-            Current = _nextDancePredictionKey++
+            Current = state._nextDancePredictionKey++
         };
 
         netDriver.SendClientActivateAbilitySucceed(playerState, abilitySystem, spec.Handle, danceKey);
@@ -1196,7 +1286,7 @@ internal static class FortProjectileSystem {
         // server never applies the effect, so nothing was ever going to stop it. The same
         // ClientEndAbility handshake the throw itself uses does the job; the montage is stopped in
         // the same breath so onlookers see the dance finish too.
-        PendingEnds.Add(new FPendingAbilityEnd {
+        state.PendingEnds.Add(new FPendingAbilityEnd {
             PlayerState = playerState,
             AbilitySystem = abilitySystem,
             Handle = spec.Handle,
@@ -1210,47 +1300,6 @@ internal static class FortProjectileSystem {
                           $"(spec handle {spec.Handle}).");
     }
 
-    /// <summary>
-    ///     A server-initiated prediction key counter, exactly like the emote system's and for the
-    ///     same reason - see FPredictionKey::CreateNewServerInitiatedKey. Separate because the two
-    ///     are independent streams and sharing a counter would only couple them.
-    /// </summary>
-    private static short _nextDancePredictionKey = 1;
-
-    /// <summary>
-    ///     CLEARING PushMomentum STOPS THE VICTIM DEAD IN MID-AIR, and that is not a side effect -
-    ///     it is the whole of what the zero branch does.
-    ///
-    ///     `AFortPawn::OnRep_PushMomentum` (0x1419347C0) branches on the length: non-zero writes
-    ///     Velocity.X/Y, and ZERO calls the movement component's vtable slot 0x400. For the real
-    ///     PlayerPawn_Athena that slot is 0x140C5DB60, whose first three instructions are:
-    ///
-    ///         movsd  qword ptr [rcx+0xC4], xmm0     ; Velocity.X = Velocity.Y = 0
-    ///         mov    dword ptr [rcx+0xCC], eax      ; Velocity.Z = 0
-    ///
-    ///     **All three components.** So the old fixed 0.5s clear was, half a second into every
-    ///     throw, telling the client to freeze in the air - which is exactly the reported "it flies
-    ///     a certain distance, then the impulse suddenly vanishes and it drops straight down".
-    ///     (The engine's own UCharacterMovementComponent::StopActiveMovement only clears
-    ///     Acceleration, which is what the vtable slot's NAME says and what this was reasoned from
-    ///     the first time. Fortnite's override is the one that runs, and reading it was the only
-    ///     way to know.)
-    ///
-    ///     Nothing else decays the throw. The client's own falling physics leaves lateral velocity
-    ///     completely alone on this build: `BrakingDecelerationFalling` and `FallingLateralFriction`
-    ///     are BOTH 0 in AFortPlayerPawnAthena's CDO, read out of the dump
-    ///     (PriveDev/dumpwork/movedefaults.py), so ApplyVelocityBraking returns without touching
-    ///     anything and a launched player keeps their speed until they hit something.
-    ///
-    ///     So the push is now taken off on LANDING instead of on a timer - where zeroing the
-    ///     velocity is what landing means anyway - and the timeout below is only a backstop for a
-    ///     landing this server never sees.
-    /// </summary>
-    private static float PushMomentumMaxSeconds =>
-        float.TryParse(Environment.GetEnvironmentVariable("PUSH_MOMENTUM_MAX_SECONDS"), out var seconds)
-            ? seconds
-            : 12.0f;
-
     /// <summary>A stink bomb's cloud: where, how big, until when, and when it next bites.</summary>
     private static readonly List<(FVector Origin, float Radius, float EndsAt, float NextTickAt,
                                   float Period, APawn? Instigator)> _gasClouds = new();
@@ -1263,6 +1312,7 @@ internal static class FortProjectileSystem {
     private static void TickGrenadeEffects(UWorld world, float timeSeconds) {
         TickLowGravity(world, timeSeconds);
         FortAirstrike.Tick(world, timeSeconds);
+        ReapDeployed(world, timeSeconds);
 
         for (var i = _gasClouds.Count - 1; i >= 0; i--) {
             var cloud = _gasClouds[i];
@@ -1315,7 +1365,7 @@ internal static class FortProjectileSystem {
         // What it replaces is worse than a bounce: with no row in FortGrenadeEffects these fell
         // through to the frag's 2.75-second FUSE, so a snowman thrown at your feet bounced away and
         // appeared somewhere else nearly three seconds later. The real item has no such timer.
-        var deployable = FortDeployables.For(projectile.SourceItemName) != null;
+        var deployable = FortDeployables.For(projectile.SourceItemName).Length > 0;
 
         var effect = FortGrenadeEffects.For(projectile.SourceItemName);
 
@@ -1368,7 +1418,9 @@ internal static class FortProjectileSystem {
     ///     SHOCKWAVE_FX=0 turns the whole thing off.
     /// </summary>
     private static void SendLowGravityCues(UWorld world, APawn pawn) {
-        if (Environment.GetEnvironmentVariable("SHOCKWAVE_FX") is "0") return;
+        var state = StateOf(world);
+
+        if (world.Options.Get("SHOCKWAVE_FX") is "0") return;
 
         SendCueToEveryone(world, pawn, FortGrenadeEffects.LowGravLiftoffCue);
 
@@ -1388,7 +1440,7 @@ internal static class FortProjectileSystem {
         WatchFlight(world, pawn, endLowGravity: true);
 
         Console.WriteLine($"FortProjectileSystem: {pawn.GetFName()} is in low gravity - aura on until they land " +
-                          $"(or {LowGravityMaxSeconds:F0}s, whichever comes first).");
+                          $"(or {state.LowGravityMaxSeconds:F0}s, whichever comes first).");
     }
 
     /// <summary>
@@ -1404,19 +1456,21 @@ internal static class FortProjectileSystem {
     ///     lost would glow for the rest of the match. Ending late is recoverable; not ending is not.
     /// </summary>
     private static void TickLowGravity(UWorld world, float timeSeconds) {
+        var state = StateOf(world);
+
         const byte falling = 3;
 
-        for (var i = _flights.Count - 1; i >= 0; i--) {
-            var flight = _flights[i];
+        for (var i = state._flights.Count - 1; i >= 0; i--) {
+            var flight = state._flights[i];
             var mode = flight.Pawn.LastClientMovementMode;
 
             if (mode == falling) flight.SeenFalling = true;
 
             var landed = flight.SeenFalling && mode is { } current && current != falling;
-            var expired = timeSeconds - flight.StartedAt >= FlightMaxSeconds(flight);
+            var expired = timeSeconds - flight.StartedAt >= FlightMaxSeconds(world, flight);
             if (!landed && !expired) continue;
 
-            _flights.RemoveAt(i);
+            state._flights.RemoveAt(i);
             EndFlight(world, flight, landed ? "landed" : "timed out");
         }
     }
@@ -1431,7 +1485,9 @@ internal static class FortProjectileSystem {
     ///     twice, and the first landing would clear the push the second one still needs.
     /// </summary>
     private static void WatchFlight(UWorld world, APawn pawn, bool clearPush = false, bool endLowGravity = false) {
-        foreach (var existing in _flights) {
+        var state = StateOf(world);
+
+        foreach (var existing in state._flights) {
             if (existing.Pawn != pawn) continue;
 
             existing.ClearPush |= clearPush;
@@ -1441,7 +1497,7 @@ internal static class FortProjectileSystem {
             return;
         }
 
-        _flights.Add(new FThrownFlight {
+        state._flights.Add(new FThrownFlight {
             Pawn = pawn,
             StartedAt = world.TimeSeconds,
             ClearPush = clearPush,
@@ -1450,8 +1506,8 @@ internal static class FortProjectileSystem {
     }
 
     /// <summary>Whichever backstop is longer, since one entry can carry both jobs.</summary>
-    private static float FlightMaxSeconds(FThrownFlight flight) =>
-        flight.EndLowGravity ? MathF.Max(LowGravityMaxSeconds, PushMomentumMaxSeconds) : PushMomentumMaxSeconds;
+    private static float FlightMaxSeconds(UWorld world, FThrownFlight flight) =>
+        flight.EndLowGravity ? MathF.Max(StateOf(world).LowGravityMaxSeconds, StateOf(world).PushMomentumMaxSeconds) : StateOf(world).PushMomentumMaxSeconds;
 
     /// <summary>
     ///     The end of a throw: the aura comes off, the landing thump plays, and the push is taken
@@ -1506,7 +1562,7 @@ internal static class FortProjectileSystem {
     /// </summary>
     private static void SmashThroughBuildings(UWorld world, FVector origin, APawn pawn, float destroyDistance) {
         if (destroyDistance <= 0f) return;
-        if (Environment.GetEnvironmentVariable("SHOCKWAVE_DESTRUCTION") is "0") return;
+        if (world.Options.Get("SHOCKWAVE_DESTRUCTION") is "0") return;
 
         var start = pawn.GetActorLocation();
 
@@ -1547,12 +1603,12 @@ internal static class FortProjectileSystem {
             candidates++;
             nearest.Add((building, DistanceToSegment(building.GetActorLocation(), start, end)));
 
-            if (!BuildingStructuralSupportSystem.SweptCapsuleTouches(
+            if (!BuildingStructuralSupportSystem.Of(world).SweptCapsuleTouches(
                     building, start, end,
                     FortGrenadeEffects.DestructionCapsuleRadius,
                     FortGrenadeEffects.DestructionCapsuleHalfHeight)) continue;
 
-            BuildingStructuralSupportSystem.ApplyDamage(building, (int) FortGrenadeEffects.DestructionDamage);
+            BuildingStructuralSupportSystem.Of(world).ApplyDamage(building, (int) FortGrenadeEffects.DestructionDamage);
             smashed++;
         }
 
@@ -1642,7 +1698,7 @@ internal static class FortProjectileSystem {
 
             ABuildingActor standIn;
             try {
-                standIn = UAssetRegistry.GetOrCreateSubObject<ABuildingActor>(path);
+                standIn = world.MapActors.GetOrCreate<ABuildingActor>(path);
             } catch (Exception ex) {
                 Console.WriteLine($"FortProjectileSystem:   could not name '{path}' - {ex.Message}");
                 continue;
@@ -1750,45 +1806,122 @@ internal static class FortProjectileSystem {
     ///     is on, checked with `pakreader supers` rather than inferred from the name.
     /// </summary>
     private static void Deploy(UWorld world, AFortProjectileBase projectile, FVector origin) {
-        if (FortDeployables.For(projectile.SourceItemName) is not { } deployable) return;
-        if (Environment.GetEnvironmentVariable("DEPLOYABLES") is "0") return;
+        var deployables = FortDeployables.For(projectile.SourceItemName);
+        if (deployables.Length == 0) return;
+        if (world.Options.Get("DEPLOYABLES") is "0") return;
+
+        // THE FIRST ACTOR IS THE ANCHOR. Anything marked GoesWithFirst is bound to it, so it goes
+        // when the anchor does - see AFortDeployedActor.GoesDownWith.
+        ABuildingActor? anchor = null;
+
+        foreach (var deployable in deployables) {
+            var actor = DeployOne(world, projectile, origin, deployable);
+            if (actor == null) continue;
+
+            if (anchor == null) {
+                anchor = actor;
+                continue;
+            }
+
+            if (deployable.GoesWithFirst && anchor is AFortDeployedActor bindable)
+                bindable.GoesDownWith.Add(actor);
+        }
+    }
+
+    /// <summary>
+    ///     Puts ONE of an item's actors down. Separate from Deploy because an item can leave several
+    ///     - the shield bubble is a core AND a dome, and only the dome is the shield.
+    /// </summary>
+    private static ABuildingActor? DeployOne(UWorld world, AFortProjectileBase projectile, FVector origin,
+                                             FortDeployables.FDeployed deployable) {
+        var state = StateOf(world);
 
         var location = new FVector { X = origin.X, Y = origin.Y, Z = origin.Z + deployable.ZOffset };
 
+        // THE UCLASS DECIDES THE C# TYPE, AND SpawnActor<T> IS ONLY A CAST. That combination is what
+        // made every gameplay-actor deployable silently fail to exist: ABuildingActor.ClassForPath
+        // bakes `typeof(ABuildingActor)` into the UClass, UClass.CreateDefaultObject does
+        // Activator.CreateInstance on exactly that, and `SpawnActor<AFortDeployedActor>` then cast
+        // an ABuildingActor to AFortDeployedActor and threw. The throw landed in the catch below and
+        // became one "could not deploy" line, so the shield bubble played its deploy sound and left
+        // nothing behind - which read for two rounds as a replication or visibility problem.
+        //
+        // The snowman was unaffected and that is why this survived: it is the only row with
+        // GameplayActor false, so it is the only one that was ever really spawned.
+        //
+        // StaticClassForPath is keyed by (type, path), so asking for the same path as a different C#
+        // type gives a separate UClass with the same NativePackagePath - the client still sees the
+        // Blueprint path it expects, and the server gets the type whose RepLayout arm is correct.
         ABuildingActor? actor;
         try {
             actor = deployable.GameplayActor
                 ? world.SpawnActor<AFortDeployedActor>(
-                    ABuildingActor.ClassForPath(deployable.ClassPath),
+                    GUClassArray.StaticClassForPath<AFortDeployedActor>(deployable.ClassPath),
                     new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient })
                 : world.SpawnActor<ABuildingActor>(
                     ABuildingActor.ClassForPath(deployable.ClassPath),
                     new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
         } catch (Exception ex) {
             Console.WriteLine($"FortProjectileSystem: could not deploy '{deployable.ClassPath}' - {ex.Message}");
-            return;
+            return null;
         }
 
         if (actor == null) {
             Console.WriteLine($"FortProjectileSystem: SpawnActor returned null for '{deployable.ClassPath}'");
-            return;
+            return null;
         }
 
         actor.SetActorLocation(location);
 
+        // Before the channel opens, so it rides the spawn header - see FDeployed.Scale.
+        if (deployable.Scale != 1f)
+            actor.SetActorScale3D(new FVector { X = deployable.Scale, Y = deployable.Scale, Z = deployable.Scale });
+
+        if (actor is AFortDeployedActor deployed) {
+            deployed.DeployedClassPath = deployable.ClassPath;
+            deployed.Indestructible = deployable.Indestructible;
+        }
+
         // FACING THE THROWER'S HEADING, not the projectile's. A grenade tumbles, and a snowman that
         // came to rest upside down is not something the item ever does; the yaw a player would expect
         // is the one they were facing. Yaw only - these all stand upright.
-        if (projectile.GetInstigator()?.GetActorRotation().Yaw is { } yaw) {
+        //
+        // UNLESS THE ITEM'S OWN SPAWN SAYS OTHERWISE - the snowman faces its flight direction turned
+        // a quarter. See FDeployRule.FlightYawOffset.
+        if (FortDeployables.RuleFor(projectile.SourceItemName).FlightYawOffset is { } flightOffset) {
+            actor.SetActorRotation(new FRotator { Yaw = projectile.LastFlightYaw + flightOffset });
+        } else if (projectile.GetInstigator()?.GetActorRotation().Yaw is { } yaw) {
             actor.SetActorRotation(new FRotator { Yaw = yaw });
         }
 
         actor.SetRole(ENetRole.ROLE_Authority);
         actor.SetReplicates(true);
 
+        if (deployable.Lifespan > 0f) state.Deployed.Add((actor, world.TimeSeconds + deployable.Lifespan));
+
         Console.WriteLine($"FortProjectileSystem: {projectile.SourceItemName} deployed " +
                           $"'{deployable.ClassPath}' at {location} " +
-                          $"({(deployable.GameplayActor ? "BuildingGameplayActor layout" : "building-piece layout")}).");
+                          $"({(deployable.GameplayActor ? "BuildingGameplayActor layout" : "building-piece layout")}" +
+                          (deployable.Lifespan > 0f ? $", {deployable.Lifespan:F0}s" : "") +
+                          (deployable.Indestructible ? ", indestructible" : "") + ").");
+        return actor;
+    }
+
+    private static void ReapDeployed(UWorld world, float timeSeconds) {
+        var state = StateOf(world);
+
+        for (var i = state.Deployed.Count - 1; i >= 0; i--) {
+            if (timeSeconds < state.Deployed[i].EndsAt) continue;
+
+            var actor = state.Deployed[i].Actor;
+            state.Deployed.RemoveAt(i);
+
+            if (actor.IsPendingKillPending()) continue;
+
+            Console.WriteLine($"FortProjectileSystem: deployed '{actor.GetFName()}' reached the end of its " +
+                              "lifespan - taking it off the wire.");
+            actor.Destroy();
+        }
     }
 
     /// <summary>
@@ -1818,7 +1951,7 @@ internal static class FortProjectileSystem {
 
             switch (actor) {
                 case ABuildingActor building when !building.bDestroyed && environmentDamage > 0f:
-                    BuildingStructuralSupportSystem.ApplyDamage(building, (int) environmentDamage);
+                    BuildingStructuralSupportSystem.Of(world).ApplyDamage(building, (int) environmentDamage);
                     buildings++;
                     break;
 
@@ -1843,16 +1976,6 @@ internal static class FortProjectileSystem {
         }
     }
 
-    /// <summary>
-    ///     The longest a low-gravity aura may stay on without the pawn being seen to land. Not a row
-    ///     - the game ends it from the landing itself - but a backstop; see TickLowGravity for why
-    ///     there has to be one. SHOCKWAVE_LOWGRAV_MAX_SECONDS overrides it.
-    /// </summary>
-    private static float LowGravityMaxSeconds =>
-        float.TryParse(Environment.GetEnvironmentVariable("SHOCKWAVE_LOWGRAV_MAX_SECONDS"), out var seconds)
-            ? seconds
-            : 12.0f;
-
     /// <summary>One player mid-throw, and what has to be undone when they land.</summary>
     private sealed class FThrownFlight {
         public required APawn Pawn;
@@ -1871,5 +1994,4 @@ internal static class FortProjectileSystem {
         public bool EndLowGravity;
     }
 
-    private static readonly List<FThrownFlight> _flights = new();
 }

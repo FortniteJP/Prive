@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     Maps FCreateBuildingActorData.BuildingClassHandle onto the building ACTOR class it names.
@@ -43,7 +44,7 @@ public static class BuildingClassHandles {
     ///     actually said.
     /// </summary>
     private static readonly string[] CandidatePaths =
-        Environment.GetEnvironmentVariable("BUILDING_CLASS_HANDLES") is { Length: > 0 } configured
+        FBeaconProcess.Options.Get("BUILDING_CLASS_HANDLES") is { Length: > 0 } configured
             ? new[] { configured }
             : new[] {
                 Path.Combine(AppContext.BaseDirectory, "BuildingClassHandles.txt"),
@@ -104,7 +105,14 @@ public static class BuildingClassHandles {
     ///     Re-reads the table whenever the file's timestamp or length changes, so a calibration pass
     ///     is "place a piece, read the handle, add a line, place again" with the server left running.
     /// </summary>
+    private static readonly object ReloadGate = new();
+
+    /// <summary>Locked: two worlds checking the table at once must not both reparse it mid-swap.</summary>
     private static void ReloadIfChanged() {
+        lock (ReloadGate) ReloadIfChangedLocked();
+    }
+
+    private static void ReloadIfChangedLocked() {
         try {
             var path = TablePath;
 

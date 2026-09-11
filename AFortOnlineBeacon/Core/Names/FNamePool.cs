@@ -26,14 +26,18 @@ public static class FNamePool {
     }
 
     public static FNameEntryId Find(string name) {
-        if (Names.TryGetValue(name, out var result)) return result;
+        lock (NamesLock) {
+            if (Names.TryGetValue(name, out var result)) return result;
+        }
 
         return new FNameEntryId((uint)EName.None);
     }
     
     public static FNameEntryId Find(EName name) => HardcodedNames[name];
 
-    public static string Resolve(FNameEntryId index) => NamesReverse[index];
+    public static string Resolve(FNameEntryId index) {
+        lock (NamesLock) return NamesReverse[index];
+    }
 
     public static FNameEntryId Store(ReadOnlySpan<char> valueSpan) {
         var value = valueSpan.ToString();

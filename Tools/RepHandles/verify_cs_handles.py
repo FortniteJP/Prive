@@ -55,6 +55,11 @@ TABLES = [
     # one of them moves if anything below is inserted or removed - exactly the silent renumbering
     # this script exists for. ActorProps first, then BuildingActorProps' own entries, then its own.
     ("SprayDecalProps", ["ActorProps", "BuildingActorProps"], "AFortSprayDecalInstance"),
+    # A trap's TOOL: AFortWeapon's first 35 via HandlePrefix ("Table:N" = the running list cut at N
+    # handles), then 36-38. Checked against the context tool, the deeper of the two, so 38 is covered.
+    ("DecoToolProps", ["ActorProps", "WeaponProps:35"], "AFortDecoTool_ContextTrap"),
+    # A placed trap: every building handle, 68, then ABuildingTrap's 69-73.
+    ("TrapProps", ["ActorProps", "BuildingActorProps"], "ABuildingTrap"),
     ("VehicleSeatComponentProps", [], "UFortVehicleSeatComponent"),
     # A STRUCT, not a class: FAthenaCarPlayerSlot is the inner of UFortVehicleSeatComponent's
     # PlayerSlots, and this table is the per-element handle space. Its LENGTH is load-bearing in a
@@ -159,7 +164,10 @@ def main():
     for var, prefixes, ue_class, *extra in TABLES:
         names = []
         for p in prefixes:
-            names += cs_names(src, p)
+            table, _, cut = p.partition(":")
+            names += cs_names(src, table)
+            if cut:
+                names = names[:int(cut)]
         names += cs_names(src, var)
 
         lines = subprocess.run([sys.executable, "Tools/RepHandles/rep_handles.py", ue_class] + extra,

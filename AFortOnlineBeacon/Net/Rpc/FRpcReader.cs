@@ -41,6 +41,7 @@ public static class FRpcReader {
                 ERpcParamKind.TargetDataHandle => FGameplayAbilityTargetDataHandle.NetSerializeRead(bunch),
                 ERpcParamKind.AbilityRpcBatch => FServerAbilityRPCBatch.NetSerializeRead(bunch),
                 ERpcParamKind.CreateBuildingActorData => FCreateBuildingActorData.NetSerializeRead(bunch),
+                ERpcParamKind.Enum => ReadEnum(bunch, def.Bits),
                 _ => throw new NotSupportedException($"FRpcReader: unhandled param kind {def.Kind}")
             };
         }
@@ -59,6 +60,13 @@ public static class FRpcReader {
     ///     that in the stream. UPackageMapClient.ReadObjectRef handles both shapes.
     /// </summary>
     private static UObject? ReadObject(FArchive bunch) => UPackageMapClient.ReadObjectRef(bunch, out _);
+
+    /// <summary>See <see cref="ERpcParamKind.Enum" /> - the low bits of one byte, LSB first.</summary>
+    private static byte ReadEnum(FArchive bunch, int bits) {
+        var value = new byte[1];
+        bunch.SerializeBits(value, bits);
+        return value[0];
+    }
 
     /// <summary>An FName parameter - see <see cref="ERpcParamKind.Name"/>.</summary>
     private static object? ReadName(FArchive bunch) {

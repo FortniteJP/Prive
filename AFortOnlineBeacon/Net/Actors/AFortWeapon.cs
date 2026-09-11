@@ -66,6 +66,13 @@ public class AFortWeapon : AActor {
     public int GrantedAbilitySpecHandle { get; set; } = -1;
 
     /// <summary>
+    ///     AFortWeapon::SecondaryAbilitySpecHandle - wire handle 32. The item's SecondaryFireAbility
+    ///     (only three in 10.40: the Sneaky Snowman's "wear", C4's "detonate", the Balloons'
+    ///     "let go"), granted beside the fire ability and cleared with it.
+    /// </summary>
+    public int SecondaryAbilitySpecHandle { get; set; } = -1;
+
+    /// <summary>
     ///     AFortWeapon::ReloadAbilitySpecHandle - wire handle 33, and the other half of a usable
     ///     magazine. A real server grants UFortGameplayAbility_Reload alongside the fire ability
     ///     when a weapon is equipped; the Project-Reboot-3.0 capture shows both exported together

@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -16,7 +17,13 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     resolves.
 /// </summary>
 internal static partial class FortWarmupStarts {
-    private static int _next;
+
+    /// <summary>This world's share of FortWarmupStarts's state - see FWorldSubsystem.</summary>
+    private sealed class FWarmupStartState : FWorldSubsystem {
+        public int _next;
+    }
+
+    private static FWarmupStartState StateOf(UWorld world) => world.GetSubsystem<FWarmupStartState>();
 
     /// <summary>How many starts there are - one per X,Y,Z triple.</summary>
     public static int Count => Starts.Length / 3;
@@ -37,10 +44,12 @@ internal static partial class FortWarmupStarts {
     ///     The next start to use, cycling. Deliberately not random: a fixed order makes a test run
     ///     reproducible, and there is nothing to be gained from surprising the person debugging it.
     /// </summary>
-    public static FVector Next() {
+    public static FVector Next(UWorld world) {
+        var state = StateOf(world);
+
         if (Count == 0) return new FVector();
 
-        var i = _next++ % Count;
+        var i = state._next++ % Count;
         return new FVector {
             X = Starts[i * 3],
             Y = Starts[i * 3 + 1],

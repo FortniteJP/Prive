@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Serialization;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Serialization;
 
 namespace AFortOnlineBeacon.Core.Math;
 
@@ -49,7 +50,7 @@ public sealed class FRepMovement {
 
     /// <summary>EVectorQuantization - 1/24 is RoundWholeNumber, 10/27 RoundOneDecimal, 100/30 RoundTwoDecimals.</summary>
     private static readonly (uint Scale, uint Bits) DefaultLocationQuantization =
-        Environment.GetEnvironmentVariable("REP_MOVEMENT_SCALE") switch {
+        FBeaconProcess.Options.Get("REP_MOVEMENT_SCALE") switch {
             "1" => (1u, 24u),
             "10" => (10u, 27u),
             _ => (100u, 30u)   // RoundTwoDecimals - what the client reports for AFortPlayerPawn

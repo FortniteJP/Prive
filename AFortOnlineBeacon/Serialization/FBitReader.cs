@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 
 namespace AFortOnlineBeacon.Serialization;
 
@@ -140,7 +140,14 @@ public class FBitReader : FArchive {
             
             Buffer[num >> 3] &= mask;
 
-            for (int i = 0; i <= 7 && num - i >= 0; i++) BufferBits[num - i] &= ((mask >> 7 - i) & 0x1) == 1;
+            // Clear the bits PAST Num in its last byte - and only those. This used to shift the mask
+            // by (7 - i) for bit (num - i), which lines up only when Num & 7 == 7; for any other
+            // length it also cleared the last 7 - (Num & 7) VALID bits, so a ReadBit at the tail of a
+            // reader built this way read 0 whatever was sent. Buffer (above) was always masked right,
+            // which is why SerializeBits-based reads - every bunch payload - never saw it. Found by
+            // FortTrapsSelfTest's trailing marker bit.
+            var byteEnd = Math.Min(((num >> 3) + 1) << 3, BufferBits.Length);
+            for (var i = num; i < byteEnd; i++) BufferBits[i] = false;
         }
     }
     

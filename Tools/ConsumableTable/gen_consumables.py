@@ -279,6 +279,14 @@ def emit(item_defs, abilities, curves, supers=None):
             continue
         equippable[name] = (actor, ability, props)
 
+    # UFortWorldItemDefinition::SecondaryFireAbility - what the OTHER button does. Only three items
+    # in 10.40 have one (the Sneaky Snowman's "wear it", C4's "detonate", the Balloons' "let go"),
+    # and without a grant the client has no spec to activate for it, so the button is inert: that is
+    # exactly "the snowman cannot be worn directly".
+    secondary = {name: soft_path(props.get("SecondaryFireAbility"))
+                 for name, (_actor, _ability, props) in equippable.items()
+                 if soft_path(props.get("SecondaryFireAbility"))}
+
     # The subset whose ability CDO says it heals - the only ones with an Effects row.
     usable = {}
     for name, (actor, ability, props) in equippable.items():
@@ -434,6 +442,26 @@ def emit(item_defs, abilities, curves, supers=None):
                "    ///     The healing consumables are all ReplicateNo, which is why they work today with no\n"
                "    ///     instance at all - a live confirmation of the rule rather than a guess about it.\n"
                "    /// </summary>\n" % len(replicate_yes))
+    out.append("    /// <summary>\n"
+               "    ///     Item definition name -> its SecondaryFireAbility class, granted on equip beside the\n"
+               "    ///     primary one. %d entries.\n"
+               "    /// </summary>\n" % len(secondary))
+    out.append("    private static readonly Dictionary<string, string> SecondaryAbilities = "
+               "new(StringComparer.OrdinalIgnoreCase) {\n")
+    for name in sorted(secondary):
+        out.append(f'        ["{name}"] = "{secondary[name]}",\n')
+    out.append("    };\n\n")
+
+    secondary_yes = sorted(
+        name for name, ability in secondary.items()
+        if resolve_policy(ability.rsplit(".", 1)[-1], declared_policy, supers) == "ReplicateYes")
+    out.append("    /// <summary>The same ReplicateYes rule as NeedReplicatedAbilityInstance, for the secondary ability.</summary>\n")
+    out.append("    private static readonly HashSet<string> SecondaryNeedsReplicatedInstance = "
+               "new(StringComparer.OrdinalIgnoreCase) {\n")
+    for name in secondary_yes:
+        out.append(f'        "{name}",\n')
+    out.append("    };\n\n")
+
     out.append("    private static readonly HashSet<string> NeedReplicatedAbilityInstance = "
                "new(StringComparer.OrdinalIgnoreCase) {\n")
     for name in replicate_yes:
@@ -445,6 +473,12 @@ def emit(item_defs, abilities, curves, supers=None):
 
     public static string? AbilityFor(string itemDefinitionName) =>
         Abilities.GetValueOrDefault(itemDefinitionName);
+
+    public static string? SecondaryAbilityFor(string itemDefinitionName) =>
+        SecondaryAbilities.GetValueOrDefault(itemDefinitionName);
+
+    public static bool SecondaryNeedsReplicatedAbilityInstance(string itemDefinitionName) =>
+        SecondaryNeedsReplicatedInstance.Contains(itemDefinitionName);
 
     public static string? ItemPathFor(string itemDefinitionName) =>
         ItemPaths.GetValueOrDefault(itemDefinitionName);

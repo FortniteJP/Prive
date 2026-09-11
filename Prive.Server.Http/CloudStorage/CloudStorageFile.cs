@@ -54,7 +54,39 @@ public class IniElementKeyValue : IniElement {
     public string Key { get; init; }
     public string? Value { get; init; }
 
-    protected override string SerializeProperty() => $"{Key}={Value ?? ""}";
+    protected override string SerializeProperty() => $"{Key}={Quote(Value ?? "")}";
+
+    /// <summary>
+    ///     Quotes a value on the same rule the engine's own ini writer uses
+    ///     (FConfigFile::ShouldExportQuotedString). The one that matters here: <b>an unquoted
+    ///     <c>//</c> in a value is a COMMENT to UE's ini parser</b> - ConfigCacheIni.cpp stops the
+    ///     value at it - so <c>ServerAddr=ws://127.0.0.1</c> reached the client as <c>ws:</c> and
+    ///     the XMPP login had no host to connect to. Quoting is what LawinServer's hand-written ini
+    ///     was doing all along.
+    /// </summary>
+    static string Quote(string value) => NeedsQuotes(value) ? $"\"{value}\"" : value;
+
+    static bool NeedsQuotes(string value) {
+        if (value.Length == 0) return false;
+        // Already a quoted string - a struct literal or a deliberately quoted URL. Wrapping it
+        // again would nest the quotes and change the value.
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"') return false;
+
+        if (value[0] == ' ' || value[^1] == ' ') return true;   // stripped on import
+        if (value[0] == '"') return true;                       // read as a quoted string
+        if (value[^1] == '\\') return true;                     // read as a line continuation
+
+        // Braces and // only matter outside quotes: a value like +TextReplacements=(..., "http://x")
+        // carries its own quoting, and the engine's scan tracks that too.
+        var inQuotes = false;
+        for (var i = 0; i < value.Length; i++) {
+            if (value[i] == '"') inQuotes = !inQuotes;
+            else if (inQuotes) continue;
+            else if (value[i] == '{' || value[i] == '}') return true;
+            else if (value[i] == '/' && i + 1 < value.Length && value[i + 1] == '/') return true;
+        }
+        return false;
+    }
 
     public IniElementKeyValue() {
         if (Key is null) throw new ArgumentNullException(nameof(Key));

@@ -1,21 +1,33 @@
-using Microsoft.AspNetCore.Mvc;
+using Prive.Server.Http.Xmpp;
 using System.Text;
-using System.Text.Json;
 
-namespace Prive.Server.Http.Controllers;
+namespace Prive.Server.Http.Routes;
 
-[ApiController]
-[Route("account")]
-public class AccountController : ControllerBase {
-    [HttpPost("api/oauth/token")] [NoAuth]
-    public async Task<object> OAuthToken([FromForm] OAuthTokenRequest request) {
+public static class AccountRoutes {
+    public static void Map(IEndpointRouteBuilder app) {
+        var account = app.MapGroup("/account");
+
+        // The (Delegate) casts are load-bearing: a handler whose only parameter is HttpContext is
+        // also convertible to RequestDelegate, and that overload of MapX throws the return value
+        // away, answering with an empty body. ASP0016 is an error in the csproj to catch this.
+        account.MapPost("/api/oauth/token", (Delegate)OAuthToken).NoAuth();
+        account.MapDelete("/api/oauth/sessions/kill/{accessTokenString}", OAuthSessionsKillToken);
+        account.MapDelete("/api/oauth/sessions/kill", OAuthSessionsKill);
+        account.MapGet("/api/oauth/verify", (Delegate)OAuthVerify);
+        account.MapGet("/api/public/account", (Delegate)PublicAccountMultiple);
+        account.MapGet("/api/public/account/{accountId}", PublicAccount);
+        account.MapGet("/api/public/account/{accountId}/externalAuths", PublicAccountExternalAuths);
+        account.MapGet("/api/public/account/displayName/{displayName}", PublicAccountDisplayName);
+    }
+
+    static async Task<object> OAuthToken(HttpContext ctx) {
         string clientId;
         User user;
 
         try {
-            clientId = Encoding.UTF8.GetString(Convert.FromBase64String(Request.Headers["Authorization"].ToString().Split(' ')[1])).Split(':')[0];
+            clientId = Encoding.UTF8.GetString(Convert.FromBase64String(ctx.Request.Headers["Authorization"].ToString().Split(' ')[1])).Split(':')[0];
         } catch {
-            Response.StatusCode = 400;
+            ctx.Response.StatusCode = 400;
             return EpicError.Create(
                 "error.com.epicgames.common.oauth.invalid_client", 1011,
                 "It appears that your Authorization header may be invalid or not present, please verify that you are sending the correct headers.",
@@ -23,10 +35,21 @@ public class AccountController : ControllerBase {
             );
         }
 
+        // The client posts application/x-www-form-urlencoded. Reading the form here is shorter than
+        // a [FromForm] model binder and sidesteps minimal API's antiforgery requirement entirely.
+        var form = ctx.Request.HasFormContentType ? await ctx.Request.ReadFormAsync() : FormCollection.Empty;
+        var request = new OAuthTokenRequest() {
+            grant_type = form["grant_type"].ToString(),
+            refresh_token = form["refresh_token"],
+            exchange_code = form["exchange_code"],
+            username = form["username"],
+            password = form["password"]
+        };
+
         switch (request.grant_type) {
             case "client_credentials":
                 var token = GenerateToken();
-                ClientTokens.Add(new() { TokenString = token });
+                ClientTokens[token] = new() { TokenString = token };
                 return new {
                     access_token = token,
                     expires_in = 14400,
@@ -39,14 +62,14 @@ public class AccountController : ControllerBase {
             case "exchange_code":
                 var exchangeCodeRequest = request.To<OAuthExchangeCodeRequest>();
                 if (exchangeCodeRequest is null) {
-                    Response.StatusCode = 400;
+                    ctx.Response.StatusCode = 400;
                     return EpicError.Create(
                         "error.com.epicgames.common.oauth.invalid_request", 1013,
                         "exchange_code is required.",
                         "com.epicgames.account.public", "prod"
                     );
                 }
-                Response.StatusCode = 501;
+                ctx.Response.StatusCode = 501;
                 return EpicError.Create(
                     "error.com.epicgames.common.oauth.unsupported_grant_type", 0,
                     "exchange_code is not supported yet.",
@@ -55,7 +78,7 @@ public class AccountController : ControllerBase {
             case "refresh_token":
                 var refreshTokenRequest = request.To<OAuthRefreshTokenRequest>();
                 if (refreshTokenRequest is null) {
-                    Response.StatusCode = 400;
+                    ctx.Response.StatusCode = 400;
                     return EpicError.Create(
                         "error.com.epicgames.common.oauth.invalid_request", 1013,
                         "refresh_token is required.",
@@ -63,11 +86,13 @@ public class AccountController : ControllerBase {
                     );
                 }
 
-                var refreshToken = AuthTokens.FirstOrDefault(x => x.RefreshTokenString == refreshTokenRequest.refresh_token);
+                // The one lookup that is not by token string, so it still has to scan. Values is
+                // a snapshot, which is what makes scanning it safe.
+                var refreshToken = AuthTokens.Values.FirstOrDefault(x => x.RefreshTokenString == refreshTokenRequest.refresh_token);
                 if (refreshToken is null) {
-                    Response.StatusCode = 400;
+                    ctx.Response.StatusCode = 400;
                     return EpicError.Create(
-                        "error.com.epicgames.account.auth_token.invalid_refresh_token", 18036,
+                        "errors.com.epicgames.account.auth_token.invalid_refresh_token", 18036,
                         "Sorry the refresh token you provided is invalid.",
                         "com.epicgames.account.public", "prod"
                     );
@@ -78,7 +103,7 @@ public class AccountController : ControllerBase {
             case "password":
                 var passwordRequest = request.To<OAuthPasswordRequest>();
                 if (passwordRequest is null) {
-                    Response.StatusCode = 400;
+                    ctx.Response.StatusCode = 400;
                     return EpicError.Create(
                         "error.com.epicgames.common.oauth.invalid_request", 1013,
                         "username and password are required.",
@@ -88,7 +113,7 @@ public class AccountController : ControllerBase {
 
                 user = await DB.GetUser(passwordRequest.username);
                 if (user is null || passwordRequest.password != user.Password) {
-                    Response.StatusCode = 400;
+                    ctx.Response.StatusCode = 400;
                     return EpicError.Create(
                         "error.com.epicgames.account.invalid_account_credentials", 18031,
                         "Sorry the account credentials you are using are invalid.",
@@ -97,7 +122,7 @@ public class AccountController : ControllerBase {
                 }
                 break;
             default:
-                Response.StatusCode = 400;
+                ctx.Response.StatusCode = 400;
                 return EpicError.Create(
                     "error.com.epicgames.common.oauth.unsupported_grant_type", 1016,
                     $"Unsupported grant type: {request.grant_type}",
@@ -108,11 +133,11 @@ public class AccountController : ControllerBase {
         var tokenString = GenerateToken();
         var refreshTokenString = GenerateToken();
 
-        AuthTokens.Add(new() {
+        AuthTokens[tokenString] = new() {
             TokenString = tokenString,
             RefreshTokenString = refreshTokenString,
             AccountId = user.AccountId,
-        });
+        };
 
         return new {
             access_token = tokenString,
@@ -133,45 +158,40 @@ public class AccountController : ControllerBase {
         };
     }
 
-    [HttpDelete("api/oauth/sessions/kill/{accessTokenString}")]
-    public object? OAuthSessionsKillToken() {
-        var accessTokenString = Request.RouteValues["accessTokenString"]?.ToString();
-        var authToken = AuthTokens.FirstOrDefault(x => x.TokenString == accessTokenString);
-        var clientToken = ClientTokens.FirstOrDefault(x => x.TokenString == accessTokenString);
+    static object OAuthSessionsKillToken(HttpContext ctx, string accessTokenString) {
+        var authToken = AuthTokens.GetValueOrDefault(accessTokenString);
+        var clientToken = ClientTokens.GetValueOrDefault(accessTokenString);
 
         if (authToken is null && clientToken is null) {
             Console.WriteLine($"AuthToken: {authToken?.TokenString ?? "NULL"}, ClientToken: {clientToken?.TokenString ?? "NULL"}");
-            Response.StatusCode = 404;
+            ctx.Response.StatusCode = 404;
             return EpicError.Create(
                 "errors.com.epicgames.account.auth_token.unknown_oauth_session", 18051,
                 $"Sorry we could not find the auth session '{accessTokenString}'",
-                "com.epicgames.account.public", "prod", new[] { accessTokenString ?? "" }
+                "com.epicgames.account.public", "prod", new[] { accessTokenString }
             );
         }
 
         if (authToken is not null) {
-            AuthTokens.Remove(authToken);
+            AuthTokens.TryRemove(authToken.TokenString, out _);
+            // The XMPP session authenticated with this token has to go too. It holds the account
+            // id, and one connection per account is the rule, so leaving it would lock the client
+            // out of its own next login.
+            XmppClients.DisconnectToken(authToken.TokenString);
             // Remove player from party
         }
 
-        if (clientToken is not null) ClientTokens.Remove(clientToken);
+        if (clientToken is not null) ClientTokens.TryRemove(clientToken.TokenString, out _);
 
-        Response.StatusCode = 204;
-        return null;
+        return Results.NoContent();
     }
 
-    [HttpDelete("api/oauth/sessions/kill")]
-    public object? OAuthSessionsKill() {
-        Response.StatusCode = 204;
-        return null;
-    }
+    static IResult OAuthSessionsKill() => Results.NoContent();
 
-    [HttpGet("api/public/account/{accountId}")]
-    public async Task<object> PublicAccount() {
-        var accountId = Request.RouteValues["accountId"]?.ToString();
-        var user = await DB.GetUser(accountId ?? "");
+    static async Task<object> PublicAccount(HttpContext ctx, string accountId) {
+        var user = await DB.GetUser(accountId);
         if (user is null) {
-            Response.StatusCode = 404;
+            ctx.Response.StatusCode = 404;
             return EpicError.Create(
                 "errors.com.epicgames.account.account_not_found", 18007,
                 $"Sorry we couldn't find an account for {accountId}",
@@ -186,18 +206,13 @@ public class AccountController : ControllerBase {
         };
     }
 
-    [HttpGet("api/public/account/{accountId}/externalAuths")]
-    public object PublicAccountExternalAuths() {
-        return new {};
-    }
+    static object PublicAccountExternalAuths() => new {};
 
-    [HttpGet("api/public/account/displayName/{displayName}")]
-    public async Task<object> PublicAccountDisplayName() {
-        var displayName = Request.RouteValues["displayName"]?.ToString();
-        var user = await DB.GetUser(displayName ?? "");
+    static async Task<object> PublicAccountDisplayName(HttpContext ctx, string displayName) {
+        var user = await DB.GetUser(displayName);
 
         if (user is null) {
-            Response.StatusCode = 404;
+            ctx.Response.StatusCode = 404;
             return EpicError.Create(
                 "errors.com.epicgames.account.account_not_found", 18007,
                 $"Sorry we couldn't find an account for {displayName}",
@@ -212,12 +227,11 @@ public class AccountController : ControllerBase {
         };
     }
 
-    [HttpGet("api/public/account")]
-    public async Task<object> PublicAccountMultiple() {
-        var accountIds = (string[])Request.Query["accountId"].ToArray()!;
+    static async Task<object> PublicAccountMultiple(HttpContext ctx) {
+        var accountIds = (string[])ctx.Request.Query["accountId"].ToArray()!;
 
         if (accountIds.Length > 100 || accountIds.Length == 0) {
-            Response.StatusCode = 400;
+            ctx.Response.StatusCode = 400;
             return EpicError.Create(
                 "errors.com.epicgames.account.invalid_account_id_count", 18066,
                 "Sorry, the number of account id should be at least one and not more than 100.",
@@ -237,12 +251,14 @@ public class AccountController : ControllerBase {
         });
     }
 
-    [HttpGet("api/oauth/verify")]
-    public async Task<object> OAuthVerify() {
-        var token = AuthTokens.FirstOrDefault(x => x.TokenString == Request.Headers["Authorization"].First()?.Split(" ")[1]);
+    static async Task<object> OAuthVerify(HttpContext ctx) {
+        // The middleware already matched the bearer token and put it here, so there is no need
+        // to pull the header apart again. A client-credentials token leaves this null, which is
+        // the 404 below - same as before.
+        var token = ctx.Items["AuthToken"] as AuthToken;
 
         if (token is null) {
-            Response.StatusCode = 404;
+            ctx.Response.StatusCode = 404;
             return EpicError.Create(
                 "errors.com.epicgames.common.not_found", 1004,
                 "Sorry the resource you were trying to find could not be found",
@@ -271,31 +287,3 @@ public class AccountController : ControllerBase {
         };
     }
 }
-
-public class OAuthTokenRequest {
-    // I want these to be camel case
-    public required string grant_type { get; set; }
-    public virtual string? refresh_token { get; set; }
-    public virtual string? exchange_code { get; set; }
-    public virtual string? username { get; set; }
-    public virtual string? password { get; set; }
-
-    public T? To<T>() where T : OAuthTokenRequest => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(this));
-}
-
-#pragma warning disable CS8765
-
-public class OAuthExchangeCodeRequest : OAuthTokenRequest {
-    public override required string exchange_code { get; set; }
-}
-
-public class OAuthRefreshTokenRequest : OAuthTokenRequest {
-    public override required string refresh_token { get; set; }
-}
-
-public class OAuthPasswordRequest : OAuthTokenRequest {
-    public override required string username { get; set; }
-    public override required string password { get; set; }
-}
-
-#pragma warning restore CS8765

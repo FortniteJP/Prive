@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core.Math;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core.Math;
 
 namespace AFortOnlineBeacon.Net.Actors;
 
@@ -126,7 +127,7 @@ internal static partial class FortDoorPlacements {
     ///     DOOR_WALL_NORMAL_OFFSET overrides it, for the next time a door behaves oddly.
     /// </summary>
     private static readonly float WallNormalOffset =
-        float.TryParse(Environment.GetEnvironmentVariable("DOOR_WALL_NORMAL_OFFSET"), out var offset)
+        float.TryParse(FBeaconProcess.Options.Get("DOOR_WALL_NORMAL_OFFSET"), out var offset)
             ? offset
             : 90f;
 }

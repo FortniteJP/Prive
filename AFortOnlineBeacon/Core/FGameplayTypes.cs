@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Net;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Net;
 
 namespace AFortOnlineBeacon.Core;
 
@@ -74,7 +75,7 @@ public static class FGameplayTypes {
 
     /// <summary>See <see cref="WriteTag" />. TAG_NET_INDEX_BITS overrides it.</summary>
     private static readonly int TagNetIndexBits =
-        int.TryParse(Environment.GetEnvironmentVariable("TAG_NET_INDEX_BITS"), out var bits) && bits > 0
+        int.TryParse(FBeaconProcess.Options.Get("TAG_NET_INDEX_BITS"), out var bits) && bits > 0
             ? bits
             : Net.Abilities.FortGameplayTags.NetIndexBits;
 

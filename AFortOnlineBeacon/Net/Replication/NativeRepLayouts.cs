@@ -1,4 +1,5 @@
-﻿using AFortOnlineBeacon.Core;
+﻿using AFortOnlineBeacon.Runtime;
+using AFortOnlineBeacon.Core;
 using AFortOnlineBeacon.Net.Actors;
 
 namespace AFortOnlineBeacon.Net.Replication;
@@ -91,7 +92,12 @@ internal static class NativeRepLayouts {
     }
 
     private static readonly FRepPropertyDef[] ActorProps = {
-        Reserved("bHidden"),
+        new() {
+            // 1 - real now, for the worn snowman whose CDO is hidden. See AActor.bHidden.
+            Name = "bHidden",
+            Kind = ERepPropertyKind.Bool,
+            GetByteValue = obj => (byte) (((AActor) obj).bHidden ? 1 : 0)
+        },
         new() {
             // 2, and the client's own gate on everything below - see AActor.bReplicateMovement.
             Name = "bReplicateMovement",
@@ -1103,7 +1109,14 @@ internal static class NativeRepLayouts {
             GetIntValue = obj => ((AFortWeapon) obj).GrantedAbilitySpecHandle
         },
 
-        Reserved("SecondaryAbilitySpecHandle"), // 32, 0x077C - int32
+        new() {
+            // 32, 0x077C. Same shape as 31 and 33. THE OTHER BUTTON: the client's weapon
+            // activates whatever spec this names on secondary fire, so while it was Reserved the
+            // Sneaky Snowman's "wear it" could be granted and still never be pressed.
+            Name = "SecondaryAbilitySpecHandle",
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((AFortWeapon) obj).SecondaryAbilitySpecHandle
+        },
         new() {
             // 33, 0x0780. Same shape as 31: one bare int32 indexing ActivatableAbilities. Without
             // it the client has a magazine it can empty and no way to refill - the reload input has
@@ -1128,6 +1141,33 @@ internal static class NativeRepLayouts {
             Name = "DefaultMetadata/EditActor",
             Kind = ERepPropertyKind.ObjectRef,
             GetObjectValue = obj => ((AFortWeapon) obj).DefaultMetadata ?? (UObject?) ((AFortWeapon) obj).EditActor
+        }
+    }).ToArray();
+
+    /// <summary>
+    ///     AFortDecoTool - the tool a TRAP is held with (TrapTool_C, TrapTool_ContextTrap_Athena_C).
+    ///     AFortWeapon's 1-35 unchanged, then the deco tool's own (rep_handles.py AFortTrapTool and
+    ///     AFortDecoTool_ContextTrap):
+    ///
+    ///         36 ItemDefinition             - OnRep draws the placement ghost. See AFortDecoTool.
+    ///         37 CarriedActor               - never sent (nothing is carried)
+    ///         38 ContextTrapItemDefinition  - AFortDecoTool_ContextTrap's only property
+    ///
+    ///     Its own table rather than more names on WeaponProps' handle 36: that slot is already shared
+    ///     by two sibling tools under a combined name, and a third meaning there is how a whitelist
+    ///     name stops matching the entry it was meant for.
+    /// </summary>
+    private static readonly FRepPropertyDef[] DecoToolProps = HandlePrefix(WeaponProps, 35).Concat(new FRepPropertyDef[] {
+        new() {
+            Name = "ItemDefinition",                                             // 36, 0x0950
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortDecoTool) obj).ItemDefinition
+        },
+        Reserved("CarriedActor", ERepPropertyKind.ObjectRef),                    // 37, 0x0960
+        new() {
+            Name = "ContextTrapItemDefinition",                                  // 38, 0x09A8 - context tool only
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((AFortDecoTool) obj).ContextTrapItemDefinition
         }
     }).ToArray();
 
@@ -2653,7 +2693,7 @@ internal static class NativeRepLayouts {
     ///     set, the same way APlayerState's does. That is the next lever, not a rewrite.
     /// </summary>
     private static readonly int HealthBarDifficultyRating =
-        int.TryParse(Environment.GetEnvironmentVariable("HEALTH_BAR_DIFFICULTY"), out var rating) ? rating : 1;
+        int.TryParse(FBeaconProcess.Options.Get("HEALTH_BAR_DIFFICULTY"), out var rating) ? rating : 1;
 
     private static readonly FRepPropertyDef[] BuildingActorProps = ActorProps.Concat(new FRepPropertyDef[] {
         Reserved("OwnerPersistentID", ERepPropertyKind.Int32),                    // 16
@@ -2877,6 +2917,33 @@ internal static class NativeRepLayouts {
     ///     SPID asset itself, so naming the asset is the whole message; the banner fields exist for
     ///     the sprays that draw the player's own banner, which this server has none of.
     /// </summary>
+    /// <summary>
+    ///     ABuildingTrap - a placed trap. Another ABuildingSMActor subclass: every building handle
+    ///     unchanged, 68 DECLARED for the same positional reason BuildingContainerProps declares it,
+    ///     then the trap's own 69-73 (rep_handles.py ABuildingTrap; identical for every trap Blueprint
+    ///     checked - the launch pad, campfire and bouncer only APPEND after 73). See ABuildingTrap.
+    /// </summary>
+    private static readonly FRepPropertyDef[] TrapProps = BuildingActorProps.Concat(new FRepPropertyDef[] {
+        Reserved("ProxyGameplayCueDamagePhysical.EffectContext", ERepPropertyKind.StructAtomic), // 68
+        new() {
+            Name = "TrapData",                                                    // 69, 0x0B18
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((ABuildingTrap) obj).TrapData
+        },
+        Reserved("AppliedAlterations", ERepPropertyKind.EmptyDynamicArray),       // 70, 0x0B98
+        new() {
+            Name = "AttachedTo",                                                  // 71, 0x0BB8
+            Kind = ERepPropertyKind.ObjectRef,
+            GetObjectValue = obj => ((ABuildingTrap) obj).AttachedTo
+        },
+        new() {
+            Name = "TrapLevel",                                                   // 72, 0x0C28
+            Kind = ERepPropertyKind.Int32,
+            GetIntValue = obj => ((ABuildingTrap) obj).TrapLevel
+        },
+        Reserved("OriginalTrapLevel", ERepPropertyKind.Int32)                     // 73, 0x0C2C
+    }).ToArray();
+
     private static readonly FRepPropertyDef[] SprayDecalProps = BuildingActorProps.Concat(new FRepPropertyDef[] {
         Reserved("ProxyGameplayCueDamagePhysical.EffectContext", ERepPropertyKind.StructAtomic), // 68
         new() {
@@ -2978,6 +3045,8 @@ internal static class NativeRepLayouts {
     public static readonly FRepLayout BroadcastRemoteClientInfo = new(BroadcastRemoteClientInfoProps);
     public static readonly FRepLayout Pickup = new(PickupProps);
     public static readonly FRepLayout Weapon = new(WeaponProps);
+    public static readonly FRepLayout DecoTool = new(DecoToolProps);
+    public static readonly FRepLayout Trap = new(TrapProps);
 
     /// <summary>
     ///     AFortProjectileBase, and the one handle that makes a grenade go off.
@@ -3109,12 +3178,16 @@ internal static class NativeRepLayouts {
         AFortDeployedActor => Deployed,
         // Also before ABuildingActor: a spray decal IS one, and adds handles 69-72.
         AFortSprayDecalInstance => SprayDecal,
+        // Before ABuildingActor, and adds 69-73.
+        ABuildingTrap => Trap,
         ABuildingWall => BuildingWall,
         ABuildingActor => BuildingActor,
         AFortAthenaAircraft => Aircraft,
         AFortSafeZoneIndicator => SafeZoneIndicator,
         AFortProjectileBase => Projectile,
         AFortPickup => Pickup,
+        // Before AFortWeapon: a trap tool IS one, and has its own 36-38.
+        AFortDecoTool => DecoTool,
         AFortWeapon => Weapon,
         AFortInventory => Inventory,
         AFortBroadcastRemoteClientInfo => BroadcastRemoteClientInfo,

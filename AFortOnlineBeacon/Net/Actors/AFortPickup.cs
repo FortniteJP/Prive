@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 /// <summary>
 ///     A dropped item lying in the world - what a real server spawns when a player drops something,
@@ -43,9 +44,10 @@ public class AFortPickup : AActor {
     ///     PICKUP_CULL_DISTANCE overrides it in UNITS (not squared); NET_CULL=0 disables culling
     ///     everywhere and restores exactly the old behaviour.
     /// </summary>
+    /// <summary>PICKUP_CULL_DISTANCE, from this world's options - see AActor.NetCullDistanceKnob.</summary>
+    protected override string? NetCullDistanceKnob => "PICKUP_CULL_DISTANCE";
+
     public AFortPickup() {
-        if (float.TryParse(Environment.GetEnvironmentVariable("PICKUP_CULL_DISTANCE"), out var units) && units > 0)
-            NetCullDistanceSquared = units * units;
 
         // DORMANT ONCE SENT - and pickups are the reason dormancy was worth building. The floor-loot
         // generator finds 2895 spawners; a pickup that has settled never changes again, and every

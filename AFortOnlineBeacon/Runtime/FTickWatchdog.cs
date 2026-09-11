@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 namespace AFortOnlineBeacon.Runtime;
 
@@ -20,10 +20,10 @@ namespace AFortOnlineBeacon.Runtime;
 ///     TICK_WATCHDOG_MS sets the threshold (default 1000). TICK_WATCHDOG=0 turns it off.
 /// </summary>
 public sealed class FTickWatchdog {
-    private static readonly bool Enabled = Environment.GetEnvironmentVariable("TICK_WATCHDOG") is not "0";
+    private static readonly bool Enabled = FBeaconProcess.Options.Get("TICK_WATCHDOG") is not "0";
 
     private static readonly float ThresholdMs =
-        float.TryParse(Environment.GetEnvironmentVariable("TICK_WATCHDOG_MS"), out var ms) && ms > 0f
+        float.TryParse(FBeaconProcess.Options.Get("TICK_WATCHDOG_MS"), out var ms) && ms > 0f
             ? ms
             : 1000f;
 

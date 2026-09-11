@@ -95,49 +95,63 @@ internal static class FortSafeZoneSystem {
     /// <summary>Default.SafeZone.StartDelay - how long the opening circle holds before phase 1 begins.</summary>
     private const float StartDelaySeconds = 60f;
 
-    private static bool Enabled => Environment.GetEnvironmentVariable("SAFEZONE_ENABLED") is "1";
+    /// <summary>This world's share of FortSafeZoneSystem's state - see FWorldSubsystem.</summary>
+    private sealed class FSafeZoneState : FWorldSubsystem {
+        public bool Enabled => Options.Get("SAFEZONE_ENABLED") is "1";
 
-    private static float EnvFloat(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+        public int _phaseIndex;
 
-    /// <summary>
-    ///     Divides every wait and every shrink, so the whole storm can be watched end to end in a
-    ///     short session. It exists because the real timeline makes this feature effectively
-    ///     untestable: the first shrink is 260 s in and the full run is over twenty minutes, so a
-    ///     tester who quits after five minutes sees a storm that never did ANYTHING and cannot tell
-    ///     that from one that is broken - which is exactly what happened on the first live run.
-    ///
-    ///     Only the CLOCK is scaled. Radii, centres and damage fractions stay exactly as shipped, so
-    ///     a compressed run still exercises the same geometry and the same wire values.
-    /// </summary>
-    private static float TimeScale {
-        get {
-            var scale = EnvFloat("SAFEZONE_TIME_SCALE", 1f);
-            return scale > 0f ? scale : 1f;
+        /// <summary>
+        ///     The window phase <see cref="_phaseIndex"/> shrinks in, decided AS SOON AS THE PREVIOUS
+        ///     PHASE ENDS rather than when this one starts, because that is what the indicator has to be
+        ///     carrying for the client's countdown to be right during the hold.
+        ///
+        ///     Each one is anchored to the PREVIOUS phase's finish, never to `now`. Anchoring to `now`
+        ///     adds however late the tick was to every phase and accumulates that over all ten of them,
+        ///     which is a storm that drifts steadily further from the schedule the longer a match runs.
+        /// </summary>
+        public float _shrinkStart;
+
+        public float _shrinkFinish;
+
+        public bool _shrinking;
+
+        /// <summary>Whether the forecast circle for <see cref="_phaseIndex"/> is up - see AnnounceNext.</summary>
+        public bool _announced;
+
+        public float _nextDamageTime;
+
+        /// <summary>
+        ///     Divides every wait and every shrink, so the whole storm can be watched end to end in a
+        ///     short session. It exists because the real timeline makes this feature effectively
+        ///     untestable: the first shrink is 260 s in and the full run is over twenty minutes, so a
+        ///     tester who quits after five minutes sees a storm that never did ANYTHING and cannot tell
+        ///     that from one that is broken - which is exactly what happened on the first live run.
+        ///
+        ///     Only the CLOCK is scaled. Radii, centres and damage fractions stay exactly as shipped, so
+        ///     a compressed run still exercises the same geometry and the same wire values.
+        /// </summary>
+        public float TimeScale {
+            get {
+                var scale = Options.Float("SAFEZONE_TIME_SCALE", 1f);
+                return scale > 0f ? scale : 1f;
+            }
+        }
+
+        /// <summary>
+        ///     This world's storm dice. PER WORLD for two reasons, both real: System.Random is not
+        ///     thread-safe, so two worlds drawing from one would eventually corrupt it; and SAFEZONE_SEED
+        ///     exists to make a storm REPRODUCIBLE, which it could not be if another world were pulling
+        ///     numbers out of the same sequence in between.
+        /// </summary>
+        public Random Rng = null!;
+
+        protected internal override void Initialize() {
+            Rng = new Random(Options.Int("SAFEZONE_SEED", 1337));
         }
     }
 
-    private static int _phaseIndex;
-
-    /// <summary>
-    ///     The window phase <see cref="_phaseIndex"/> shrinks in, decided AS SOON AS THE PREVIOUS
-    ///     PHASE ENDS rather than when this one starts, because that is what the indicator has to be
-    ///     carrying for the client's countdown to be right during the hold.
-    ///
-    ///     Each one is anchored to the PREVIOUS phase's finish, never to `now`. Anchoring to `now`
-    ///     adds however late the tick was to every phase and accumulates that over all ten of them,
-    ///     which is a storm that drifts steadily further from the schedule the longer a match runs.
-    /// </summary>
-    private static float _shrinkStart;
-
-    private static float _shrinkFinish;
-    private static bool _shrinking;
-
-    /// <summary>Whether the forecast circle for <see cref="_phaseIndex"/> is up - see AnnounceNext.</summary>
-    private static bool _announced;
-    private static float _nextDamageTime;
-    private static readonly Random Rng = new(
-        int.TryParse(Environment.GetEnvironmentVariable("SAFEZONE_SEED"), out var seed) ? seed : 1337);
+    private static FSafeZoneState StateOf(UWorld world) => world.GetSubsystem<FSafeZoneState>();
 
     /// <summary>Damage is applied on a whole-second cadence, so a 1 dps phase really is 1 per second.</summary>
     private const float DamageIntervalSeconds = 1f;
@@ -171,12 +185,14 @@ internal static class FortSafeZoneSystem {
     ///     the same tick warmup ends, and whichever of the two ticks first would otherwise decide it.
     /// </summary>
     public static void Tick(UWorld world, float now) {
-        if (!Enabled) return;
+        var state = StateOf(world);
+
+        if (!state.Enabled) return;
         if (world.GameState is not { } gameState) return;
 
         var indicator = gameState.SafeZoneIndicator;
         if (indicator == null) {
-            var noBus = Environment.GetEnvironmentVariable("AIRCRAFT_ENABLED") is not "1";
+            var noBus = world.Options.Get("AIRCRAFT_ENABLED") is not "1";
             var armed = gameState.GamePhase is EAthenaGamePhase.SafeZones or EAthenaGamePhase.EndGame
                         || (noBus && gameState.AircraftStartTime > 0f && now >= gameState.AircraftStartTime);
             if (!armed) return;
@@ -185,7 +201,7 @@ internal static class FortSafeZoneSystem {
             if (indicator == null) return;
         }
 
-        AdvancePhase(gameState, indicator, now);
+        AdvancePhase(world, gameState, indicator, now);
         indicator.UpdateCurrentRadius(now);
 
         var biting = gameState.GamePhase is EAthenaGamePhase.Aircraft or EAthenaGamePhase.SafeZones
@@ -210,7 +226,7 @@ internal static class FortSafeZoneSystem {
         // "Near the edge" as a fraction of the current radius rather than a fixed distance: the
         // final circles are 1090 units across, where any fixed warning band would cover the whole
         // thing. NOT a sourced number - the shipped data has no row for it.
-        var edgeBand = radius * EnvFloat("SAFEZONE_EDGE_BAND", 0.1f);
+        var edgeBand = radius * world.Options.Float("SAFEZONE_EDGE_BAND", 0.1f);
         var inner = MathF.Max(0f, radius - edgeBand);
 
         foreach (var connection in world.NetDriver?.ClientConnections ?? Enumerable.Empty<UNetConnection>()) {
@@ -236,17 +252,19 @@ internal static class FortSafeZoneSystem {
     }
 
     private static AFortSafeZoneIndicator? Spawn(UWorld world, AGameState gameState, float now) {
+        var state = StateOf(world);
+
         var indicator = world.SpawnActor<AFortSafeZoneIndicator>(
             Core.Objects.GUClassArray.StaticClass<AFortSafeZoneIndicator>(),
             new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
         if (indicator == null) return null;
 
         var centre = new FVector {
-            X = EnvFloat("SAFEZONE_CENTER_X", InitialCentre.X),
-            Y = EnvFloat("SAFEZONE_CENTER_Y", InitialCentre.Y),
-            Z = EnvFloat("SAFEZONE_CENTER_Z", InitialCentre.Z)
+            X = world.Options.Float("SAFEZONE_CENTER_X", InitialCentre.X),
+            Y = world.Options.Float("SAFEZONE_CENTER_Y", InitialCentre.Y),
+            Z = world.Options.Float("SAFEZONE_CENTER_Z", InitialCentre.Z)
         };
-        var radius = EnvFloat("SAFEZONE_START_RADIUS", InitialRadius);
+        var radius = world.Options.Float("SAFEZONE_START_RADIUS", InitialRadius);
 
         indicator.SetRole(ENetRole.ROLE_Authority);
         indicator.SetReplicates(true);
@@ -254,7 +272,7 @@ internal static class FortSafeZoneSystem {
         // The map's preview circle wants to know where the FIRST shrink is heading before it starts,
         // which is exactly what the real capture carried (NextNextRadius 80000 while Next was still
         // 185000). Pick it now so the preview is right from the first frame.
-        var (nextCentre, nextRadius) = PickNext(centre, radius, 1);
+        var (nextCentre, nextRadius) = PickNext(world, centre, radius, 1);
         indicator.NextNextCenter = nextCentre;
         indicator.NextNextRadius = nextRadius;
 
@@ -281,84 +299,86 @@ internal static class FortSafeZoneSystem {
         // From `now`, i.e. the tick the safe zone phase was noticed, which costs at most one tick of
         // lateness ONCE. It does not accumulate: every later phase is anchored to the previous
         // phase's scheduled finish rather than to whenever it was noticed - see _shrinkStart.
-        gameState.SafeZonesStartTime = now + EnvFloat("SAFEZONE_START_DELAY", StartDelaySeconds) / TimeScale;
+        gameState.SafeZonesStartTime = now + world.Options.Float("SAFEZONE_START_DELAY", StartDelaySeconds) / state.TimeScale;
 
-        _phaseIndex = 1;
-        _shrinking = false;
-        _announced = false;
-        _shrinkStart = gameState.SafeZonesStartTime + Phases[1].WaitSeconds / TimeScale;
-        _shrinkFinish = _shrinkStart + Phases[1].ShrinkSeconds / TimeScale;
+        state._phaseIndex = 1;
+        state._shrinking = false;
+        state._announced = false;
+        state._shrinkStart = gameState.SafeZonesStartTime + Phases[1].WaitSeconds / state.TimeScale;
+        state._shrinkFinish = state._shrinkStart + Phases[1].ShrinkSeconds / state.TimeScale;
 
         // And tell the client about that window NOW, while the circle is still holding - see
         // AFortSafeZoneIndicator.HoldUntil for why the countdown is wrong without it.
-        indicator.HoldUntil(centre, radius, _shrinkStart);
+        indicator.HoldUntil(centre, radius, state._shrinkStart);
 
         Console.WriteLine($"FortSafeZoneSystem: storm armed - centre {centre} radius {radius}, " +
                           $"safe zones start t={gameState.SafeZonesStartTime:F1}, " +
-                          $"first shrink t={_shrinkStart:F1}..{_shrinkFinish:F1}s toward radius {nextRadius} " +
+                          $"first shrink t={state._shrinkStart:F1}..{state._shrinkFinish:F1}s toward radius {nextRadius} " +
                           $"at {nextCentre}");
         return indicator;
     }
 
-    private static void AdvancePhase(AGameState gameState, AFortSafeZoneIndicator indicator, float now) {
-        if (_phaseIndex >= Phases.Length) return;
+    private static void AdvancePhase(UWorld world, AGameState gameState, AFortSafeZoneIndicator indicator, float now) {
+        var state = StateOf(world);
 
-        if (!_shrinking) {
+        if (state._phaseIndex >= Phases.Length) return;
+
+        if (!state._shrinking) {
             // THE FORECAST GOES UP FIRST, at SafeZonesStartTime, and the storm does not move until
             // _shrinkStart - which for phase 1 is a further WaitTime[1] away. See
             // AFortSafeZoneIndicator.AnnounceNext for why the client is happy to draw a circle it is
             // not yet closing to.
-            if (!_announced && now >= gameState.SafeZonesStartTime) {
-                Announce(gameState, indicator);
-                Console.WriteLine($"FortSafeZoneSystem: forecast circle for phase {_phaseIndex} is up - " +
+            if (!state._announced && now >= gameState.SafeZonesStartTime) {
+                Announce(world, gameState, indicator);
+                Console.WriteLine($"FortSafeZoneSystem: forecast circle for phase {state._phaseIndex} is up - " +
                                   $"radius {indicator.NextRadius} at {indicator.NextCenter}, " +
-                                  $"storm starts moving at t={_shrinkStart:F1}");
+                                  $"storm starts moving at t={state._shrinkStart:F1}");
             }
 
-            if (now < _shrinkStart) return;
+            if (now < state._shrinkStart) return;
 
             // The wait is over: open the window. The times used are the ADVERTISED ones, not `now` -
             // the client has been counting down to exactly these, and moving them by a tick's
             // lateness would make the circle jump.
-            indicator.SetShrinkWindow(_shrinkStart, _shrinkFinish);
-            _shrinking = true;
+            indicator.SetShrinkWindow(state._shrinkStart, state._shrinkFinish);
+            state._shrinking = true;
 
-            Console.WriteLine($"FortSafeZoneSystem: phase {_phaseIndex} closing to radius " +
+            Console.WriteLine($"FortSafeZoneSystem: phase {state._phaseIndex} closing to radius " +
                               $"{indicator.NextRadius} at {indicator.NextCenter} over " +
-                              $"t={_shrinkStart:F1}..{_shrinkFinish:F1}s " +
-                              $"({Phases[_phaseIndex].DamageFraction:P0} of max health per second outside)");
+                              $"t={state._shrinkStart:F1}..{state._shrinkFinish:F1}s " +
+                              $"({Phases[state._phaseIndex].DamageFraction:P0} of max health per second outside)");
             return;
         }
 
-        if (now < _shrinkFinish) return;
+        if (now < state._shrinkFinish) return;
 
         // The shrink finished. Hold at the new circle - and schedule the next window straight away,
         // anchored to this one's finish rather than to `now`.
-        _shrinking = false;
-        _phaseIndex++;
+        state._shrinking = false;
+        state._phaseIndex++;
 
-        if (_phaseIndex >= Phases.Length) {
-            gameState.SafeZonePhase = (byte) Math.Min(byte.MaxValue, _phaseIndex);
+        if (state._phaseIndex >= Phases.Length) {
+            gameState.SafeZonePhase = (byte) Math.Min(byte.MaxValue, state._phaseIndex);
             indicator.HoldAt(indicator.NextCenter, indicator.NextRadius, now);
             Console.WriteLine("FortSafeZoneSystem: final circle reached, storm is done closing");
             return;
         }
 
-        _shrinkStart = _shrinkFinish + Phases[_phaseIndex].WaitSeconds / TimeScale;
-        var previousFinish = _shrinkFinish;
-        _shrinkFinish = _shrinkStart + Phases[_phaseIndex].ShrinkSeconds / TimeScale;
+        state._shrinkStart = state._shrinkFinish + Phases[state._phaseIndex].WaitSeconds / state.TimeScale;
+        var previousFinish = state._shrinkFinish;
+        state._shrinkFinish = state._shrinkStart + Phases[state._phaseIndex].ShrinkSeconds / state.TimeScale;
 
         // A new hold - a zero-length window at the next shrink - and the next forecast circle goes
         // up straight away. Only the FIRST one waits, and what it waits for is
         // Default.SafeZone.StartDelay, which is the whole reason SafeZonesStartTime exists as a
         // separate number from the shrink times.
         var reached = indicator.NextRadius;
-        indicator.SetShrinkWindow(_shrinkStart, _shrinkStart);
-        Announce(gameState, indicator);
+        indicator.SetShrinkWindow(state._shrinkStart, state._shrinkStart);
+        Announce(world, gameState, indicator);
 
-        Console.WriteLine($"FortSafeZoneSystem: phase {_phaseIndex} holding at radius {reached} " +
-                          $"until t={_shrinkStart:F1} (waited from {previousFinish:F1}), then closing to " +
-                          $"{indicator.NextRadius} at {indicator.NextCenter} until t={_shrinkFinish:F1}");
+        Console.WriteLine($"FortSafeZoneSystem: phase {state._phaseIndex} holding at radius {reached} " +
+                          $"until t={state._shrinkStart:F1} (waited from {previousFinish:F1}), then closing to " +
+                          $"{indicator.NextRadius} at {indicator.NextCenter} until t={state._shrinkFinish:F1}");
     }
 
     /// <summary>
@@ -385,15 +405,17 @@ internal static class FortSafeZoneSystem {
     ///     FortDamageSystem.Kill. On this client, "the value is correct on the wire" and "the client
     ///     acts on it" are separate questions, and the second one is always about an OnRep.)
     /// </summary>
-    private static void Announce(AGameState gameState, AFortSafeZoneIndicator indicator) {
+    private static void Announce(UWorld world, AGameState gameState, AFortSafeZoneIndicator indicator) {
+        var state = StateOf(world);
+
         indicator.AnnounceNext();
 
-        var (afterCentre, afterRadius) = PickNext(indicator.NextCenter, indicator.NextRadius, _phaseIndex + 1);
+        var (afterCentre, afterRadius) = PickNext(world, indicator.NextCenter, indicator.NextRadius, state._phaseIndex + 1);
         indicator.NextNextCenter = afterCentre;
         indicator.NextNextRadius = afterRadius;
 
-        gameState.SafeZonePhase = (byte) Math.Min(byte.MaxValue, _phaseIndex);
-        _announced = true;
+        gameState.SafeZonePhase = (byte) Math.Min(byte.MaxValue, state._phaseIndex);
+        state._announced = true;
     }
 
     /// <summary>
@@ -418,12 +440,12 @@ internal static class FortSafeZoneSystem {
     ///     which this server has no notion of, so a circle here can centre somewhere a real match's
     ///     would usually have rerolled away from.
     /// </summary>
-    private static (FVector Centre, float Radius) PickNext(FVector centre, float radius, int phaseIndex) {
+    private static (FVector Centre, float Radius) PickNext(UWorld world, FVector centre, float radius, int phaseIndex) {
         var nextRadius = phaseIndex < Phases.Length ? Phases[phaseIndex].Radius : 0f;
         var drift = MathF.Max(0f, radius - nextRadius);
 
-        var angle = (float) (Rng.NextDouble() * System.Math.PI * 2.0);
-        var distance = (float) (Rng.NextDouble() * drift);
+        var angle = (float) (StateOf(world).Rng.NextDouble() * System.Math.PI * 2.0);
+        var distance = (float) (StateOf(world).Rng.NextDouble() * drift);
 
         return (new FVector {
             X = centre.X + MathF.Cos(angle) * distance,
@@ -444,10 +466,12 @@ internal static class FortSafeZoneSystem {
     ///     names the storm in the elimination feed.
     /// </summary>
     private static void ApplyStormDamage(UWorld world, AFortSafeZoneIndicator indicator, float now) {
-        if (now < _nextDamageTime) return;
-        _nextDamageTime = now + DamageIntervalSeconds;
+        var state = StateOf(world);
 
-        var phase = _phaseIndex < Phases.Length ? Phases[_phaseIndex] : Phases[^1];
+        if (now < state._nextDamageTime) return;
+        state._nextDamageTime = now + DamageIntervalSeconds;
+
+        var phase = state._phaseIndex < Phases.Length ? Phases[state._phaseIndex] : Phases[^1];
         if (phase.DamageFraction <= 0f) return;
 
         var centre = indicator.CurrentCentre(now);

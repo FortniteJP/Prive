@@ -147,8 +147,15 @@ public class APlayerController : AController {
     ///     refused as "inventory full". 5 is Battle Royale's real backpack size and what
     ///     Project-Reboot-3.0 sets; raider3.5 uses 100. BACKPACK_SIZE overrides it.
     /// </summary>
-    public int OverriddenBackpackSize { get; set; } =
-        int.TryParse(Environment.GetEnvironmentVariable("BACKPACK_SIZE"), out var size) && size > 0 ? size : 5;
+    public int OverriddenBackpackSize {
+        // The DEFAULT is this world's BACKPACK_SIZE, resolved on first read rather than in an
+        // initialiser, which would run before the controller belongs to a world.
+        get => _overriddenBackpackSize ??=
+            int.TryParse(WorldOptions.Get("BACKPACK_SIZE"), out var size) && size > 0 ? size : 5;
+        set => _overriddenBackpackSize = value;
+    }
+
+    private int? _overriddenBackpackSize;
 
     /// <summary>
     ///     AFortPlayerController::WorldInventory - see AFortInventory's doc comment for why

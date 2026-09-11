@@ -49,6 +49,47 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     ///     The NAME_GameNetDriver game connection(s) for client/server communication
     /// </summary>
     public UNetDriver? NetDriver { get; private set; }
+
+    /// <summary>
+    ///     This world's stand-ins for actors that already exist in the client's map - chests, doors,
+    ///     destructible scenery. Per world, not process-wide: they carry match state, so sharing
+    ///     them would hand a second match the first one's looted chests. Plain immutable assets
+    ///     still come from the shared <see cref="UAssetRegistry"/>.
+    /// </summary>
+    public UMapActorRegistry MapActors { get; } = new();
+
+    /// <summary>
+    ///     Every tunable this world runs with - see <see cref="FBeaconOptions" />. Per world, so two
+    ///     worlds in one process can run different playlists with different settings.
+    ///
+    ///     INIT-ONLY, and that is load-bearing: the systems below cache what they parse out of these
+    ///     on first use, so a value that could change after the world started would be read by some
+    ///     of them and not others. Set it in the object initializer -
+    ///     <c>new FortniteWorld { Options = ... }</c> - or leave it, and the world takes the process
+    ///     environment exactly as the beacon always did (which is what keeps run-beacon.ps1 working).
+    /// </summary>
+    public FBeaconOptions Options { get; init; } = FBeaconOptions.FromEnvironment();
+
+    private readonly Dictionary<Type, FWorldSubsystem> _subsystems = new();
+
+    /// <summary>
+    ///     UWorld::GetSubsystem - this world's single instance of <typeparamref name="T" />, created
+    ///     on first use. See <see cref="FWorldSubsystem" /> for why match state lives here rather than
+    ///     in the systems' own statics.
+    ///
+    ///     Locked because a world is not touched from one thread only: RPCs arrive from the socket
+    ///     side as well as from the tick. The lock is per world, so two worlds never contend.
+    /// </summary>
+    public T GetSubsystem<T>() where T : FWorldSubsystem, new() {
+        lock (_subsystems) {
+            if (_subsystems.TryGetValue(typeof(T), out var existing)) return (T) existing;
+
+            var created = new T { World = this };
+            _subsystems[typeof(T)] = created;
+            created.Initialize();
+            return created;
+        }
+    }
     
     /// <summary>
     ///     Whether actors have been initialized for play
@@ -121,7 +162,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
         // ABuildingSMActor::MarkConnectedBuildingsForStructuralIntegrityCheck, paced by
         // BuildingRetestSupportedByWorldDelay) rather than running inline off each destruction.
         // Ahead of the NetDriver below so a cascade's channel closes go out on this same tick.
-        BuildingStructuralSupportSystem.Tick(TimeSeconds);
+        BuildingStructuralSupportSystem.Of(this).Tick(TimeSeconds);
         _watchdog.Mark("BuildingStructuralSupport");
 
         // Finishes any death that has been started this frame or an earlier one. Ahead of the
@@ -140,7 +181,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
 
         // Dropped items still in the air, when PICKUP_TOSS_STREAM asks for a toss to be watched
         // rather than solved up front. No-op otherwise - see FortPickupToss.
-        Net.FortPickupToss.Tick(this, TimeSeconds);
+        Net.FortPickupToss.Of(this).Tick(TimeSeconds);
         _watchdog.Mark("FortPickupToss");
 
         // Emoji cues waiting for the throw to leave the hand - the montage notify this server cannot
@@ -515,9 +556,11 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     ///     to an empty string to send none) so candidates can be swapped without a rebuild - see the
     ///     call site in SpawnPlayActor for why this list exists at all.
     /// </summary>
-    private static readonly string[] ClientInitRpcs =
-        (Environment.GetEnvironmentVariable("CLIENT_INIT_RPCS") ?? "ClientOnGenericPlayerInitialization")
+    private string[] ClientInitRpcs => _clientInitRpcs ??=
+        (Options.Get("CLIENT_INIT_RPCS") ?? "ClientOnGenericPlayerInitialization")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private string[]? _clientInitRpcs;
 
     /// <summary>
     ///     AGameModeBase::HUDClass for Athena - the class ClientSetHUD tells the client to
@@ -539,8 +582,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
     ///
     ///     Overridable via HUD_CLASS.
     /// </summary>
-    private static readonly string HudClassPath =
-        Environment.GetEnvironmentVariable("HUD_CLASS") ?? "/Script/FortniteGame.FortUIPvP";
+    private string HudClassPath => Options.Get("HUD_CLASS") ?? "/Script/FortniteGame.FortUIPvP";
 
     private APlayerController? SpawnPlayActor(UPlayer newPlayer, ENetRole remoteRole, FUrl inURL, FUniqueNetIdRepl uniqueId, out string error, byte inNetPlayerIndex = 0) {
         error = string.Empty;
@@ -722,7 +764,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                 // not been given a pawn yet at this point in a real match, so the only sensible
                 // aiming point is where this connection is about to be put; the pawn's own transform
                 // once it exists, and the warmup anchor before that.
-                if (Environment.GetEnvironmentVariable("CLIENT_SPECTATOR_CAMERA") is not "0") {
+                if (Options.Get("CLIENT_SPECTATOR_CAMERA") is not "0") {
                     var cameraPawn = newPlayerController.Pawn;
                     pcChannel.SendClientSetSpectatorCamera(
                         cameraPawn?.GetActorLocation() ?? FortWarmupStarts.Anchor,
@@ -767,7 +809,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                     // WorldInventory already has its own channel and its own property push by this
                     // point (that happens ~80 lines up); what this adds is the client being told to
                     // re-read it now rather than whenever it next notices.
-                    if (Environment.GetEnvironmentVariable("CLIENT_FORCE_INVENTORY_UPDATE") is not "0") {
+                    if (Options.Get("CLIENT_FORCE_INVENTORY_UPDATE") is not "0") {
                         pcChannel.SendParameterlessRpc("ClientForceWorldInventoryUpdate");
                     }
 
@@ -787,7 +829,7 @@ public abstract partial class UWorld : FNetworkNotify, IAsyncDisposable {
                     // been pre-empting the client's slot choice (see AGameModeBase.SpawnAndPossessPawn).
                     // It stays because the real server demonstrably sends it, and it stays switchable
                     // because its benefit HERE has never been demonstrated: CLIENT_ACTIVATE_SLOT=0.
-                    if (Environment.GetEnvironmentVariable("CLIENT_ACTIVATE_SLOT") is not "0") {
+                    if (Options.Get("CLIENT_ACTIVATE_SLOT") is not "0") {
                         pcChannel.SendClientActivateSlot();
                     }
                 }

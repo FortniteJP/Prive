@@ -29,33 +29,55 @@ namespace AFortOnlineBeacon.Net.Actors;
 ///     once during the drop.
 /// </summary>
 internal static partial class FortVehicleSpawns {
-    private static bool Enabled => Environment.GetEnvironmentVariable("VEHICLES_ENABLED") is not "0";
 
-    private static float EnvFloat(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    /// <summary>This world's share of FortVehicleSpawns's state - see FWorldSubsystem.</summary>
+    private sealed class FVehicleSpawnState : FWorldSubsystem {
+        public bool Enabled => Options.Get("VEHICLES_ENABLED") is not "0";
 
-    private static int EnvInt(string name, int fallback) =>
-        int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+        /// <summary>How many spawn points there are - one per X,Y,Z,Yaw quad.</summary>
+        public int Count => Spawns.Length / 4;
 
-    /// <summary>How many spawn points there are - one per X,Y,Z,Yaw quad.</summary>
-    public static int Count => Spawns.Length / 4;
+        /// <summary>
+        ///     One flag per spawn point, set once it has been used so a vehicle is never spawned twice.
+        ///
+        ///     Starts TRUE for every spawner the game data does not want used, which is how the spawn
+        ///     percentages are enforced - see ChooseActiveSpawners.
+        ///
+        ///     Built on first use rather than in a field initializer - Spawns lives in this partial
+        ///     class's OTHER file, and a partial class's static field initializers run in whatever order
+        ///     the compiler fed it the files. FortFloorLoot lost a whole world tick to exactly that.
+        /// </summary>
+        public bool[]? _spawned;
 
-    /// <summary>
-    ///     One flag per spawn point, set once it has been used so a vehicle is never spawned twice.
-    ///
-    ///     Starts TRUE for every spawner the game data does not want used, which is how the spawn
-    ///     percentages are enforced - see ChooseActiveSpawners.
-    ///
-    ///     Built on first use rather than in a field initializer - Spawns lives in this partial
-    ///     class's OTHER file, and a partial class's static field initializers run in whatever order
-    ///     the compiler fed it the files. FortFloorLoot lost a whole world tick to exactly that.
-    /// </summary>
-    private static bool[]? _spawned;
+        public bool[] Spawned => _spawned ??= ChooseActiveSpawners(World);
 
-    private static bool[] Spawned => _spawned ??= ChooseActiveSpawners();
+        /// <summary>
+        ///     TEMPORARY, AND ON BY DEFAULT ON PURPOSE - the same switch FortSupplyLlamas reads, so one
+        ///     variable moves both. Puts ONE OF EVERY vehicle type on the warmup island instead of
+        ///     spawning the real map placement near players.
+        ///
+        ///     Two reasons it is worth more than the real placement right now. The nearest Jackal spawner
+        ///     to the island is about 88,000 units away - four times the spawn radius - so on the warmup
+        ///     island the real mode produces NOTHING to look at. And every type is spawned, not just the
+        ///     Jackal, which is the only way to find out whether the other six class paths resolve on the
+        ///     client at all: they are at 0% in the game data (Season 10 vaulted them), so the real mode
+        ///     can never exercise them.
+        ///
+        ///     SPAWN_AT_WARMUP=0 restores the real, percentage-driven, proximity-spawned placement.
+        /// </summary>
+        public bool AtWarmupIsland => Options.Get("SPAWN_AT_WARMUP") is not "0";
 
-    private static readonly Random Rng = new(
-        int.TryParse(Environment.GetEnvironmentVariable("VEHICLE_SEED"), out var seed) ? seed : 20191001);
+        public bool _placedAtWarmup;
+
+        public float _nextSweep;
+        public Random Rng = default!;
+        protected internal override void Initialize() {
+            Rng = new(
+                int.TryParse(Options.Get("VEHICLE_SEED"), out var seed) ? seed : 20191001);
+        }
+    }
+
+    private static FVehicleSpawnState StateOf(UWorld world) => world.GetSubsystem<FVehicleSpawnState>();
 
     /// <summary>
     ///     Decide, once, which of the 325 placed spawners actually produce a vehicle.
@@ -71,15 +93,17 @@ internal static partial class FortVehicleSpawns {
     ///     VEHICLE_SEED changes it; VEHICLE_PERCENT_OVERRIDE ignores the table entirely and gives
     ///     every type the same share, which is the switch to flip to see a vaulted vehicle.
     /// </summary>
-    private static bool[] ChooseActiveSpawners() {
+    private static bool[] ChooseActiveSpawners(UWorld world) {
+        var state = StateOf(world);
+
         // Already-used flags: true here means "never spawn this one".
-        var used = new bool[Count];
-        var overridePercent = float.TryParse(Environment.GetEnvironmentVariable("VEHICLE_PERCENT_OVERRIDE"),
+        var used = new bool[state.Count];
+        var overridePercent = float.TryParse(world.Options.Get("VEHICLE_PERCENT_OVERRIDE"),
             out var forced) ? forced : (float?) null;
 
         for (byte type = 0; type < VehicleClasses.Length; type++) {
             var points = new List<int>();
-            for (var i = 0; i < Count; i++)
+            for (var i = 0; i < state.Count; i++)
                 if (Types[i] == type) points.Add(i);
 
             var percent = Math.Clamp(overridePercent ?? SpawnPercents[type], 0f, 100f);
@@ -87,7 +111,7 @@ internal static partial class FortVehicleSpawns {
 
             // Fisher-Yates over the type's own spawners, then keep the first `keep`.
             for (var i = points.Count - 1; i > 0; i--) {
-                var j = Rng.Next(i + 1);
+                var j = state.Rng.Next(i + 1);
                 (points[i], points[j]) = (points[j], points[i]);
             }
 
@@ -101,45 +125,27 @@ internal static partial class FortVehicleSpawns {
         return used;
     }
 
-    /// <summary>
-    ///     TEMPORARY, AND ON BY DEFAULT ON PURPOSE - the same switch FortSupplyLlamas reads, so one
-    ///     variable moves both. Puts ONE OF EVERY vehicle type on the warmup island instead of
-    ///     spawning the real map placement near players.
-    ///
-    ///     Two reasons it is worth more than the real placement right now. The nearest Jackal spawner
-    ///     to the island is about 88,000 units away - four times the spawn radius - so on the warmup
-    ///     island the real mode produces NOTHING to look at. And every type is spawned, not just the
-    ///     Jackal, which is the only way to find out whether the other six class paths resolve on the
-    ///     client at all: they are at 0% in the game data (Season 10 vaulted them), so the real mode
-    ///     can never exercise them.
-    ///
-    ///     SPAWN_AT_WARMUP=0 restores the real, percentage-driven, proximity-spawned placement.
-    /// </summary>
-    private static bool AtWarmupIsland => FortSupplyLlamas.AtWarmupIsland;
-
-    private static bool _placedAtWarmup;
-
-    private static float _nextSweep;
-
     /// <summary>Vehicles do not need to appear the instant a player is in range.</summary>
     private const float SweepIntervalSeconds = 1f;
 
     public static void Tick(UWorld world, float now) {
-        if (!Enabled || now < _nextSweep) return;
-        _nextSweep = now + SweepIntervalSeconds;
+        var state = StateOf(world);
 
-        if (AtWarmupIsland) {
+        if (!state.Enabled || now < state._nextSweep) return;
+        state._nextSweep = now + SweepIntervalSeconds;
+
+        if (state.AtWarmupIsland) {
             PlaceOnWarmupIsland(world);
             return;
         }
 
         if (world.NetDriver is not { } netDriver) return;
 
-        var radius = EnvFloat("VEHICLE_RADIUS", 25000f);
+        var radius = world.Options.Float("VEHICLE_RADIUS", 25000f);
         var radiusSquared = radius * radius;
-        var maxHeight = EnvFloat("VEHICLE_MAX_HEIGHT", 2500f);
-        var budget = EnvInt("VEHICLES_PER_SWEEP", 3);
-        var spawned = Spawned;
+        var maxHeight = world.Options.Float("VEHICLE_MAX_HEIGHT", 2500f);
+        var budget = world.Options.Int("VEHICLES_PER_SWEEP", 3);
+        var spawned = state.Spawned;
 
         foreach (var connection in netDriver.ClientConnections) {
             if (connection.PlayerController is not { } pc) continue;
@@ -180,12 +186,14 @@ internal static partial class FortVehicleSpawns {
     ///     other rather than seven vehicles pointing the same way.
     /// </summary>
     private static void PlaceOnWarmupIsland(UWorld world) {
-        if (_placedAtWarmup) return;
-        _placedAtWarmup = true;
+        var state = StateOf(world);
+
+        if (state._placedAtWarmup) return;
+        state._placedAtWarmup = true;
 
         var anchor = FortWarmupStarts.Anchor;
-        var spacing = EnvFloat("WARMUP_VEHICLE_SPACING", 700f);
-        var offset = EnvFloat("WARMUP_VEHICLE_OFFSET", 2000f);
+        var spacing = world.Options.Float("WARMUP_VEHICLE_SPACING", 700f);
+        var offset = world.Options.Float("WARMUP_VEHICLE_OFFSET", 2000f);
 
         Console.WriteLine($"FortVehicleSpawns: SPAWN_AT_WARMUP - placing one of each of the " +
                           $"{VehicleClasses.Length} vehicle types beside the warmup island start " +
@@ -218,7 +226,7 @@ internal static partial class FortVehicleSpawns {
 
         if (vehicle == null) return;
 
-        vehicle.SetActorLocation(new FVector { X = x, Y = y, Z = z + EnvFloat("VEHICLE_Z_OFFSET", 50f) });
+        vehicle.SetActorLocation(new FVector { X = x, Y = y, Z = z + world.Options.Float("VEHICLE_Z_OFFSET", 50f) });
         vehicle.SetActorRotation(new FRotator { Yaw = yaw });
         vehicle.SetRole(ENetRole.ROLE_Authority);
         vehicle.SetReplicates(true);

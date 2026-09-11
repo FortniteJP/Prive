@@ -26,7 +26,7 @@ namespace AFortOnlineBeacon.Net;
 /// </summary>
 internal static partial class FortWeaponNetCaches {
     private static readonly Dictionary<string, FClassNetCache> Built = new(StringComparer.Ordinal);
-    private static readonly HashSet<string> Warned = new(StringComparer.Ordinal);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> Warned = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     The cache for this weapon actor's real class. <paramref name="actorCache"/> is
@@ -36,7 +36,7 @@ internal static partial class FortWeaponNetCaches {
         var className = ClassNameOf(weapon);
 
         if (className == null || !Chains.TryGetValue(className, out var chain)) {
-            if (className != null && Warned.Add(className)) {
+            if (className != null && Warned.TryAdd(className, 0)) {
                 Console.WriteLine($"FortWeaponNetCaches: no chain known for '{className}' - falling back to the bare " +
                                   "AFortWeapon chain. Any client RPC addressed to this weapon may decode with the " +
                                   "wrong field width. Re-run Tools/NetFieldVerify/gen_weapon_net_fields.py against a " +
@@ -62,6 +62,11 @@ internal static partial class FortWeaponNetCaches {
     }
 
     private static FClassNetCache For(string[] chain, FClassNetCache actorCache) {
+        // Shared by every world - see FortVehicleNetCaches.For.
+        lock (Built) return ForLocked(chain, actorCache);
+    }
+
+    private static FClassNetCache ForLocked(string[] chain, FClassNetCache actorCache) {
         var key = string.Join('/', chain);
         if (Built.TryGetValue(key, out var existing)) return existing;
 

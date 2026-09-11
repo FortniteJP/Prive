@@ -1,4 +1,5 @@
-﻿namespace AFortOnlineBeacon.Net.Actors;
+﻿using AFortOnlineBeacon.Runtime;
+namespace AFortOnlineBeacon.Net.Actors;
 
 public class AGameModeBase : AInfo {
     public AGameModeBase() => OptionsString = string.Empty;
@@ -63,13 +64,13 @@ public class AGameModeBase : AInfo {
             // i.e. the client is told the match already started while GamePhase is still Warmup.
             // MATCH_STATE overrides it without a rebuild.
             GameState.MatchState = new FName(
-                Environment.GetEnvironmentVariable("MATCH_STATE") is { Length: > 0 } ms ? ms : "WaitingToStart");
+                WorldOptions.Get("MATCH_STATE") is { Length: > 0 } ms ? ms : "WaitingToStart");
 
             // AFortGameStateAthena's own match configuration. The defaults on AGameState already
             // match raider3.5's OnReadyToStartMatch (Warmup + no battle bus); GAME_PHASE is here
             // so a phase can be tried against a live client without a rebuild, since which phase
             // the client's UI wants is still being narrowed down.
-            var gamePhase = Environment.GetEnvironmentVariable("GAME_PHASE");
+            var gamePhase = WorldOptions.Get("GAME_PHASE");
             if (!string.IsNullOrWhiteSpace(gamePhase) && Enum.TryParse<EAthenaGamePhase>(gamePhase, true, out var parsedPhase)) {
                 GameState.GamePhase = parsedPhase;
             }
@@ -79,12 +80,12 @@ public class AGameModeBase : AInfo {
             // resolving this asset, and staying Invalid (which blocks the loading screen) without it.
             // The map's own FortWorldManager, found with Tools/MapActorDump: class FortWorldManager,
             // name DO_NOT_DELETE_FortWorldManager, in Athena_Terrain's persistent level.
-            var worldManagerPath = Environment.GetEnvironmentVariable("WORLD_MANAGER_ACTOR")
+            var worldManagerPath = WorldOptions.Get("WORLD_MANAGER_ACTOR")
                                    ?? "/Game/Athena/Maps/Athena_Terrain.Athena_Terrain:PersistentLevel.DO_NOT_DELETE_FortWorldManager";
-            GameState.WorldManager = UAssetRegistry.GetOrCreateSubObject(worldManagerPath);
+            GameState.WorldManager = world.MapActors.GetOrCreate(worldManagerPath);
             Console.WriteLine($"AGameModeBase.InitGameState: WorldManager='{worldManagerPath}' (handle 39)");
 
-            var playlistPath = Environment.GetEnvironmentVariable("PLAYLIST_ASSET")
+            var playlistPath = WorldOptions.Get("PLAYLIST_ASSET")
                                ?? "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo";
             GameState.BasePlaylist = UAssetRegistry.GetOrCreate(playlistPath);
 
@@ -115,7 +116,7 @@ public class AGameModeBase : AInfo {
             // the real server spawns send Role and RemoteRole and nothing else - and the whole point
             // of them is that the GameState's references at handles 32/38/105/106/185 stop being
             // null. See Net/Actors/FortManagementActors.cs.
-            if (!ManagementActorsEnabled) {
+            if (!ManagementActorsEnabled(GetWorld()!)) {
                 Console.WriteLine("AGameModeBase: MANAGEMENT_ACTORS=0 - not spawning the five management " +
                                   "actors, and the GameState's references to them stay null (as they were " +
                                   "before Round 139).");
@@ -129,7 +130,7 @@ public class AGameModeBase : AInfo {
 
             // The playlist's gameplay mutators - see AFortGameplayMutator for where the list comes
             // from and what each one does (and does not do) on this server.
-            foreach (var mutatorPath in AFortGameplayMutator.ForPlaylist(playlistPath)) {
+            foreach (var mutatorPath in AFortGameplayMutator.ForPlaylist(WorldOptions, playlistPath)) {
                 var mutator = world.SpawnActor<AFortGameplayMutator>(
                     GUClassArray.StaticClassForPath<AFortGameplayMutator>(mutatorPath),
                     new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
@@ -161,11 +162,11 @@ public class AGameModeBase : AInfo {
     ///     change relevancy, so it is left unset deliberately.
     /// </summary>
     /// <summary>See the MANAGEMENT_ACTORS note in InitGameState.</summary>
-    public static bool ManagementActorsEnabled =>
-        Environment.GetEnvironmentVariable("MANAGEMENT_ACTORS") is not "0";
+    public static bool ManagementActorsEnabled(UWorld world) =>
+        world.Options.Get("MANAGEMENT_ACTORS") is not "0";
 
     private static T? SpawnManagementActor<T>(UWorld world) where T : AFortManagementActor, new() {
-        if (!ManagementActorsEnabled) return null;
+        if (!ManagementActorsEnabled(world)) return null;
 
         var actor = world.SpawnActor<T>(GUClassArray.StaticClass<T>(),
             new FActorSpawnParameters { ObjectFlags = EObjectFlags.RF_Transient });
@@ -202,7 +203,7 @@ public class AGameModeBase : AInfo {
     public List<AFortGameplayMutator> Mutators { get; } = new();
 
     private AFortTeamPrivateInfo? GetOrCreateTeamPrivateInfo(UWorld world, byte teamIndex) {
-        if (!ManagementActorsEnabled) return null;
+        if (!ManagementActorsEnabled(world)) return null;
         if (_teamPrivateInfos.TryGetValue(teamIndex, out var existing)) return existing;
 
         var actor = world.SpawnActor<AFortTeamPrivateInfo>(
@@ -232,7 +233,7 @@ public class AGameModeBase : AInfo {
     ///     own pacing. A round number that is obviously a choice beats a wrong number that looks
     ///     researched.
     /// </summary>
-    private static float WarmupSeconds => EnvFloat("WARMUP_SECONDS", 60f);
+    private float WarmupSeconds => EnvFloat("WARMUP_SECONDS", 60f);
 
     private bool _warmupStarted;
     private bool _aircraftLaunched;
@@ -489,7 +490,9 @@ public class AGameModeBase : AInfo {
 
         // Slurp Juice is a 37.5-second drip, so it needs a clock. This is the only per-frame hook in
         // the server that already has the world time in hand.
-        FortConsumableSystem.Tick(now);
+        FortConsumableSystem.Tick(world, now);
+        FortSnowmanDisguise.Tick(world, now);
+        FortTrapSystem.Tick(world, now);
 
         // Thrown projectiles need reaping for the same reason: the client owns the fuse and the
         // explosion, so nothing else would ever destroy the server-side actor.
@@ -502,7 +505,7 @@ public class AGameModeBase : AInfo {
 
         // SpawnAircraft is a no-op unless AIRCRAFT_ENABLED=1, and silently leaving the player on
         // the island with no way off would be the worst kind of failure - so say it out loud.
-        if (Environment.GetEnvironmentVariable("AIRCRAFT_ENABLED") is not "1") {
+        if (world.Options.Get("AIRCRAFT_ENABLED") is not "1") {
             Console.WriteLine($"AGameModeBase: warmup ended at {now:F1} but AIRCRAFT_ENABLED is not 1, " +
                               "so there is no bus and the player STAYS ON THE SPAWN ISLAND. " +
                               "Set AIRCRAFT_ENABLED=1, or WARMUP_SECONDS=0 plus SPAWN_LOCATION to " +
@@ -593,7 +596,7 @@ public class AGameModeBase : AInfo {
     /// </summary>
     private void SpawnAircraft(Runtime.UWorld world, FActorSpawnParameters spawnInfo) {
         if (GameState == null) return;
-        if (Environment.GetEnvironmentVariable("AIRCRAFT_ENABLED") is not "1") return;
+        if (world.Options.Get("AIRCRAFT_ENABLED") is not "1") return;
 
         var aircraft = world.SpawnActor<AFortAthenaAircraft>(
             GUClassArray.StaticClass<AFortAthenaAircraft>(), spawnInfo);
@@ -712,8 +715,8 @@ public class AGameModeBase : AInfo {
     ///
     ///     It only ever alters what is SENT. Nothing else on this server reads PlayerNamePrivate back.
     /// </summary>
-    private static string PreCompensateName(string name) {
-        if (Environment.GetEnvironmentVariable("NAME_PRECOMPENSATE") is not { Length: > 0 } raw) return name;
+    private string PreCompensateName(string name) {
+        if (WorldOptions.Get("NAME_PRECOMPENSATE") is not { Length: > 0 } raw) return name;
         if (!int.TryParse(raw, out var c)) return name;
 
         var compensated = new char[name.Length];
@@ -836,7 +839,7 @@ public class AGameModeBase : AInfo {
             // has hit. Paths match FortHarvestResources' own private ItemPaths table (the same three assets a
             // harvested tree/rock/wall already hands out as loot). 500 is arbitrary - enough that
             // running out mid-test is not itself a confound; STARTING_RESOURCES overrides it.
-            var startingResources = int.TryParse(Environment.GetEnvironmentVariable("STARTING_RESOURCES"), out var res) && res >= 0 ? res : 500;
+            var startingResources = int.TryParse(WorldOptions.Get("STARTING_RESOURCES"), out var res) && res >= 0 ? res : 500;
             foreach (var resourcePath in new[] {
                 "/Game/Items/ResourcePickups/WoodItemData.WoodItemData",
                 "/Game/Items/ResourcePickups/StoneItemData.StoneItemData",
@@ -866,7 +869,7 @@ public class AGameModeBase : AInfo {
             // rifle - point STARTING_WEAPON at a shotgun and it handed out 30 shells in a 5-round
             // magazine. WorldLootEntry reads the weapon's real ClipSize.
             var startingWeaponItem = FortWeaponActorClasses.WorldLootEntry(
-                Environment.GetEnvironmentVariable("STARTING_WEAPON") is { Length: > 0 } weapon
+                WorldOptions.Get("STARTING_WEAPON") is { Length: > 0 } weapon
                     ? weapon
                     : "/Game/Athena/Items/Weapons/WID_Assault_Auto_Athena_C_Ore_T02.WID_Assault_Auto_Athena_C_Ore_T02",
                 1);
@@ -889,7 +892,7 @@ public class AGameModeBase : AInfo {
             if (FortWeaponActorClasses.AmmoItemFor(startingWeaponItem.ItemDefinition) is { } ammoItem) {
                 worldInventory.Inventory.Add(new FFortItemEntry {
                     ItemDefinition = ammoItem,
-                    Count = int.TryParse(Environment.GetEnvironmentVariable("STARTING_AMMO"), out var ammo) && ammo > 0 ? ammo : 120
+                    Count = int.TryParse(WorldOptions.Get("STARTING_AMMO"), out var ammo) && ammo > 0 ? ammo : 120
                 });
             }
 
@@ -913,7 +916,7 @@ public class AGameModeBase : AInfo {
             // bisect run as `run-beacon.ps1 STARTING_CONSUMABLES=` therefore still gets the full
             // default list, silently, and answers the wrong question. Every knob in this project
             // documented as "empty string to disable" has the same trap.
-            var consumablesEnv = Environment.GetEnvironmentVariable("STARTING_CONSUMABLES");
+            var consumablesEnv = WorldOptions.Get("STARTING_CONSUMABLES");
             var consumables = consumablesEnv is null or "" ? "Athena_ShieldSmall:3,Athena_Bandage:5"
                             : consumablesEnv is "none" ? ""
                             : consumablesEnv;
@@ -926,9 +929,11 @@ public class AGameModeBase : AInfo {
 
             foreach (var spec in consumables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
                 var parts = spec.Split(':', 2);
-                if (FortConsumables.ItemPathFor(parts[0]) is not { } consumablePath) {
-                    Console.WriteLine($"AGameModeBase: STARTING_CONSUMABLES names '{parts[0]}', which is not in " +
-                                      "FortConsumables.Generated.cs - skipping");
+                // Trap item names (TID_...) too - FortTraps.Generated.cs - so placing one can be tested
+                // without finding it first.
+                if ((FortConsumables.ItemPathFor(parts[0]) ?? FortTraps.ForPath(parts[0])?.ItemPath) is not { } consumablePath) {
+                    Console.WriteLine($"AGameModeBase: STARTING_CONSUMABLES names '{parts[0]}', which is in neither " +
+                                      "FortConsumables.Generated.cs nor FortTraps.Generated.cs - skipping");
                     continue;
                 }
 
@@ -996,7 +1001,7 @@ public class AGameModeBase : AInfo {
             // PLAYER_NAME overrides it, which is worth having for a reason beyond convenience: with
             // one account there is no way to tell "the name replicated" from "the name happened to be
             // right", and a name nothing else could have produced settles that in one look.
-            var name = Environment.GetEnvironmentVariable("PLAYER_NAME") is { Length: > 0 } forced
+            var name = WorldOptions.Get("PLAYER_NAME") is { Length: > 0 } forced
                 ? forced
                 : ParseOption(options, "Name");
             if (name.Length > 20) name = name[..20];
@@ -1090,6 +1095,11 @@ public class AGameModeBase : AInfo {
                     };
 
                     if (set == null) continue;
+
+                    // This world's movement and stamina knobs - see ApplyOptions for why they are not
+                    // read in the sets' own initialisers.
+                    if (set is UFortMovementSet movementKnobs) movementKnobs.ApplyOptions(WorldOptions);
+                    if (set is UFortPlayerAttrSet attrKnobs) attrKnobs.ApplyOptions(WorldOptions);
 
                     playerState.AbilitySystemComponent.SpawnedAttributes.Add(set);
                     if (set is UFortMovementSet movementSet) playerState.MovementSet = movementSet;
@@ -1199,7 +1209,7 @@ public class AGameModeBase : AInfo {
             // the whole of "the first player to join loses every ability once a second joins".
             // ===================================================================================
             if (playerState.AbilitySystemComponent != null &&
-                Environment.GetEnvironmentVariable("HEALTH_AGGREGATOR_EFFECT") is { Length: > 0 } effectPath) {
+                WorldOptions.Get("HEALTH_AGGREGATOR_EFFECT") is { Length: > 0 } effectPath) {
                 Console.WriteLine($"AGameModeBase.Login: HEALTH_AGGREGATOR_EFFECT is set to '{effectPath}'. " +
                                   "IF THE CLIENT CANNOT LOAD THAT ASSET, this poisons the PlayerState channel: " +
                                   "the reference is announced as a must-be-mapped GUID and the client queues every " +
@@ -1236,7 +1246,7 @@ public class AGameModeBase : AInfo {
             // sets once the player is actually out of the bus and playing, not at join. Sending it
             // true alongside MatchState=InProgress told the client a story no real server tells.
             playerState.bHasStartedPlaying =
-                Environment.GetEnvironmentVariable("HAS_STARTED_PLAYING") == "1";
+                WorldOptions.Get("HAS_STARTED_PLAYING") == "1";
             // AFortPlayerState::HeroType (handle 40, live-probe-confirmed). Athena's quickbars are
             // built from the hero loadout, which makes this the leading candidate for the client's
             // "Quickbars are invalid" stall. Path taken from Erbium's FindObject call; the object
@@ -1302,8 +1312,7 @@ public class AGameModeBase : AInfo {
     ///
     ///     See FortWarmupStarts for the 121 real starts.
     /// </summary>
-    private static readonly FVector? SpawnLocationOverride =
-        ParseSpawnLocation(Environment.GetEnvironmentVariable("SPAWN_LOCATION"));
+    private FVector? SpawnLocationOverride => ParseSpawnLocation(WorldOptions.Get("SPAWN_LOCATION"));
 
     private static FVector? ParseSpawnLocation(string? value) {
         if (string.IsNullOrWhiteSpace(value)) return null;
@@ -1322,11 +1331,11 @@ public class AGameModeBase : AInfo {
 
     /// <summary>Reads a float knob from the environment, falling back when unset or unparseable.</summary>
     /// <summary>An EName index from the environment - see UActorChannel.SendClientGotoState.</summary>
-    private static uint EnvName(string name, uint fallback) =>
-        uint.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    private uint EnvName(string name, uint fallback) =>
+        uint.TryParse(WorldOptions.Get(name), out var value) ? value : fallback;
 
-    private static float EnvFloat(string name, float fallback) =>
-        float.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    private float EnvFloat(string name, float fallback) =>
+        float.TryParse(WorldOptions.Get(name), out var value) ? value : fallback;
 
     /// <summary>
     ///     The PlayerState's attribute sets, in the order a real server sends them (recovered from
@@ -1355,7 +1364,7 @@ public class AGameModeBase : AInfo {
         // Project-Reboot-3.0 both do - the same 121 actors are read out of the paks offline.
         // Nothing else here needs the map: the client owns collision and this server accepts
         // whatever ClientLoc arrives in ServerMoveNoBase.
-        var start = SpawnLocationOverride ?? FortWarmupStarts.Next();
+        var start = SpawnLocationOverride ?? FortWarmupStarts.Next(GetWorld()!);
 
         SpawnAndPossessPawn(world, newPlayer, start);
 
@@ -1431,7 +1440,7 @@ public class AGameModeBase : AInfo {
         //
         // SPAWN_EQUIP=1 restores the old behaviour for comparison. If the client turns out to ask
         // for the wall either way, this was not the cause and the search moves to the quickbars.
-        if (Environment.GetEnvironmentVariable("SPAWN_EQUIP") is "1") {
+        if (world.Options.Get("SPAWN_EQUIP") is "1") {
             var firstItem = pc.WorldInventory?.Inventory.Items.FirstOrDefault();
             if (firstItem != null) pawn.EquipInventoryItem(firstItem);
         } else {
