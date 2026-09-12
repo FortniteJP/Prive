@@ -47,6 +47,78 @@ namespace Addresses {
     inline constexpr Signature ConvStringToText{ "Conv_StringToText", 0x31243E0,
         "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 8B C3 48 83 C4 20 5B C3" };
 
+    // --- Pak signing bypass (custom content) ---------------------------------------------------
+    // Deterministic RUNTIME approach (Features/CustomPaks): at the frontend, find the FPakPlatformFile
+    // singleton, clear its bSigned, clear the precacher's sig-check, then mount our pak ourselves.
+    // (The earlier delegate-unbind race - PakSigningKeysDelegateInstance 0x657CBA0 - was flaky: it won
+    // the bSigned read some runs and lost others, leaving "pak is invalid". Dropped.)
+
+    // bool FPakPlatformFile::Mount(const TCHAR* filename, uint32 order, const TCHAR* path). rcx/rdx/r8d/r9.
+    inline constexpr Signature PakMount{ "FPakPlatformFile::Mount", 0x2DD06A0,
+        "48 8B C4 44 89 40 18 48 89 48 08 55 53 41 57 48 8D 68 A9 48 81 EC E0 00 00 00 48 89 70 10 45 33" };
+    // FPakPlatformFile vtable base (RTTI stripped; GetName slot 13 -> "PakFile"). The singleton is found
+    // at runtime by scanning committed memory for this vtable pointer (one heap object carries it).
+    inline constexpr uint32_t PakPlatformFileVTable = 0x51AF688; // static 0x1451AF688 - 0x140000000
+    // FPakPlatformFile::bSigned - clear it, then Mount() constructs an unsigned FPakFile that mounts.
+    inline constexpr uint32_t PakPlatformFile_bSigned = 0x30;
+
+    // The FPakPrecacher singleton pointer (a .data global). Read *(void**)Rva(...) to get the instance.
+    inline constexpr uint32_t PakPrecacherSingleton = 0x657CB58; // static 0x14657CB58 - 0x140000000
+    // Within the precacher: the signature-check ENABLE. On this build it is a POINTER, non-null = checks
+    // on; the read-completion gate is `if (*(precacher+0x290) != 0 && perRequestDoCheck) StartSignatureCheck`
+    // (found live: cmp qword [precacher+0x290],0 at 0x142DC1983). Zeroing it makes every read skip the
+    // precacher's DoSignatureCheck (which null-derefs on our unsigned pak) while the precacher stays
+    // active - so Epic's streaming is unaffected, unlike disabling GPakCache_Enable.
+    inline constexpr uint32_t PakPrecacher_SigCheckEnable = 0x290;
+    // GPakCache_Enable (int32, default 1). FPakPlatformFile::OpenAsyncRead checks it PER CALL: when 0,
+    // the async read goes direct (lower level) instead of through the precacher (IPlatformFilePak.cpp:3788).
+    // The precacher's DoSignatureCheck null-derefs on an unsigned pak, and unbinding can't win the race
+    // for the precacher's own init read - but keeping this 0 from startup routes every read past the
+    // precacher deterministically; the direct read then skips signatures because our pak mounted bSigned=0.
+    inline constexpr uint32_t GPakCache_Enable = 0x6076980; // static 0x146076980 - 0x140000000
+
+    // --- Frontend: skip the subgame select (Features/AutoSubGame) -------------------------------
+    // 10.40 has no option for this: the screen is shown unconditionally (FortSubGameSelectBase::
+    // IsSubGameOptionVisible returns true for Campaign and Athena whatever the account can access),
+    // and both the UI state machine and HasAccesstoMultipleSubGames are native with no Blueprint
+    // caller. bSkipSubgameSelect/bForceBRMode are LATER versions' FortRuntimeOptions keys and do not
+    // exist on this build. So Prive picks Battle Royale the way the tile does.
+
+    // void UFortGlobalUIContext::SetSubGame(ESubGame). This IS the selection: SubgameSelect_v2's
+    // `SafeSetSubGame` is GetContext(FortGlobalUIContext)->CanPlay(sg) then ->SetSubGame(sg), and
+    // everything after it in that graph is the spinner, an analytics event and a delegate broadcast.
+    // No-ops when the subgame is already the current one (it early-outs on GetSubGame() == argument).
+    inline constexpr Signature SetSubGame{ "UFortGlobalUIContext::SetSubGame", 0x39D3310,
+        "88 54 24 10 48 89 4C 24 08 55 56 41 55 41 57 48 8D AC 24 78 FE FF FF 48 81 EC 88 02 00 00" };
+    // UFortUIManagerWidget_NUI* UFortUIManagerWidget_NUI::GetUIManagerWidget(UObject* WorldContext) -
+    // a static UFUNCTION; it calls GetWorld() (UObject vtable +0x140) on whatever it is handed, so a
+    // ULocalPlayer works. Read its CurrentState to know the frontend is actually on the select screen.
+    inline constexpr Signature GetUIManagerWidget{ "UFortUIManagerWidget_NUI::GetUIManagerWidget", 0x3D39DC0,
+        "48 83 EC 28 48 85 C9 74 15 48 8B 01 FF 90 40 01 00 00 48 8B C8 48 83 C4 28 E9 ?? ?? ?? ?? 33 C0" };
+    // void UFortSubGameSelectBase::SubGameSelected() - the OTHER half of what the tile does:
+    // GetTypedOuter(...) then Broadcast() on a native (non-UPROPERTY) delegate at +0x788. Live, calling
+    // SetSubGame alone DID set the subgame - 2.4s of real work, and every later call early-outed - and
+    // still left the screen exactly where it was, so this broadcast is what moves the UI on.
+    inline constexpr Signature SubGameSelected{ "UFortSubGameSelectBase::SubGameSelected", 0x3D5C9A0,
+        "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 8B D0 48 8B CB E8 ?? ?? ?? ?? 48 8D 88 88 07 00 00" };
+    // The subgame-select screen's vtable. Its Blueprint subclass (SubgameSelect_v2_C) adds no virtuals
+    // of its own, so the live widget carries this exact pointer and can be found by scanning for it;
+    // the class default object carries it too and is told apart by RF_ClassDefaultObject.
+    inline constexpr uint32_t FortSubGameSelectBaseVTable = 0x5584180; // static 0x145584180 - 0x140000000
+
+    // UFortGlobalUIContext's vtable. The context is a ULocalPlayerSubsystem, so it is found by
+    // matching this in the local player's subsystem map (Offsets::LocalPlayer_SubsystemMap) - no
+    // UClass pointer and no GObjects walk needed.
+    inline constexpr uint32_t FortGlobalUIContextVTable = 0x5626F80; // static 0x145626F80 - 0x140000000
+
+    // UObject::ProcessEvent's vtable slot. SetSubGame must run on the GAME thread - called from the
+    // watcher it spent 0.68s inside itself and died on a null UFunction::Func, and the crash frame
+    // (0x1422F2C75) sits inside the function at 0x1422F2990, which is exactly what this slot holds
+    // in every CDO vtable. Hooking it on ONE object (a copy of that object's vtable, so no image
+    // memory is touched) gives a callback at a Blueprint-event boundary - the same place the real
+    // SafeSetSubGame runs from.
+    inline constexpr uint32_t UObject_ProcessEventSlot = 0x200;
+
     // --- FortniteUI options menu ---------------------------------------------------------------
 
     // UFortUIDataConfiguration* Get(): its `lea rcx, [rip+X]` at +14 (displacement +17, ends +21)

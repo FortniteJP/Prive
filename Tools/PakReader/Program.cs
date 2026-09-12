@@ -53,8 +53,26 @@ public static class Program {
 
         // GAME_UE4_23 is what 10.40 is. Getting this wrong does not fail loudly - it fails as
         // structs that deserialise to nonsense - so it is worth being explicit about.
-        var provider = new DefaultFileProvider(paks, SearchOption.TopDirectoryOnly, new VersionContainer(EGame.GAME_UE4_23));
+        //
+        // FORTNITE_GAME overrides it (e.g. GAME_UE5_6) for reading a CURRENT-version install, whose
+        // paks are IoStore and whose packages are unversioned - those also need FORTNITE_USMAP, the
+        // mappings file that carries the property names 4.23's tagged serialisation had inline.
+        var gameName = Environment.GetEnvironmentVariable("FORTNITE_GAME");
+        var game = string.IsNullOrWhiteSpace(gameName) ? EGame.GAME_UE4_23 : Enum.Parse<EGame>(gameName);
+
+        var provider = new DefaultFileProvider(paks, SearchOption.TopDirectoryOnly, new VersionContainer(game));
+        if (Environment.GetEnvironmentVariable("FORTNITE_USMAP") is { Length: > 0 } usmap) {
+            provider.MappingsContainer = new CUE4Parse.MappingsProvider.Usmap.FileUsmapTypeMappingsProvider(usmap);
+            Console.Error.WriteLine($"pakreader: mappings from {usmap}");
+        }
         provider.Initialize();
+        // FORTNITE_EXTRA_PAK mounts one more .pak on top of the install. It is how a pak this project
+        // BUILT gets verified: read it back with the same code that reads Epic's, in a provider that
+        // still has the real game mounted underneath, so imports (a skeleton, say) still resolve.
+        if (Environment.GetEnvironmentVariable("FORTNITE_EXTRA_PAK") is { Length: > 0 } extra) {
+            provider.RegisterVfs(extra);
+            Console.Error.WriteLine($"pakreader: also mounted {extra}");
+        }
         provider.SubmitKey(new FGuid(), new FAesKey(key));
         provider.PostMount();
 
@@ -80,6 +98,8 @@ public static class Program {
                 case "spawnpoints": return SpawnPoints(provider, args);
                 case "placements": return SpawnPoints(provider, args, verbose: true);
                 case "raw": return Raw(provider, args);
+                case "extract": return Extract(provider, args);
+                case "anim": return Anim(provider, args);
                 case "buildinghealth": return BuildingHealth(provider, args);
                 case "walls": return Walls(provider, args);
                 case "doors": return Doors(provider, args);
@@ -377,6 +397,118 @@ public static class Program {
         }
 
         return 0;
+    }
+
+    /// <summary>
+    ///     Decode an AnimSequence to plain per-bone, per-frame transforms - the step that makes porting
+    ///     an emote from a CURRENT version possible at all.
+    ///
+    ///     A modern Fortnite emote's bone data is ACL-compressed (its BoneCompressionSettings is
+    ///     FortniteAnimBoneCompressionSettings), which no amount of package parsing gets you: ACL is a
+    ///     native decoder, so this needs CUE4Parse-Natives.dll built next to the binary (see the note in
+    ///     PakReader.csproj). With it, CUE4Parse-Conversion hands back a CAnimTrack per SKELETON BONE,
+    ///     already in bone order, with rotation/translation/scale keys.
+    ///
+    ///     WHY THIS IS TRACTABLE AT ALL: a current-version emote still animates
+    ///     `Fortnite_M_Avg_Player_Skeleton`, the same skeleton asset 10.40 uses, so there is no
+    ///     retargeting problem - the tracks line up bone for bone with the old build's, and the port is
+    ///     a re-encode rather than a conversion. Bone NAMES are printed so that assumption can be
+    ///     checked against 10.40's skeleton rather than trusted.
+    ///
+    ///     `pakreader anim &lt;animPath&gt; [outJson]` - a summary on stdout, the full key data to the file.
+    /// </summary>
+    private static int Anim(DefaultFileProvider provider, string[] args) {
+        if (args.Length < 2) { Console.Error.WriteLine("usage: pakreader anim <animPath> [outJson] | anim <path> <path> ..."); return 2; }
+
+        // Several paths: one summary line each, in one mount. Mounting a current-version install is by
+        // far the slowest part of this tool, so comparing candidates one process at a time is painful.
+        if (args.Length > 2 && !args[2].EndsWith(".json", StringComparison.OrdinalIgnoreCase)) {
+            foreach (var path in args[1..]) {
+                try { AnimSummary(provider, path); }
+                catch (Exception ex) { Console.WriteLine($"{path}\t{ex.GetType().Name}: {ex.Message}"); }
+            }
+            return 0;
+        }
+
+        var sequence = provider.LoadPackageObject<CUE4Parse.UE4.Assets.Exports.Animation.UAnimSequence>(args[1]);
+        var skeleton = sequence.Skeleton.Load<CUE4Parse.UE4.Assets.Exports.Animation.USkeleton>();
+        if (skeleton == null) { Console.Error.WriteLine("pakreader: the sequence's Skeleton could not be loaded"); return 1; }
+
+        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
+        Console.WriteLine($"# {sequence.Name}  skeleton {skeleton.Name}  bones {bones.Length}  " +
+                          $"frames {sequence.NumFrames}  length {sequence.SequenceLength:F3}s  " +
+                          $"codec {sequence.CompressedDataStructure?.GetType().Name ?? "none"}");
+
+        var set = CUE4Parse_Conversion.Animations.AnimConverter.ConvertAnims(skeleton, sequence);
+        var seq = set.Sequences.FirstOrDefault();
+        if (seq == null) { Console.Error.WriteLine("pakreader: nothing decoded - is CUE4Parse-Natives.dll present?"); return 1; }
+
+        var animated = 0;
+        for (var i = 0; i < seq.Tracks.Count && i < bones.Length; i++) {
+            var track = seq.Tracks[i];
+            if (track.KeyQuat.Length == 0 && track.KeyPos.Length == 0) continue;
+            animated++;
+            if (animated <= 8)
+                Console.WriteLine($"{bones[i].Name}\trot {track.KeyQuat.Length}\tpos {track.KeyPos.Length}\tscale {track.KeyScale.Length}");
+        }
+        Console.WriteLine($"# {animated} of {seq.Tracks.Count} tracks carry keys");
+
+        if (args.Length > 2) {
+            var dump = new {
+                Name = seq.Name, Skeleton = skeleton.Name, NumFrames = seq.NumFrames,
+                seq.FramesPerSecond, seq.AnimEndTime, seq.IsAdditive,
+                Bones = bones.Select(b => b.Name.Text).ToArray(),
+                Tracks = seq.Tracks.Select(t => new { t.KeyQuat, t.KeyPos, t.KeyScale, t.KeyTime }).ToArray()
+            };
+            File.WriteAllText(args[2], JsonConvert.SerializeObject(dump, Formatting.Indented));
+            Console.Error.WriteLine($"pakreader: wrote {args[2]} ({new FileInfo(args[2]).Length} bytes)");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    ///     One line per animation: how long, how many bones move, and whether the ROOT moves - root
+    ///     motion is what decides whether an emote can be dropped into another one's slot without the
+    ///     character sliding away from where the game thinks it is.
+    /// </summary>
+    private static void AnimSummary(DefaultFileProvider provider, string path) {
+        var sequence = provider.LoadPackageObject<CUE4Parse.UE4.Assets.Exports.Animation.UAnimSequence>(path);
+        var skeleton = sequence.Skeleton.Load<CUE4Parse.UE4.Assets.Exports.Animation.USkeleton>();
+        var set = CUE4Parse_Conversion.Animations.AnimConverter.ConvertAnims(skeleton, sequence);
+        var seq = set.Sequences.FirstOrDefault();
+        if (seq == null) { Console.WriteLine($"{sequence.Name}\t(not decoded)"); return; }
+
+        var bones = skeleton!.ReferenceSkeleton.FinalRefBoneInfo;
+        var animated = seq.Tracks.Count(t => t.KeyQuat.Length > 0 || t.KeyPos.Length > 0);
+        var rootIndex = Array.FindIndex(bones, b => b.Name.Text.Equals("Root", StringComparison.OrdinalIgnoreCase));
+        var rootKeys = rootIndex >= 0 && rootIndex < seq.Tracks.Count ? seq.Tracks[rootIndex].KeyPos.Length : 0;
+        var rootMoves = rootIndex >= 0 && rootIndex < seq.Tracks.Count &&
+                        seq.Tracks[rootIndex].KeyPos.Any(p => MathF.Abs(p.X) > 1f || MathF.Abs(p.Y) > 1f);
+
+        Console.WriteLine($"{sequence.Name}\t{sequence.SequenceLength:F2}s\t{sequence.NumFrames} frames\t" +
+                          $"{animated} tracks\troot {(rootMoves ? "MOVES" : "still")} ({rootKeys} keys)\t" +
+                          $"{(sequence.AdditiveAnimType != CUE4Parse.UE4.Assets.Exports.Animation.EAdditiveAnimationType.AAT_None ? "ADDITIVE" : "normal")}");
+    }
+
+    /// <summary>
+    ///     Write the decrypted, decompressed bytes of every file whose path contains a needle, keeping
+    ///     the pak-relative path under outDir. For a package that means its .uasset, .uexp and .ubulk
+    ///     together - the raw material for building a custom _P pak without an editor.
+    /// </summary>
+    private static int Extract(DefaultFileProvider provider, string[] args) {
+        if (args.Length < 3) { Console.Error.WriteLine("usage: pakreader extract <pathSubstring> <outDir>"); return 2; }
+
+        var written = 0;
+        foreach (var (path, file) in provider.Files) {
+            if (!path.Contains(args[1], StringComparison.OrdinalIgnoreCase)) continue;
+            var dest = Path.Combine(args[2], file.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.WriteAllBytes(dest, file.Read());
+            Console.WriteLine($"{file.Path} ({new FileInfo(dest).Length} bytes)");
+            written++;
+        }
+        Console.Error.WriteLine($"pakreader: extracted {written} file(s)");
+        return written > 0 ? 0 : 1;
     }
 
     /// <summary>

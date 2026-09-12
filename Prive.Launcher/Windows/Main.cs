@@ -70,7 +70,9 @@ public class MainWindow : Window {
             }
 
             Instance = new(config.GamePath, config.Username, config.Password);
-            Instance.Launch();
+            // Inject Prive.Client.Native EARLY (before the client's entry point) so it can unbind pak
+            // signing before the pak system mounts - required for custom unsigned paks in Saved\Paks.
+            Instance.Launch(ClientNativeDllLocation);
 
             LaunchButton.Text = "Running...";
             LaunchButton.Enabled = false;
@@ -79,9 +81,9 @@ public class MainWindow : Window {
             // ActivePlayersLabel.Text = $"Active players: -1";
 
             Task.Run(() => {
-                // One DLL, injected as soon as the process is up: it waits for the engine itself
-                // before enabling the console, so there is no log line to wait for any more.
-                Instance.InjectDll(ClientNativeDllLocation);
+                // The DLL was injected early (before the entry point) by Launch(); fall back to the
+                // late injection only if that path didn't run.
+                if (!Instance.EarlyInjected) Instance.InjectDll(ClientNativeDllLocation);
                 Instance.WaitForExit();
                 Instance.Kill();
                 LaunchButton.Text = "Launch";

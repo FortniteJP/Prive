@@ -64,8 +64,10 @@
         <ClCompile Include="Unreal\Engine.cpp" />
         <ClCompile Include="Unreal\InputBindings.cpp" />
         <ClCompile Include="Unreal\Text.cpp" />
+        <ClCompile Include="Features\AutoSubGame.cpp" />
         <ClCompile Include="Features\Console.cpp" />
         <ClCompile Include="Features\DisablePreEdit.cpp" />
+        <ClCompile Include="Features\CustomPaks.cpp" />
         <ClCompile Include="Features\EditOnRelease.cpp" />
         <ClCompile Include="Features\SettingsMenu.cpp" />
     </ItemGroup>
@@ -86,8 +88,10 @@
         <ClInclude Include="Unreal\InputBindings.h" />
         <ClInclude Include="Unreal\Text.h" />
         <ClInclude Include="Unreal\Types.h" />
+        <ClInclude Include="Features\AutoSubGame.h" />
         <ClInclude Include="Features\Console.h" />
         <ClInclude Include="Features\DisablePreEdit.h" />
+        <ClInclude Include="Features\CustomPaks.h" />
         <ClInclude Include="Features\EditOnRelease.h" />
         <ClInclude Include="Features\SettingsMenu.h" />
     </ItemGroup>

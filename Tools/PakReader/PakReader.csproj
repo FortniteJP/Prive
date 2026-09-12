@@ -18,6 +18,13 @@
       and it is already checked out there. See the memory note [[pak-access]].
     -->
     <ProjectReference Include="..\..\..\PriveDev\CUE4Parse\CUE4Parse\CUE4Parse.csproj" />
+    <!--
+      For `anim`: decoding a CURRENT-version AnimSequence means decompressing ACL, and the converter
+      that does it lives here. It needs the native ACL library next to the binary: in the CUE4Parse
+      checkout, check out the ACL submodule, then configure and build CUE4Parse-Natives with CMake
+      (Release, x64) and copy builddir\Release\CUE4Parse-Natives.dll into this project's output.
+    -->
+    <ProjectReference Include="..\..\..\PriveDev\CUE4Parse\CUE4Parse-Conversion\CUE4Parse-Conversion.csproj" />
   </ItemGroup>
 
 </Project>

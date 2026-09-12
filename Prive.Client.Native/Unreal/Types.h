@@ -35,6 +35,7 @@ static_assert(sizeof(FText) == 0x18);
 
 namespace Offsets {
     // UObjectBase
+    constexpr uint32_t Object_Flags = 0x0008; // ObjectFlags (EObjectFlags); RF_ClassDefaultObject = 0x10
     constexpr uint32_t Object_Outer = 0x0020; // OuterPrivate
     // UEngine
     constexpr uint32_t Engine_ConsoleClass = 0x00F8; // TSubclassOf<UConsole>
@@ -48,6 +49,14 @@ namespace Offsets {
     constexpr uint32_t Player_PlayerController = 0x0030;            // APlayerController*
     // UFortLocalPlayer
     constexpr uint32_t LocalPlayer_ClientSettingsRecord = 0x0348;   // UFortClientSettingsRecord*
+    // ULocalPlayer::SubsystemCollection is private and not a UPROPERTY, so the SDK does not show it -
+    // it is the tail of ULocalPlayer (which ends at 0x280). FSubsystemCollectionBase derives from
+    // FGCObject, so: +0x100 vtable, +0x110 TMap<UClass*, USubsystem*> SubsystemMap, +0x160 the
+    // array map, +0x1B0 BaseType, +0x1B8 Outer. Confirmed in the dump - the Outer at +0x1B8 reads
+    // back as the local player itself, and the map's third pair is the FortGlobalUIContext.
+    constexpr uint32_t LocalPlayer_SubsystemMap = 0x0110;           // TMap<UClass*, USubsystem*>
+    // UFortUIManagerWidget_NUI
+    constexpr uint32_t UIManagerWidget_CurrentState = 0x02A8;       // EFortUIState
     // AActor
     constexpr uint32_t Actor_InputComponent = 0x00F8;                    // UInputComponent*
     // AFortPlayerController
@@ -79,6 +88,29 @@ struct FSettingData {
     TArray<uint8_t>& HiddenModes() { return *(TArray<uint8_t>*)(Bytes + 0x158); } // TArray<ESubGame>
 };
 static_assert(sizeof(FSettingData) == 0x198);
+
+// A TMap's underlying TSet, for the general case: fixed-size elements in a TSparseArray whose
+// allocation bits say which slots are live. FSettingTabMap below is the same shape hard-wired to
+// the options-menu map; this one takes the element size, since a TMap's element is
+// { Key; Value; int32 HashNextId; int32 HashIndex } and so depends on both types.
+struct FSparseSet {
+    uint8_t* Elements;              // +0x00
+    int32_t NumElements;            // +0x08 (slots, including free ones)
+    int32_t MaxElements;            // +0x0C
+    uint32_t AllocationInline[4];   // +0x10
+    uint32_t* AllocationSecondary;  // +0x20
+    int32_t NumBits;                // +0x28
+    int32_t MaxBits;                // +0x2C
+    int32_t FirstFreeIndex;         // +0x30
+    int32_t NumFreeIndices;         // +0x34
+    // hash (+0x38 .. +0x50) not needed
+
+    bool IsAllocated(int32_t index) const {
+        const uint32_t* bits = AllocationSecondary ? AllocationSecondary : AllocationInline;
+        return (bits[index / 32] >> (index % 32)) & 1;
+    }
+    uint8_t* Element(int32_t index, uint32_t elementSize) const { return Elements + index * elementSize; }
+};
 
 // TMap<ESettingTab, FOptionsTabData> as laid out in memory: a TSet of 0x20-byte elements
 // { uint8 Key; FOptionsTabData Value @+8 (a TArray<FSettingData>); int32 HashNextId; int32 HashIndex },

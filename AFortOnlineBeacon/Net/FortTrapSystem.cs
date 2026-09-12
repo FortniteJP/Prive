@@ -135,7 +135,7 @@ internal static class FortTrapSystem {
     private const float MinimumArmSeconds = 1f;
 
     /// <summary>How long the server waits for the client's own launch before doing it itself.</summary>
-    private const float LaunchPadClientGrace = 0.35f, BouncerClientGrace = 0.2f;
+    private const float LaunchPadClientGrace = 0.25f, BouncerClientGrace = 0.15f;
 
     private const string ActivateCue = "GameplayCue.Abilities.Activation.Traps.ActivateTrap";
     private const string ReloadBeginCue = "GameplayCue.Abilities.Activation.Traps.ReloadBegin";
@@ -472,16 +472,21 @@ internal static class FortTrapSystem {
     ///     rising, the server only does its own part (ServerLaunchInfo for others, fall-damage
     ///     immunity, the bouncer's low gravity). If not, the server launches it as before. Launching
     ///     from both sides would be two launches, the second with the server's slightly stale idea
-    ///     of where the player is. TRAP_SERVER_LAUNCH=0 disables the fallback, =1 skips the wait.
+    ///     of where the player is. TRAP_SERVER_LAUNCH=0 disables the fallback, =server skips the wait.
     /// </summary>
     private static void TickLaunchTrap(UWorld world, FTrapRuntime entry, ETrapKind kind, HashSet<APawn> inside, float now) {
         var trap = entry.Trap;
         var mode = world.Options.Get("TRAP_SERVER_LAUNCH");
-        // IMMEDIATE SERVER LAUNCH BY DEFAULT. Waiting for the client's own launch was tried live
-        // (2026-09-11) and the client never launched itself - so the wait was pure delay, which the
-        // player felt. TRAP_SERVER_LAUNCH=client brings the wait back for the next attempt at
-        // arming the client-side trap.
-        var grace = mode is "client" or "0"
+        // The wait is only ever FELT when the client does not launch itself: a client launch shows
+        // up as a rising pawn and ends it on the spot. Round 3 (2026-09-11) felt it every time,
+        // because every trap's tags went to a second ASC the client never listened to (see
+        // ABuildingTrap.HasNativeAbilitySubobjects) - so its trap never armed and never launched.
+        // Short now, but not zero: the ServerMove that first puts a pawn in the box can predate its
+        // own launch by a move or two, and launching from here as well would stack a second,
+        // server-side launch on the client's - which throws the launch pad's skydive away.
+        // TRAP_SERVER_LAUNCH=server launches at once without looking (the old behaviour), =0 never.
+        var watchClient = mode is not "server";
+        var grace = watchClient
             ? kind == ETrapKind.LaunchPad ? LaunchPadClientGrace : BouncerClientGrace
             : 0f;
 
@@ -491,7 +496,7 @@ internal static class FortTrapSystem {
         }
 
         foreach (var (pawn, due) in entry.PendingLaunch.ToArray()) {
-            var rising = grace > 0f && LaunchedByClient(kind, pawn.EstimatedVelocity);
+            var rising = watchClient && LaunchedByClient(kind, pawn.EstimatedVelocity);
             if (!rising && now < due) continue;
 
             entry.PendingLaunch.Remove(pawn);

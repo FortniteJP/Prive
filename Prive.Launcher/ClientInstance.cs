@@ -34,7 +34,10 @@ public class ClientInstance {
         }
     }
 
-    public void Launch() {
+    // earlyInjectDll: injected into the client via an early-bird APC BEFORE its entry point, so
+    // Prive.Client.Native can unbind pak signing before the pak system mounts (custom unsigned paks).
+    // When null, the DLL is injected later by InjectDll() as before.
+    public void Launch(string? earlyInjectDll = null) {
         try {
             if (Directory.Exists(Utils.FortniteSavedPath)) Directory.Move(Utils.FortniteSavedPath, Utils.FortniteSavedOriginalPath);
             if (Directory.Exists(Utils.FortniteSavedPrivePath)) Directory.Move(Utils.FortniteSavedPrivePath, Utils.FortniteSavedPath);
@@ -50,11 +53,24 @@ public class ClientInstance {
         EACProcess = Process.Start(new ProcessStartInfo(EACPath, ArgumentsString))!;
         Utils.SuspendThreads(EACProcess);
 
+        if (earlyInjectDll != null) {
+            try {
+                ShippingProcess = Utils.StartSuspendedWithDll(ShippingPath, ArgumentsString, earlyInjectDll);
+                EarlyInjected = true;
+                return;
+            } catch {
+                // Fall back to a normal launch + late injection so we never regress the working path.
+                EarlyInjected = false;
+            }
+        }
         ShippingProcess = Process.Start(new ProcessStartInfo(ShippingPath, ArgumentsString) {
             UseShellExecute = false,
             CreateNoWindow = true
         })!;
     }
+
+    // True when Launch already injected Prive.Client.Native (early). Lets the caller skip InjectDll.
+    public bool EarlyInjected { get; private set; }
 
     public bool InjectDll(string dllPath) {
         if (ShippingProcess?.HasExited ?? true) return false;

@@ -49,7 +49,10 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 				new IniElementKeyValue("bEnableShowdown", "true"),
 				new IniElementKeyValue("bEnableAthenaFavoriting", "false"),
 				new IniElementKeyValue("bAllowAllReplays", "true"),
-				new IniElementKeyValue("bEnableContentControls", "true"),
+				// Parental Controls. BladeMenu_MainMenu sets the button's visibility to
+				// `GetRuntimeOptions().bEnableContentControls && !IsInZone()`, so false removes the row
+				// from the lobby menu entirely (the flow needs Epic's PIN endpoints, which Prive has none of).
+				new IniElementKeyValue("bEnableContentControls", "false"),
 				new IniElementKeyValue("bAutofireEnabled", "true"),
 				new IniElementKeyValue("bEnableHUDLayoutTool", "true"),
 				new IniElementKeyValue("bShowIconForSamePlatformPlayers", "true"),
@@ -87,6 +90,12 @@ public class DefaultRuntimeOptions : CloudStorageFile {
 				new IniElementKeyValue("EnableCommunityVotingScreen", "true"),
 				new IniElementKeyValue("bDebugForceLoginRelaunch", "true"),
 
+				// NO-OPS ON 10.40 - none of these three exist on this build's UFortRuntimeOptions (see the
+				// class listing below), they are from later versions. Subgame select is NOT hotfixable here:
+				// the screen is part of the native login flow and FortSubGameSelectBase::IsSubGameOptionVisible
+				// returns true for Campaign/Athena unconditionally. What IS configurable is ACCESS, in
+				// DefaultGame.ini `[/Script/FortniteGame.FortGlobals] SubGameAccess` (Campaign ships as
+				// LimitedAccess = needs the campaign access TOKEN item, which Prive never grants).
 				new IniElementKeyValue("bSkipSubgameSelect", "true"),
 				new IniElementKeyValue("bEnableSavedLoadouts", "true"),
 				new IniElementKeyValue("bForceBRMode", "true"),

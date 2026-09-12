@@ -50,4 +50,22 @@ public class ABuildingTrap : ABuildingActor {
     ///     path does.
     /// </summary>
     public bool IsActive { get; set; }
+
+    /// <summary>
+    ///     A TRAP BUILDS ITS OWN ABILITY SYSTEM IN ITS CONSTRUCTOR - three default subobjects the
+    ///     client already has before a single property arrives. Its own demo recorder names them for
+    ///     every trap class, launch pad to wall bouncer:
+    ///
+    ///         Creating Replicator for BuildingAttributeSet
+    ///         Creating Replicator for TrapDamageAttributeSet
+    ///         Creating Replicator for AbilitySystemComponent
+    ///
+    ///     (a PBWA piece has none of these.) The client's trap init registers its
+    ///     Abilities.Traps.Cooldown listener on THAT component, so the server's copies must BE those
+    ///     objects - stably named, resolved by name - or every tag lands on a second component
+    ///     nothing listens to. See ABuildingActor.EnsureAbilitySystemComponent.
+    /// </summary>
+    protected override bool HasNativeAbilitySubobjects => true;
+
+    protected override IEnumerable<string> NativeExtraAttributeSetNames => ["TrapDamageAttributeSet"];
 }

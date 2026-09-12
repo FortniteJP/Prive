@@ -632,13 +632,16 @@ public class ABuildingActor : AActor {
     public UFortAbilitySystemComponent? EnsureAbilitySystemComponent(bool withAttributeSet = false) {
         // THE CLIENT INITIALISES A BUILDING'S ABILITY SIDE ONLY WHEN IT HAS BOTH. The 10.40 client's
         // one-shot building init (0x1413512E0) returns early unless BuildingAttributeSet (+0x328)
-        // AND AbilitySystemComponent (+0x368) are set - the local copies its OnReps of handles 19/20
-        // fill in - and that init is what makes a trap register its Abilities.Traps.Cooldown
-        // listener (virtual slot 0x728). A trap therefore needs the set too, not just the ASC.
+        // AND AbilitySystemComponent (+0x368) are set, and that init is what makes a trap register
+        // its Abilities.Traps.Cooldown listener (virtual slot 0x728). A trap therefore needs the set
+        // too, not just the ASC - and see HasNativeAbilitySubobjects for WHICH set and ASC.
+        var flags = HasNativeAbilitySubobjects
+            ? EObjectFlags.RF_Transient | EObjectFlags.RF_DefaultSubObject
+            : EObjectFlags.RF_Transient;
+
         if (withAttributeSet && BuildingAttributeSet == null) {
             BuildingAttributeSet = UObjectGlobals.NewObject<UFortBuildingActorSet>(
-                this, GUClassArray.StaticClass<UFortBuildingActorSet>(), new FName("BuildingAttributeSet"),
-                EObjectFlags.RF_Transient);
+                this, GUClassArray.StaticClass<UFortBuildingActorSet>(), new FName("BuildingAttributeSet"), flags);
         }
 
         if (AbilitySystemComponent != null) {
@@ -651,18 +654,39 @@ public class ABuildingActor : AActor {
         }
 
         AbilitySystemComponent = UObjectGlobals.NewObject<UFortAbilitySystemComponent>(
-            this, GUClassArray.StaticClass<UFortAbilitySystemComponent>(), new FName("AbilitySystemComponent"),
-            EObjectFlags.RF_Transient);
+            this, GUClassArray.StaticClass<UFortAbilitySystemComponent>(), new FName("AbilitySystemComponent"), flags);
 
         if (AbilitySystemComponent != null) {
             AbilitySystemComponent.OwnerActor = this;
             AbilitySystemComponent.AvatarActor = this;
             if (BuildingAttributeSet != null) AbilitySystemComponent.SpawnedAttributes.Add(BuildingAttributeSet);
+
+            // The client's component lists every attribute set its actor constructed (UE's
+            // InitializeComponent collects them), and the replicated SpawnedAttributes REPLACES
+            // that list - so a set left out here would vanish from the client's component. Named
+            // only: nothing reads values from these, the path alone resolves them.
+            foreach (var setName in NativeExtraAttributeSetNames) {
+                var set = UObjectGlobals.NewObject<UFortAttributeSet>(
+                    this, GUClassArray.StaticClass<UFortAttributeSet>(), new FName(setName), flags);
+                if (set != null) AbilitySystemComponent.SpawnedAttributes.Add(set);
+            }
         }
 
         SyncAttributeSet();
         return AbilitySystemComponent;
     }
+
+    /// <summary>
+    ///     Whether this class's NATIVE CONSTRUCTOR already made the ability system component and
+    ///     attribute sets on the client (a trap's does; a PBWA piece's does not). When it did, the
+    ///     server's copies are flagged RF_DefaultSubObject: that makes them stably named, so the client
+    ///     RESOLVES its own objects by name instead of instantiating a second component beside them -
+    ///     the exact bug the PlayerState's ASC once had (see AGameModeBase.Login).
+    /// </summary>
+    protected virtual bool HasNativeAbilitySubobjects => false;
+
+    /// <summary>Attribute sets the native constructor makes besides BuildingAttributeSet - by name.</summary>
+    protected virtual IEnumerable<string> NativeExtraAttributeSetNames => [];
 
     /// <summary>Mirrors this piece's authoritative int HP into the float attribute set the client reads. Called on every change, so the ordinary shadow-state comparison picks it up - no MarkPropertyDirty needed, the value genuinely differs.</summary>
     private void SyncAttributeSet() {

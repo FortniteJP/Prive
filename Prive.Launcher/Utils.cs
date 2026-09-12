@@ -58,6 +58,35 @@ public static partial class Utils {
         return SetConsoleMode(consoleHandle, mode);
     }
 
+    // Start the client SUSPENDED and inject the DLL via an early-bird APC so our DllMain runs after
+    // the loader initializes but BEFORE the exe entry point / FEngineLoop::PreInit. That is what lets
+    // Prive.Client.Native's PakSigning unbind pak signing before the pak system mounts. Returns the
+    // started Process (already resumed). CreateRemoteThread+LoadLibrary would deadlock this early
+    // (loader lock not ready), so QueueUserAPC(LoadLibraryA) is used instead.
+    public static Process StartSuspendedWithDll(string exePath, string arguments, string dllPath) {
+        if (!File.Exists(dllPath)) throw new FileNotFoundException("File not found", dllPath);
+
+        var si = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+        var cmdLine = $"\"{exePath}\" {arguments}";
+        const uint CREATE_SUSPENDED = 0x00000004;
+        if (!CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, CREATE_SUSPENDED,
+                IntPtr.Zero, Path.GetDirectoryName(exePath), ref si, out var pi))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "CreateProcess (suspended) failed");
+
+        // Write the DLL path into the target and queue LoadLibraryA on its (still suspended) main thread.
+        var loadLibrary = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+        var bytes = Encoding.Default.GetBytes(dllPath + "\0");
+        var remote = VirtualAllocEx(pi.hProcess, IntPtr.Zero, (uint)bytes.Length, 0x1000 | 0x2000, 4);
+        WriteProcessMemory(pi.hProcess, remote, bytes, (uint)bytes.Length, out _);
+        QueueUserAPC(loadLibrary, pi.hThread, remote);
+
+        ResumeThread(pi.hThread); // the APC fires as the thread enters user mode, before the entry point
+        CloseHandle(pi.hThread);
+        var process = Process.GetProcessById(pi.dwProcessId);
+        CloseHandle(pi.hProcess);
+        return process;
+    }
+
     public static void InjectDll(Process process, string filePath) => InjectDll(process.Id, filePath);
 
     public static void InjectDll(int processId, string filePath) {
@@ -193,6 +222,33 @@ public static partial class Utils {
 
     [LibraryImport("kernel32.dll")]
     private static partial IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial uint QueueUserAPC(IntPtr pfnAPC, IntPtr hThread, IntPtr dwData);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct STARTUPINFO {
+        public int cb;
+        public IntPtr lpReserved, lpDesktop, lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcess(string? lpApplicationName, string lpCommandLine,
+        IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,
+        uint dwCreationFlags, IntPtr lpEnvironment, string? lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

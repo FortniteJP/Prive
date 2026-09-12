@@ -119,6 +119,26 @@ public static class FortTrapsSelfTest {
         Check(!FortTrapSystem.Overlaps(floorTrap, spikes, new FVector { X = 1000f, Y = 2256f, Z = 96f }),
               "yaw 90: ...and is no longer where it was at yaw 0");
 
+        // The trap's ability system IS the client's own constructed one: stably named, by the
+        // exact names its demo recorder prints. A dynamic one is a second component nobody
+        // listens to - round 3's "never armed". See ABuildingTrap.HasNativeAbilitySubobjects.
+        var trapAsc = floorTrap.EnsureAbilitySystemComponent(withAttributeSet: true);
+        Check(trapAsc is { } && trapAsc.IsNameStableForNetworking() && trapAsc.GetFName().ToString() == "AbilitySystemComponent",
+              $"a trap's ASC is the stably named AbilitySystemComponent (got {trapAsc?.GetFName()}, stable {trapAsc?.IsNameStableForNetworking()})");
+        Check(floorTrap.BuildingAttributeSet is { } trapSet && trapSet.IsNameStableForNetworking() &&
+              trapSet.GetFName().ToString() == "BuildingAttributeSet",
+              "...its BuildingAttributeSet is stably named too");
+        var setNames = trapAsc?.SpawnedAttributes.Select(set => set.GetFName().ToString()).ToArray() ?? [];
+        Check(setNames.SequenceEqual(["BuildingAttributeSet", "TrapDamageAttributeSet"]),
+              $"...and SpawnedAttributes lists both constructed sets ({string.Join(", ", setNames)})");
+
+        var pbwaWall = world.SpawnActor<ABuildingActor>(
+            GUClassArray.StaticClassForPath<ABuildingActor>("/Game/Building/ActorBlueprints/Player/Wood/L1/PBWA_W1_Solid.PBWA_W1_Solid_C"),
+            new FActorSpawnParameters());
+        var wallAsc = pbwaWall?.EnsureAbilitySystemComponent(withAttributeSet: true);
+        Check(wallAsc is { } && !wallAsc.IsNameStableForNetworking(),
+              "a PBWA piece's ASC stays dynamic - its class constructs none on the client");
+
         // The bouncers' numbers.
         var up = new FVector { Z = 1f };
         var still = FortTrapSystem.FloorBounceVelocity(new FVector(), up);

@@ -20,7 +20,10 @@
 #include "Core/GameVersion.h"
 #include "Core/Log.h"
 #include "Core/Memory.h"
+#include "Unreal/Addresses.h"
+#include "Features/AutoSubGame.h"
 #include "Features/Console.h"
+#include "Features/CustomPaks.h"
 #include "Features/DisablePreEdit.h"
 #include "Features/EditOnRelease.h"
 #include "Features/SettingsMenu.h"
@@ -94,6 +97,12 @@ namespace {
         Log::SetWindowVisible(Config::GetBool(LogWindowKey, true));
         Log::Info("Prive.Client.Native loaded (image base %p)", (void*)Memory::ImageBase());
 
+        // The launcher injects us early (before the entry point), so the protector may not have decrypted
+        // .text yet. Everything below scans code, so wait until a known code signature reads back correctly
+        // (decrypted) before touching it. When injected late this passes immediately.
+        for (int i = 0; i < 4000 && !Memory::Matches(Memory::Rva(Addresses::GEngineStore.Rva), Addresses::GEngineStore.Bytes); i++)
+            Sleep(5);
+
         // First: the game may start its first HTTP request any moment now. The local cloud storage
         // is up before the redirect, so the first settings request can already go to it.
         HostConfig::Load();
@@ -119,6 +128,8 @@ namespace {
             Console::Poll();
             EditOnRelease::Poll();
             DisablePreEdit::Poll();
+            CustomPaks::Poll();
+            AutoSubGame::Poll();
             Sleep(WatchIntervalMs);
         }
     }
@@ -127,6 +138,7 @@ namespace {
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
+        // Custom paks are mounted from the watcher at the frontend (Features/CustomPaks), deterministically.
         // Keep DllMain trivial (loader lock); everything runs on our own thread.
         if (HANDLE thread = CreateThread(nullptr, 0, Init, nullptr, 0, nullptr)) CloseHandle(thread);
     }
